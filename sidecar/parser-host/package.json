@@ -1,0 +1,25 @@
+{
+  "name": "@everyfile/parser-host",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "test": "vitest --environment node",
+    "typecheck": "tsc --noEmit",
+    "bundle": "tsup"
+  },
+  "dependencies": {
+    "cfb": "1.2.2",
+    "pdfjs-dist": "4.10.38",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "24.10.13",
+    "@yao-pkg/pkg": "6.21.0",
+    "jszip": "3.10.1",
+    "tsup": "8.5.1",
+    "tsx": "4.23.1",
+    "typescript": "7.0.2",
+    "vitest": "4.1.10"
+  }
+}

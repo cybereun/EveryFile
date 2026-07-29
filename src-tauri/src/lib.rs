@@ -2,6 +2,7 @@ pub mod application;
 pub mod domain;
 pub mod folders;
 pub mod infrastructure;
+pub mod parsing;
 pub mod settings;
 pub mod state;
 

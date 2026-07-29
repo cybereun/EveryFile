@@ -13,6 +13,8 @@ node_modules
 dist
 dist-ssr
 *.local
+/sidecar/parser-host/everyfile-parser.exe
+/src-tauri/binaries/everyfile-parser-*.exe
 
 # Editor directories and files
 .vscode/*

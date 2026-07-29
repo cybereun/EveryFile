@@ -1,0 +1,3 @@
+[submodule "vendor/kordoc"]
+	path = vendor/kordoc
+	url = https://github.com/cybereun/kordoc--.git

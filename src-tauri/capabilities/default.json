@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capability for the main window",
+  "description": "Minimal main-window capability; no filesystem or shell access",
   "windows": ["main"],
   "permissions": ["core:default"]
 }
