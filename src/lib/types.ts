@@ -80,8 +80,14 @@ export interface IndexStatus {
   state: string;
   totalFiles: number;
   completedFiles: number;
-  currentFileName: string | null;
-  errorCount: number;
+  currentPath: string | null;
+  errors: IndexFailure[];
+}
+
+export interface IndexFailure {
+  code: string;
+  fileName: string;
+  message: string;
 }
 
 export interface AppSettings {

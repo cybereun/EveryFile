@@ -110,6 +110,68 @@ fn database_files_do_not_contain_inserted_plaintext() {
     }
 }
 
+#[test]
+fn migration_upgrades_an_existing_initial_schema_without_losing_jobs() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("legacy.db");
+    let key = SecretKey::from_bytes(Zeroizing::new([7_u8; 32]));
+    let database = Database::open(&path, &key).unwrap();
+    {
+        let connection = database.connection();
+        connection
+            .execute_batch(
+                "CREATE TABLE folders (
+                   id TEXT PRIMARY KEY,
+                   canonical_path TEXT NOT NULL UNIQUE,
+                   display_name TEXT NOT NULL,
+                   created_at TEXT NOT NULL,
+                   enabled INTEGER NOT NULL DEFAULT 1
+                 );
+                 CREATE TABLE index_jobs (
+                   id TEXT PRIMARY KEY,
+                   folder_id TEXT NOT NULL REFERENCES folders(id) ON DELETE CASCADE,
+                   state TEXT NOT NULL,
+                   completed_files INTEGER NOT NULL DEFAULT 0,
+                   total_files INTEGER NOT NULL DEFAULT 0,
+                   last_path TEXT,
+                   updated_at TEXT NOT NULL
+                 );
+                 INSERT INTO folders VALUES (
+                   'folder-1', 'C:\\fixture', 'Fixture',
+                   '2026-07-29T00:00:00Z', 1
+                 );
+                 INSERT INTO index_jobs VALUES (
+                   'job-1', 'folder-1', 'paused', 1, 3, 'a.txt',
+                   '2026-07-29T00:00:00Z'
+                 );",
+            )
+            .unwrap();
+    }
+
+    database.migrate().unwrap();
+
+    let connection = database.connection();
+    let job_state: String = connection
+        .query_row(
+            "SELECT state FROM index_jobs WHERE id = 'job-1'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let indexing_table_count: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master
+             WHERE type = 'table'
+               AND name IN ('index_job_files', 'index_job_errors')",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+
+    assert_eq!(job_state, "paused");
+    assert_eq!(indexing_table_count, 2);
+}
+
 #[cfg(windows)]
 #[test]
 fn secure_key_store_persists_only_a_dpapi_protected_blob() {

@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   AppSettings,
   FolderRecord,
+  IndexStatus,
   PreviewDocument,
   SearchRequest,
   SearchResponse,
@@ -19,3 +20,18 @@ export const searchDocuments = (request: SearchRequest) =>
 
 export const getPreview = (documentId: string) =>
   invoke<PreviewDocument>("get_preview", { documentId });
+
+export const startIndexing = (folderId: string) =>
+  invoke<string>("start_indexing", { folderId });
+
+export const pauseIndexing = (jobId: string) =>
+  invoke<void>("pause_indexing", { jobId });
+
+export const resumeIndexing = (jobId: string) =>
+  invoke<void>("resume_indexing", { jobId });
+
+export const cancelIndexing = (jobId: string) =>
+  invoke<void>("cancel_indexing", { jobId });
+
+export const getIndexStatus = (jobId: string) =>
+  invoke<IndexStatus>("get_index_status", { jobId });

@@ -8,6 +8,8 @@ use zeroize::Zeroizing;
 use super::secure_key::SecretKey;
 
 const INITIAL_MIGRATION: &str = include_str!("../../migrations/0001_initial.sql");
+const RESUMABLE_INDEXING_MIGRATION: &str =
+    include_str!("../../migrations/0002_resumable_indexing.sql");
 
 pub struct Database {
     connection: Mutex<Connection>,
@@ -40,6 +42,9 @@ impl Database {
         let transaction = connection.transaction().map_err(DatabaseError::Migration)?;
         transaction
             .execute_batch(INITIAL_MIGRATION)
+            .map_err(DatabaseError::Migration)?;
+        transaction
+            .execute_batch(RESUMABLE_INDEXING_MIGRATION)
             .map_err(DatabaseError::Migration)?;
         transaction.commit().map_err(DatabaseError::Migration)
     }

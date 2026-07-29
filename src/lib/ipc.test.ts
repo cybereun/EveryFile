@@ -5,11 +5,16 @@ const { invoke } = vi.hoisted(() => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
 
 import {
+  cancelIndexing,
+  getIndexStatus,
   getPreview,
   getSettings,
   listFolders,
+  pauseIndexing,
+  resumeIndexing,
   saveSettings,
   searchDocuments,
+  startIndexing,
 } from "./ipc";
 import type { AppSettings, SearchRequest } from "./types";
 
@@ -48,6 +53,11 @@ describe("IPC wrappers", () => {
     await listFolders();
     await searchDocuments(request);
     await getPreview("document-1");
+    await startIndexing("folder-1");
+    await pauseIndexing("job-1");
+    await resumeIndexing("job-1");
+    await cancelIndexing("job-1");
+    await getIndexStatus("job-1");
 
     expect(invoke.mock.calls).toEqual([
       ["get_settings"],
@@ -55,6 +65,11 @@ describe("IPC wrappers", () => {
       ["list_folders"],
       ["search_documents", { request }],
       ["get_preview", { documentId: "document-1" }],
+      ["start_indexing", { folderId: "folder-1" }],
+      ["pause_indexing", { jobId: "job-1" }],
+      ["resume_indexing", { jobId: "job-1" }],
+      ["cancel_indexing", { jobId: "job-1" }],
+      ["get_index_status", { jobId: "job-1" }],
     ]);
   });
 });
