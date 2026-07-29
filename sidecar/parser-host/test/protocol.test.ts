@@ -304,4 +304,61 @@ describe("parser protocol", () => {
     );
     expect(maximum).toBe(3);
   });
+
+  it("retains concurrency permits until timed-out parses actually settle", async () => {
+    let active = 0;
+    let maximum = 0;
+    const releases: Array<() => void> = [];
+    const handler = createRequestHandler({
+      timeoutMs: 10,
+      parseDocument: () =>
+        new Promise((resolvePromise) => {
+          active += 1;
+          maximum = Math.max(maximum, active);
+          releases.push(() => {
+            active -= 1;
+            resolvePromise({
+              ok: true,
+              document: {
+                parserKind: "kordoc",
+                title: null,
+                markdown: "settled",
+                plainText: "settled",
+                blocks: [],
+                metadata: {},
+                warnings: [],
+              },
+            });
+          });
+        }),
+    });
+    const sendBatch = (prefix: string) =>
+      Promise.all(
+        Array.from({ length: 3 }, (_, index) =>
+          handler(
+            JSON.stringify(
+              request(fixturePath("simple.hwpx"), `${prefix}-${index}`),
+            ),
+          ),
+        ),
+      );
+
+    const first = await sendBatch("first");
+    expect(first.every((response) => response.error?.code === "TIMEOUT")).toBe(
+      true,
+    );
+    expect(active).toBe(3);
+
+    const second = await sendBatch("second");
+    expect(second.every((response) => response.error?.code === "TIMEOUT")).toBe(
+      true,
+    );
+    expect(maximum).toBe(3);
+
+    for (let index = 0; index < 6; index += 1) {
+      await vi.waitFor(() => expect(releases.length).toBeGreaterThan(index));
+      releases[index]();
+    }
+    await vi.waitFor(() => expect(active).toBe(0));
+  });
 });

@@ -258,3 +258,198 @@ submodule git status: clean
 - `pkg` ships two PDF.js ESM files as source because their top-level-await/export form
   cannot be bytecode-compiled. Both a real packaged PDF smoke test and the complete
   parser-host PDF test pass.
+
+---
+
+## Fix round 1/5: parser concurrency and process lifecycle
+
+### Scope
+
+Fixed all three Important review findings and the related Minor pin-drift finding:
+
+1. A timed-out, non-cancellable Kordoc parse retains its concurrency permit until the
+   underlying parse promise actually settles.
+2. The Rust reader owns only a `Weak<ClientInner>`, so the last `ParserClient` owner can
+   close stdin, kill/wait the child, and finish the reader thread.
+3. stdout EOF/read failure now terminates and waits for that generation before pending
+   requests are failed and the single retry starts a replacement.
+4. The in-memory pinned Kordoc CFB rewrite now requires both expected source patterns
+   exactly once and fails the build on pin drift.
+
+The registered-root/path-trust boundary remains deferred to Task 6 as planned. No
+renderer, command, request, or registered-folder API was broadened.
+
+### RED evidence
+
+Command:
+
+```powershell
+npm test --prefix sidecar\parser-host -- --run
+```
+
+Expected behavioral failure for unresolved timed-out work:
+
+```text
+FAIL parser protocol > retains concurrency permits until timed-out parses actually settle
+AssertionError: expected 6 to be 3
+```
+
+The fixture starts three non-cancellable parse promises, observes all three timeout
+responses while the promises remain active, then submits three more requests. Before
+the fix, the response timeout released each whole-request limiter slot and all six
+underlying parses overlapped.
+
+The same RED run proved the missing pin-drift assertion:
+
+```text
+FAIL pinned Kordoc CFB bundle rewrite > rewrites both expected compatibility patterns
+TypeError: rewritePinnedKordocCfb is not a function
+
+FAIL ... > rejects a missing pinned-source pattern
+FAIL ... > rejects a duplicated pinned-source pattern
+```
+
+Command:
+
+```powershell
+cargo test --manifest-path src-tauri\Cargo.toml --test parser_sidecar -- --nocapture
+```
+
+Expected last-owner lifecycle failure:
+
+```text
+FAIL dropping_last_client_owner_terminates_the_sidecar_process
+sidecar process survived client shutdown
+```
+
+Command:
+
+```powershell
+cargo test --manifest-path src-tauri\Cargo.toml --test parser_sidecar \
+  stdout_read_failure_terminates_old_generation_before_retrying -- --exact --nocapture
+```
+
+Expected generation-lifecycle failure:
+
+```text
+FAIL stdout_read_failure_terminates_old_generation_before_retrying
+stdout read failure left the old generation alive
+```
+
+The first fake generation flushes an invalid UTF-8 line, destroys stdout, and remains
+alive. This deterministically exercises the reader-failure branch on Windows. The old
+implementation successfully retried on generation 2 but orphaned generation 1.
+
+All RED fixtures clean up their deliberately stuck promises/processes even when the
+assertion fails.
+
+### GREEN evidence
+
+Commands:
+
+```powershell
+npm test --prefix sidecar\parser-host -- --run
+npm run typecheck --prefix sidecar\parser-host
+cargo test --manifest-path src-tauri\Cargo.toml --test parser_sidecar -- --nocapture
+```
+
+Output:
+
+```text
+parser host:
+  Test Files  2 passed (2)
+  Tests  15 passed (15)
+  typecheck exit 0
+
+Rust sidecar integration:
+  running 7 tests
+  test result: ok. 7 passed; 0 failed
+```
+
+### Implementation and safety decisions
+
+- `RequestLimiter` now wraps the actual `parseDocument` promise instead of
+  `handleLine`. Returning a `TIMEOUT` response no longer releases the permit; release
+  occurs only in the parse promise's `finally`.
+- Permit handoff directly reserves the slot for the oldest waiter, preventing a new
+  request from racing a resumed waiter above the configured maximum of three.
+- The deterministic regression resolves all six deferred parses after its concurrency
+  assertion and verifies the underlying active count returns to zero.
+- `ProcessState` owns the reader `JoinHandle`, while the reader closure receives a
+  `Weak<ClientInner>`. It upgrades only after a complete input line, never while
+  blocked on stdout.
+- Last-owner drop closes stdin, kills and waits the child, and joins the reader unless
+  drop is executing on that reader itself. In the self-reader case, the handle is
+  detached only as the reader returns immediately.
+- All stale-process paths use the same kill/wait helper. `ensure_process` cannot
+  overwrite a still-live child when stdin/stdout is unusable.
+- EOF or read failure calls `terminate_generation` before failing pending requests.
+  Therefore a retry cannot observe `UnexpectedExit` and spawn until the old child has
+  been killed and waited.
+- The restart budget remains exactly one. Request IDs, generation matching, local
+  timeouts, hidden-window flags, fixed diagnostics, and secret redaction are unchanged.
+- PID-observable Windows tests prove both the old read-failed generation and the final
+  retry generation exit. Test cleanup uses an exact PID fallback only on assertion
+  failure, preventing leaked fixture processes.
+- The tsup rewrite counts the pinned `createRequire` factory and `require2("cfb")`
+  import before replacement. Missing or duplicated patterns throw a fixed build-drift
+  error instead of silently producing a partial bundle.
+
+### Clean packaged build and final verification
+
+Command:
+
+```powershell
+node scripts\build-parser-sidecar.mjs
+```
+
+Output:
+
+```text
+clean Kordoc install/build: exit 0
+clean parser-host install/bundle: exit 0
+exact-once pinned-source rewrite: passed
+pkg node22-win-x64: exit 0
+output size: 105,988,701 bytes
+PE subsystem: 2 (Windows GUI)
+```
+
+Commands:
+
+```powershell
+npm test -- --run
+npm run build
+npm test --prefix sidecar\parser-host -- --run
+npm run typecheck --prefix sidecar\parser-host
+npm test --prefix vendor\kordoc
+cargo fmt --manifest-path src-tauri\Cargo.toml -- --check
+cargo test --manifest-path src-tauri\Cargo.toml
+cargo clippy --manifest-path src-tauri\Cargo.toml --all-targets --all-features -- -D warnings
+cargo build --manifest-path src-tauri\Cargo.toml
+git diff --check
+```
+
+Output:
+
+```text
+root Vitest: 3 files, 6 tests passed
+root TypeScript + Vite build: exit 0
+parser host: 2 files, 15 tests passed; typecheck exit 0
+pinned Kordoc: 83 suites, 329 tests passed, 0 failed
+cargo fmt: exit 0
+cargo test:
+  discovery unit tests 4 passed
+  domain contracts 2 passed
+  encrypted database 6 passed
+  folder discovery 10 passed
+  parser sidecar 7 passed
+  0 failed
+cargo clippy -D warnings: exit 0
+cargo build: exit 0
+git diff --check: exit 0
+```
+
+The expected SQLCipher wrong-key HMAC diagnostic remains present in the passing
+encrypted-database test. The pinned Kordoc submodule remains at
+`31ec46a0a55cfa92d37b4a5ad34f4a5de9db4133` with a clean working tree. The existing
+audited dependency and optional packaging warnings recorded above are unchanged.

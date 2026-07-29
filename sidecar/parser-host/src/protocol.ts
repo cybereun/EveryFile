@@ -214,18 +214,31 @@ class RequestLimiter {
 
   constructor(private readonly maximum: number) {}
 
-  async run<T>(operation: () => Promise<T>): Promise<T> {
-    if (this.active >= this.maximum) {
-      await new Promise<void>((resolvePromise) => {
-        this.waiting.push(resolvePromise);
-      });
+  private async acquire(): Promise<void> {
+    if (this.active < this.maximum) {
+      this.active += 1;
+      return;
     }
-    this.active += 1;
+    await new Promise<void>((resolvePromise) => {
+      this.waiting.push(resolvePromise);
+    });
+  }
+
+  private release(): void {
+    const next = this.waiting.shift();
+    if (next !== undefined) {
+      next();
+      return;
+    }
+    this.active -= 1;
+  }
+
+  async run<T>(operation: () => Promise<T>): Promise<T> {
+    await this.acquire();
     try {
       return await operation();
     } finally {
-      this.active -= 1;
-      this.waiting.shift()?.();
+      this.release();
     }
   }
 }
@@ -234,5 +247,10 @@ export function createRequestHandler(
   overrides: Partial<ParseDependencies> = {},
 ): (line: string) => Promise<ParseResponse> {
   const limiter = new RequestLimiter(3);
-  return (line) => limiter.run(() => handleLine(line, overrides));
+  const parseDocument = overrides.parseDocument ?? defaultParseDocument;
+  const limitedDependencies: Partial<ParseDependencies> = {
+    ...overrides,
+    parseDocument: (path) => limiter.run(() => parseDocument(path)),
+  };
+  return (line) => handleLine(line, limitedDependencies);
 }

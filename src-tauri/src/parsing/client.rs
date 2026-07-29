@@ -5,7 +5,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Sender};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, Weak};
+use std::thread::JoinHandle;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -74,6 +75,7 @@ struct ClientInner {
 struct ProcessState {
     child: Option<Child>,
     stdin: Option<ChildStdin>,
+    reader: Option<JoinHandle<()>>,
     generation: u64,
 }
 
@@ -134,6 +136,7 @@ impl ParserClient {
                 state: Mutex::new(ProcessState {
                     child: None,
                     stdin: None,
+                    reader: None,
                     generation: 0,
                 }),
                 pending: Mutex::new(HashMap::new()),
@@ -211,60 +214,67 @@ impl ClientInner {
     }
 
     fn ensure_process(self: &Arc<Self>) -> Result<u64, ParserError> {
-        let mut state = lock(&self.state);
-        if let Some(child) = state.child.as_mut() {
-            match child.try_wait() {
-                Ok(None) if state.stdin.is_some() => return Ok(state.generation),
-                Ok(_) | Err(_) => {
-                    state.stdin = None;
-                    state.child = None;
+        loop {
+            let stale_reader = {
+                let mut state = lock(&self.state);
+                if let Some(child) = state.child.as_mut() {
+                    if matches!(child.try_wait(), Ok(None)) && state.stdin.is_some() {
+                        return Ok(state.generation);
+                    }
+                    stop_process_locked(&mut state)
+                } else if state.reader.is_some() {
+                    stop_process_locked(&mut state)
+                } else {
+                    let mut command = Command::new(&self.program);
+                    command
+                        .args(&self.arguments)
+                        .stdin(Stdio::piped())
+                        .stdout(Stdio::piped())
+                        .stderr(Stdio::null());
+                    configure_hidden_window(&mut command);
+                    let mut child = command.spawn().map_err(|_| ParserError::Start)?;
+                    let stdin = child.stdin.take().ok_or(ParserError::Start)?;
+                    let stdout = child.stdout.take().ok_or(ParserError::Start)?;
+                    let generation = state.generation.wrapping_add(1);
+                    let client = Arc::downgrade(self);
+                    let reader = std::thread::Builder::new()
+                        .name("everyfile-parser-reader".into())
+                        .spawn(move || Self::read_responses(client, stdout, generation))
+                        .map_err(|_| {
+                            let _ = child.kill();
+                            let _ = child.wait();
+                            ParserError::Start
+                        })?;
+                    state.generation = generation;
+                    state.stdin = Some(stdin);
+                    state.child = Some(child);
+                    state.reader = Some(reader);
+                    return Ok(generation);
                 }
-            }
+            };
+            join_reader(stale_reader);
         }
-
-        let mut command = Command::new(&self.program);
-        command
-            .args(&self.arguments)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null());
-        configure_hidden_window(&mut command);
-        let mut child = command.spawn().map_err(|_| ParserError::Start)?;
-        let stdin = child.stdin.take().ok_or(ParserError::Start)?;
-        let stdout = child.stdout.take().ok_or(ParserError::Start)?;
-        state.generation = state.generation.wrapping_add(1);
-        let generation = state.generation;
-        state.stdin = Some(stdin);
-        state.child = Some(child);
-        drop(state);
-
-        let client = Arc::clone(self);
-        std::thread::Builder::new()
-            .name("everyfile-parser-reader".into())
-            .spawn(move || client.read_responses(stdout, generation))
-            .map_err(|_| {
-                self.terminate_generation(generation, ParserError::UnexpectedExit);
-                ParserError::Start
-            })?;
-        Ok(generation)
     }
 
-    fn read_responses(self: Arc<Self>, stdout: impl std::io::Read, generation: u64) {
+    fn read_responses(client: Weak<Self>, stdout: impl std::io::Read, generation: u64) {
         let reader = BufReader::new(stdout);
         for line in reader.lines() {
             let line = match line {
                 Ok(line) => line,
                 Err(_) => break,
             };
+            let Some(client) = client.upgrade() else {
+                return;
+            };
             let response: WireResponse = match serde_json::from_str(&line) {
                 Ok(response) => response,
                 Err(_) => {
-                    self.fail_pending_generation(generation, ParserError::InvalidResponse);
+                    client.fail_pending_generation(generation, ParserError::InvalidResponse);
                     continue;
                 }
             };
             let Some(id) = response.id.as_deref() else {
-                self.fail_pending_generation(generation, ParserError::InvalidResponse);
+                client.fail_pending_generation(generation, ParserError::InvalidResponse);
                 continue;
             };
             let result = match (response.ok, response.document, response.error) {
@@ -275,13 +285,11 @@ impl ClientInner {
                 }),
                 _ => Err(ParserError::InvalidResponse),
             };
-            self.complete_pending(id, generation, result);
+            client.complete_pending(id, generation, result);
         }
 
-        self.fail_pending_generation(generation, ParserError::UnexpectedExit);
-        let mut state = lock(&self.state);
-        if state.generation == generation {
-            state.stdin = None;
+        if let Some(client) = client.upgrade() {
+            client.terminate_generation(generation, ParserError::UnexpectedExit);
         }
     }
 
@@ -321,30 +329,45 @@ impl ClientInner {
     }
 
     fn terminate_generation(&self, generation: u64, pending_error: ParserError) {
-        {
+        let reader = {
             let mut state = lock(&self.state);
             if state.generation == generation {
-                state.stdin = None;
-                if let Some(mut child) = state.child.take() {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                }
+                stop_process_locked(&mut state)
+            } else {
+                None
             }
-        }
+        };
+        join_reader(reader);
         self.fail_pending_generation(generation, pending_error);
     }
 }
 
 impl Drop for ClientInner {
     fn drop(&mut self) {
-        let state = self
-            .state
-            .get_mut()
-            .unwrap_or_else(|error| error.into_inner());
-        state.stdin = None;
-        if let Some(mut child) = state.child.take() {
-            let _ = child.kill();
-            let _ = child.wait();
+        let reader = {
+            let state = self
+                .state
+                .get_mut()
+                .unwrap_or_else(|error| error.into_inner());
+            stop_process_locked(state)
+        };
+        join_reader(reader);
+    }
+}
+
+fn stop_process_locked(state: &mut ProcessState) -> Option<JoinHandle<()>> {
+    state.stdin = None;
+    if let Some(mut child) = state.child.take() {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    state.reader.take()
+}
+
+fn join_reader(reader: Option<JoinHandle<()>>) {
+    if let Some(reader) = reader {
+        if reader.thread().id() != std::thread::current().id() {
+            let _ = reader.join();
         }
     }
 }
