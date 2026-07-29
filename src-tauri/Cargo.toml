@@ -2,7 +2,7 @@
 name = "EveryFile"
 version = "0.1.0"
 description = "EveryFile desktop application"
-authors = ["cybereun"]
+authors = ["Lebi_Cybereun <cybereunny@gmail.com>"]
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html

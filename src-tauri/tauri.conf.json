@@ -24,6 +24,7 @@
   },
   "bundle": {
     "active": true,
+    "copyright": "© 2026 Lebi_Cybereun",
     "targets": "all",
     "icon": [
       "icons/32x32.png",
