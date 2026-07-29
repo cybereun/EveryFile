@@ -1,14 +1,17 @@
 use everyfile_lib::infrastructure::database::Database;
 use everyfile_lib::infrastructure::secure_key::{SecretKey, SecureKeyStore};
 use std::fs;
+use std::sync::{Arc, Barrier};
+use std::thread;
 use tempfile::tempdir;
+use zeroize::Zeroizing;
 
 #[test]
 fn database_reopens_with_the_same_key_and_rejects_a_different_key() {
     let dir = tempdir().unwrap();
     let path = dir.path().join("everyfile.db");
-    let key = SecretKey::from_bytes([7_u8; 32]);
-    let wrong = SecretKey::from_bytes([9_u8; 32]);
+    let key = SecretKey::from_bytes(Zeroizing::new([7_u8; 32]));
+    let wrong = SecretKey::from_bytes(Zeroizing::new([9_u8; 32]));
 
     Database::open(&path, &key).unwrap().migrate().unwrap();
     assert!(Database::open(&path, &key).is_ok());
@@ -19,7 +22,7 @@ fn database_reopens_with_the_same_key_and_rejects_a_different_key() {
 fn database_migration_creates_the_initial_schema_and_enables_safety_pragmas() {
     let dir = tempdir().unwrap();
     let path = dir.path().join("everyfile.db");
-    let key = SecretKey::from_bytes([7_u8; 32]);
+    let key = SecretKey::from_bytes(Zeroizing::new([7_u8; 32]));
     let database = Database::open(&path, &key).unwrap();
 
     database.migrate().unwrap();
@@ -54,7 +57,7 @@ fn database_files_do_not_contain_inserted_plaintext() {
 
     let dir = tempdir().unwrap();
     let path = dir.path().join("everyfile.db");
-    let key = SecretKey::from_bytes([7_u8; 32]);
+    let key = SecretKey::from_bytes(Zeroizing::new([7_u8; 32]));
     let database = Database::open(&path, &key).unwrap();
     database.migrate().unwrap();
 
@@ -116,9 +119,55 @@ fn secure_key_store_persists_only_a_dpapi_protected_blob() {
     let persisted = fs::read(dir.path().join("key.dat")).unwrap();
     let second = SecureKeyStore::load_or_create(dir.path()).unwrap();
 
-    assert_eq!(first.as_bytes(), second.as_bytes());
-    assert_ne!(persisted.as_slice(), first.as_bytes());
+    assert!(first.as_bytes() == second.as_bytes());
+    assert!(persisted.as_slice() != first.as_bytes());
     assert!(!persisted
         .windows(first.as_bytes().len())
         .any(|window| window == first.as_bytes()));
+}
+
+#[cfg(windows)]
+#[test]
+fn concurrent_secure_key_creation_returns_the_single_persisted_key() {
+    const CALLER_COUNT: usize = 32;
+
+    let dir = tempdir().unwrap();
+    let app_data_dir = Arc::new(dir.path().to_path_buf());
+    let start = Arc::new(Barrier::new(CALLER_COUNT));
+    let mut callers = Vec::with_capacity(CALLER_COUNT);
+
+    for _ in 0..CALLER_COUNT {
+        let app_data_dir = Arc::clone(&app_data_dir);
+        let start = Arc::clone(&start);
+        callers.push(thread::spawn(move || {
+            start.wait();
+            SecureKeyStore::load_or_create(&app_data_dir)
+        }));
+    }
+
+    let keys: Vec<_> = callers
+        .into_iter()
+        .map(|caller| caller.join().unwrap().unwrap())
+        .collect();
+    let persisted = SecureKeyStore::load_or_create(&app_data_dir).unwrap();
+
+    assert!(keys.iter().all(|key| key.as_bytes() == keys[0].as_bytes()));
+    assert!(persisted.as_bytes() == keys[0].as_bytes());
+}
+
+#[cfg(windows)]
+#[test]
+fn secure_key_creation_ignores_an_abandoned_temp_file() {
+    const ABANDONED_CONTENT: &[u8] = b"incomplete protected blob";
+
+    let dir = tempdir().unwrap();
+    let abandoned = dir.path().join(".key.dat.4242.0.tmp");
+    fs::write(&abandoned, ABANDONED_CONTENT).unwrap();
+
+    let created = SecureKeyStore::load_or_create(dir.path()).unwrap();
+    let reloaded = SecureKeyStore::load_or_create(dir.path()).unwrap();
+
+    assert!(created.as_bytes() == reloaded.as_bytes());
+    assert!(dir.path().join("key.dat").is_file());
+    assert_eq!(fs::read(abandoned).unwrap(), ABANDONED_CONTENT);
 }
