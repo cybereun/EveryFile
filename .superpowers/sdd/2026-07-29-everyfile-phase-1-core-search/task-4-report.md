@@ -260,3 +260,212 @@ git diff --check: exit 0
   not created in the automated fixture.
 - The link fixture exercises a Windows directory symbolic link. Junctions share the
   reparse-point pruning branch but are not separately created by the test fixture.
+
+---
+
+## Fix round 1/5: Important findings
+
+### Scope
+
+Fixed all three Important review findings:
+
+1. Windows placeholder and directory-reparse classification now happens from
+   `ignore`/`walkdir` directory-enumeration metadata before any candidate path is opened.
+2. The unused opener plugin and renderer path capability were removed completely.
+3. `DiscoveryStream` is now a genuinely incremental, bounded, cancellation-aware
+   iterator backed by an owned worker and a 32-item synchronous channel.
+
+Folder registration, encrypted database behavior, sidebar behavior, and
+`FolderRecord` serialization were not changed.
+
+### RED evidence
+
+Command:
+
+```powershell
+cargo test --manifest-path src-tauri\Cargo.toml --lib folders::discovery::tests
+```
+
+Exit code: `1`
+
+Expected failure:
+
+```text
+error[E0432]: unresolved imports
+`super::candidate_from_snapshot`,
+`super::classify_snapshot`,
+`super::spawn_discovery_worker`,
+`super::DiscoveryEntryKind`,
+`super::DiscoveryEntrySnapshot`,
+`super::EntryClassification`,
+`super::PathOpenProvider`,
+`super::DISCOVERY_CHANNEL_CAPACITY`
+```
+
+This RED covers the missing instrumented placeholder/reparse boundary and the missing
+bounded incremental worker.
+
+Command:
+
+```powershell
+cargo test --manifest-path src-tauri\Cargo.toml --test folder_discovery renderer_capability_does_not_grant_generic_path_operations
+```
+
+Exit code: `1`
+
+Expected behavioral failure:
+
+```text
+renderer capability permits a generic path operation: opener:default
+test result: FAILED. 0 passed; 1 failed
+```
+
+### GREEN evidence
+
+Command:
+
+```powershell
+cargo test --manifest-path src-tauri\Cargo.toml --lib folders::discovery::tests
+```
+
+Output:
+
+```text
+running 4 tests
+test folders::discovery::tests::directory_reparse_snapshot_is_pruned_before_path_open ... ok
+test folders::discovery::tests::metadata_only_snapshot_never_invokes_path_open_provider ... ok
+test folders::discovery::tests::dropping_stream_cancels_a_bounded_producer ... ok
+test folders::discovery::tests::first_candidate_is_observable_while_traversal_is_blocked ... ok
+test result: ok. 4 passed; 0 failed
+```
+
+Command:
+
+```powershell
+cargo test --manifest-path src-tauri\Cargo.toml --test folder_discovery renderer_capability_does_not_grant_generic_path_operations
+```
+
+Output:
+
+```text
+running 1 test
+test renderer_capability_does_not_grant_generic_path_operations ... ok
+test result: ok. 1 passed; 0 failed
+```
+
+Command:
+
+```powershell
+cargo test --manifest-path src-tauri\Cargo.toml --test folder_discovery
+```
+
+Output:
+
+```text
+running 10 tests
+test result: ok. 10 passed; 0 failed; 0 ignored
+```
+
+### Full verification
+
+Commands:
+
+```powershell
+cargo fmt --manifest-path src-tauri\Cargo.toml -- --check
+cargo clippy --manifest-path src-tauri\Cargo.toml --all-targets --all-features -- -D warnings
+cargo test --manifest-path src-tauri\Cargo.toml
+npm test -- --run src/features/folders/FolderSidebar.test.tsx
+npm test -- --run
+npm run build
+git diff --check
+```
+
+Output:
+
+```text
+cargo fmt: exit 0
+cargo clippy: exit 0, Finished `dev` profile
+cargo test:
+  discovery unit tests 4 passed
+  domain contracts 2 passed
+  encrypted database 6 passed
+  folder discovery 10 passed
+  0 failed
+focused FolderSidebar: 1 file, 3 tests passed
+full Vitest: 3 files, 6 tests passed
+npm build: TypeScript + Vite exit 0, 16 modules transformed
+git diff --check: exit 0
+```
+
+The encrypted-database wrong-key test continues to emit its expected SQLCipher HMAC
+diagnostic while passing.
+
+Command:
+
+```powershell
+rg -n "opener" package.json package-lock.json src-tauri\Cargo.toml src-tauri\Cargo.lock src-tauri\src src-tauri\capabilities
+```
+
+Output:
+
+```text
+NO_OPENER_REFERENCES
+```
+
+### Files changed in fix round 1/5
+
+- `src-tauri/src/folders/discovery.rs`
+- `src-tauri/tests/folder_discovery.rs`
+- `src-tauri/capabilities/default.json`
+- `src-tauri/src/lib.rs`
+- `src-tauri/Cargo.toml`
+- `src-tauri/Cargo.lock`
+- `package.json`
+- `package-lock.json`
+- `.superpowers/sdd/2026-07-29-everyfile-phase-1-core-search/task-4-report.md`
+
+### Safety and implementation decisions
+
+- On Windows, `walkdir::DirEntry::metadata` is cached from directory enumeration. The
+  snapshot classifier reads those attributes before any candidate path provider can be
+  invoked.
+- Directory symlinks and entries with `FILE_ATTRIBUTE_REPARSE_POINT` are rejected in
+  `filter_entry`, before traversal can descend into them.
+- Offline, recall-on-open, and recall-on-data-access files produce metadata-only
+  candidates by joining the already-canonical parent and enumerated filename. They do
+  not invoke the path-open/canonicalization provider.
+- Only confirmed ordinary hydrated files invoke canonicalization, after which the
+  canonical root containment check remains mandatory.
+- Discovery uses a `sync_channel` with capacity 32. The producer uses cancel-aware
+  bounded sends; dropping the receiver sets cancellation and stops a producer waiting
+  on a full channel.
+- Candidates and warnings are emitted as traversal proceeds. `discover_all` remains a
+  compatibility helper that explicitly drains the stream into a report.
+- Removed `tauri-plugin-opener`, `@tauri-apps/plugin-opener`, Rust initialization, and
+  `opener:default`. The renderer retains only `core:default`; no generic filesystem,
+  shell, dialog, or opener capability replaced it.
+
+### Fix-round self-review
+
+- Confirmed no `symlink_metadata` or path `metadata` call remains in candidate
+  classification.
+- Confirmed the metadata-only branch is guarded by a panic-on-use path provider test.
+- Confirmed the real external-directory-link integration test still rejects escape.
+- Confirmed the incremental test observes the first item while the producer is blocked
+  before completion.
+- Confirmed drop cancellation terminates a producer and cannot buffer more than the
+  configured channel capacity.
+- Confirmed no opener reference remains in either lockfile or source/config.
+- Confirmed native-picker-only registration and no-path Tauri command signatures are
+  unchanged.
+
+### Remaining concerns/deferred minor coverage
+
+- A real OneDrive Files On-Demand placeholder is not created in CI; the instrumented
+  branch test proves the classified placeholder path is never opened/canonicalized.
+- Representative Windows junction and ACL-denied integration fixtures remain deferred
+  minor coverage. Reparse classification and real directory-symlink escape coverage
+  exercise the applicable safety branches.
+- `npm install --package-lock-only --ignore-scripts` reported the existing jsdom engine
+  warning because local Node `24.13.1` is below jsdom's declared `24.15.0` minimum;
+  focused/full Vitest and the production build all passed on the current runtime.

@@ -1,8 +1,12 @@
 use std::collections::HashSet;
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
 use std::sync::Arc;
-use std::time::SystemTime;
+use std::thread::{self, JoinHandle};
+use std::time::{Duration, SystemTime};
 
 use ignore::{DirEntry, WalkBuilder};
 use serde::Serialize;
@@ -58,9 +62,53 @@ pub struct DiscoveryReport {
     pub warnings: Vec<DiscoveryWarning>,
 }
 
+const DISCOVERY_CHANNEL_CAPACITY: usize = 32;
+
+enum DiscoveryMessage {
+    Candidate(FileCandidate),
+    Warning(DiscoveryWarning),
+}
+
+struct DiscoverySender {
+    sender: SyncSender<DiscoveryMessage>,
+    cancelled: Arc<AtomicBool>,
+}
+
+impl DiscoverySender {
+    fn send_candidate(&self, candidate: FileCandidate) -> bool {
+        self.send(DiscoveryMessage::Candidate(candidate))
+    }
+
+    fn send_warning(&self, warning: DiscoveryWarning) -> bool {
+        self.send(DiscoveryMessage::Warning(warning))
+    }
+
+    fn is_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::Acquire)
+    }
+
+    fn send(&self, mut message: DiscoveryMessage) -> bool {
+        loop {
+            if self.is_cancelled() {
+                return false;
+            }
+            match self.sender.try_send(message) {
+                Ok(()) => return true,
+                Err(TrySendError::Full(returned)) => {
+                    message = returned;
+                    thread::sleep(Duration::from_millis(1));
+                }
+                Err(TrySendError::Disconnected(_)) => return false,
+            }
+        }
+    }
+}
+
 pub struct DiscoveryStream {
-    candidates: std::vec::IntoIter<FileCandidate>,
+    receiver: Receiver<DiscoveryMessage>,
     warnings: Vec<DiscoveryWarning>,
+    cancelled: Arc<AtomicBool>,
+    worker: Option<JoinHandle<()>>,
 }
 
 impl DiscoveryStream {
@@ -73,7 +121,33 @@ impl Iterator for DiscoveryStream {
     type Item = FileCandidate;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.candidates.next()
+        loop {
+            match self.receiver.recv() {
+                Ok(DiscoveryMessage::Candidate(candidate)) => return Some(candidate),
+                Ok(DiscoveryMessage::Warning(warning)) => self.warnings.push(warning),
+                Err(_) => {
+                    self.join_finished_worker();
+                    return None;
+                }
+            }
+        }
+    }
+}
+
+impl DiscoveryStream {
+    fn join_finished_worker(&mut self) {
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+    }
+}
+
+impl Drop for DiscoveryStream {
+    fn drop(&mut self) {
+        self.cancelled.store(true, Ordering::Release);
+        if self.worker.as_ref().is_some_and(JoinHandle::is_finished) {
+            self.join_finished_worker();
+        }
     }
 }
 
@@ -81,17 +155,23 @@ pub fn discover(
     folder: &FolderRecord,
     options: DiscoveryOptions,
 ) -> Result<DiscoveryStream, DiscoveryError> {
-    let report = discover_all(Path::new(&folder.canonical_path), options)?;
-    Ok(DiscoveryStream {
-        candidates: report.files.into_iter(),
-        warnings: report.warnings,
-    })
+    discover_path(Path::new(&folder.canonical_path), options)
 }
 
 pub fn discover_all(
     selected_root: &Path,
     options: DiscoveryOptions,
 ) -> Result<DiscoveryReport, DiscoveryError> {
+    let mut stream = discover_path(selected_root, options)?;
+    let files = stream.by_ref().collect();
+    let warnings = stream.warnings().to_vec();
+    Ok(DiscoveryReport { files, warnings })
+}
+
+fn discover_path(
+    selected_root: &Path,
+    options: DiscoveryOptions,
+) -> Result<DiscoveryStream, DiscoveryError> {
     let canonical_root =
         selected_root
             .canonicalize()
@@ -103,6 +183,34 @@ pub fn discover_all(
         return Err(DiscoveryError::RootIsNotDirectory(canonical_root));
     }
 
+    Ok(spawn_discovery_worker(move |sender| {
+        walk_root(canonical_root, options, sender);
+    }))
+}
+
+fn spawn_discovery_worker<F>(producer: F) -> DiscoveryStream
+where
+    F: FnOnce(DiscoverySender) + Send + 'static,
+{
+    let (sender, receiver) = mpsc::sync_channel(DISCOVERY_CHANNEL_CAPACITY);
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let worker_cancelled = Arc::clone(&cancelled);
+    let worker = thread::spawn(move || {
+        producer(DiscoverySender {
+            sender,
+            cancelled: worker_cancelled,
+        });
+    });
+
+    DiscoveryStream {
+        receiver,
+        warnings: Vec::new(),
+        cancelled,
+        worker: Some(worker),
+    }
+}
+
+fn walk_root(canonical_root: PathBuf, options: DiscoveryOptions, sender: DiscoverySender) {
     let excluded_directories = Arc::new(options.excluded_directories);
     let filter_exclusions = Arc::clone(&excluded_directories);
     let mut builder = WalkBuilder::new(&canonical_root);
@@ -117,12 +225,17 @@ pub fn discover_all(
         .sort_by_file_path(|left, right| left.cmp(right))
         .filter_entry(move |entry| should_descend(entry, &filter_exclusions));
 
-    let mut report = DiscoveryReport::default();
+    let path_open = OsPathOpenProvider;
     for result in builder.build() {
+        if sender.is_cancelled() {
+            return;
+        }
         let entry = match result {
             Ok(entry) => entry,
             Err(error) => {
-                report.warnings.push(walk_warning(&error));
+                if !sender.send_warning(walk_warning(&error)) {
+                    return;
+                }
                 continue;
             }
         };
@@ -130,82 +243,128 @@ pub fn discover_all(
             continue;
         }
 
-        let path = entry.path();
-        let link_metadata = match fs::symlink_metadata(path) {
-            Ok(metadata) => metadata,
+        let snapshot = match snapshot_entry(&entry) {
+            Ok(snapshot) => snapshot,
             Err(error) => {
-                report
-                    .warnings
-                    .push(io_warning("ENTRY_METADATA_UNAVAILABLE", path, error));
+                if !sender.send_warning(walk_warning(&error)) {
+                    return;
+                }
                 continue;
             }
         };
-        if link_metadata.file_type().is_symlink() || !link_metadata.is_file() {
+        if !matches!(
+            classify_snapshot(&snapshot, &excluded_directories),
+            EntryClassification::Candidate { .. }
+        ) {
             continue;
         }
 
-        let metadata = match fs::metadata(path) {
-            Ok(metadata) => metadata,
-            Err(error) => {
-                report
-                    .warnings
-                    .push(io_warning("ENTRY_METADATA_UNAVAILABLE", path, error));
-                continue;
+        match candidate_from_snapshot(&canonical_root, snapshot, &path_open) {
+            Ok(Some(candidate)) => {
+                if !sender.send_candidate(candidate) {
+                    return;
+                }
             }
-        };
-        let metadata_only = is_metadata_only(&metadata);
-        let canonical_path = match canonical_candidate_path(path, metadata_only) {
-            Ok(path) => path,
-            Err(error) => {
-                report
-                    .warnings
-                    .push(io_warning("ENTRY_CANONICALIZE_FAILED", path, error));
-                continue;
+            Ok(None) => {}
+            Err(warning) => {
+                if !sender.send_warning(warning) {
+                    return;
+                }
             }
-        };
-        if !canonical_path.starts_with(&canonical_root) {
-            report.warnings.push(DiscoveryWarning {
-                code: "ENTRY_OUTSIDE_ROOT".into(),
-                path: Some(path.to_string_lossy().into_owned()),
-                message: "candidate resolved outside the registered root".into(),
-            });
-            continue;
         }
-
-        let relative_path = match canonical_path.strip_prefix(&canonical_root) {
-            Ok(relative) => relative.to_string_lossy().replace('\\', "/"),
-            Err(_) => continue,
-        };
-        report.files.push(FileCandidate {
-            canonical_path,
-            relative_path,
-            size_bytes: metadata.len(),
-            modified_at: metadata.modified().ok(),
-            metadata_only,
-        });
     }
-
-    Ok(report)
 }
 
-fn canonical_candidate_path(path: &Path, metadata_only: bool) -> std::io::Result<PathBuf> {
-    if !metadata_only {
-        return path.canonicalize();
-    }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DiscoveryEntryKind {
+    File,
+    Directory,
+    Symlink,
+    Other,
+}
 
-    let parent = path.parent().ok_or_else(|| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "metadata-only candidate has no parent",
-        )
-    })?;
-    let file_name = path.file_name().ok_or_else(|| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "metadata-only candidate has no file name",
-        )
-    })?;
-    Ok(parent.canonicalize()?.join(file_name))
+#[derive(Debug)]
+struct DiscoveryEntrySnapshot {
+    path: PathBuf,
+    canonical_parent: PathBuf,
+    file_name: std::ffi::OsString,
+    kind: DiscoveryEntryKind,
+    attributes: u32,
+    size_bytes: u64,
+    modified_at: Option<SystemTime>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EntryClassification {
+    PruneDirectory,
+    Descend,
+    Skip,
+    Candidate { metadata_only: bool },
+}
+
+trait PathOpenProvider {
+    fn canonicalize_hydrated(&self, path: &Path) -> io::Result<PathBuf>;
+}
+
+struct OsPathOpenProvider;
+
+impl PathOpenProvider for OsPathOpenProvider {
+    fn canonicalize_hydrated(&self, path: &Path) -> io::Result<PathBuf> {
+        path.canonicalize()
+    }
+}
+
+fn snapshot_entry(entry: &DirEntry) -> Result<DiscoveryEntrySnapshot, ignore::Error> {
+    let metadata = entry.metadata()?;
+    let kind = if entry.path_is_symlink() {
+        DiscoveryEntryKind::Symlink
+    } else {
+        match entry.file_type() {
+            Some(file_type) if file_type.is_file() => DiscoveryEntryKind::File,
+            Some(file_type) if file_type.is_dir() => DiscoveryEntryKind::Directory,
+            Some(_) => DiscoveryEntryKind::Other,
+            None => DiscoveryEntryKind::Other,
+        }
+    };
+    let canonical_parent = entry
+        .path()
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_default();
+
+    Ok(DiscoveryEntrySnapshot {
+        path: entry.path().to_path_buf(),
+        canonical_parent,
+        file_name: entry.file_name().to_os_string(),
+        kind,
+        attributes: enumerated_attributes(&metadata),
+        size_bytes: metadata.len(),
+        modified_at: metadata.modified().ok(),
+    })
+}
+
+fn classify_snapshot(
+    snapshot: &DiscoveryEntrySnapshot,
+    exclusions: &HashSet<String>,
+) -> EntryClassification {
+    match snapshot.kind {
+        DiscoveryEntryKind::Symlink => EntryClassification::PruneDirectory,
+        DiscoveryEntryKind::Directory
+            if is_directory_reparse_attributes(snapshot.attributes)
+                || snapshot.file_name.to_str().is_some_and(|name| {
+                    exclusions
+                        .iter()
+                        .any(|excluded| name.eq_ignore_ascii_case(excluded))
+                }) =>
+        {
+            EntryClassification::PruneDirectory
+        }
+        DiscoveryEntryKind::Directory => EntryClassification::Descend,
+        DiscoveryEntryKind::File => EntryClassification::Candidate {
+            metadata_only: metadata_only_attributes(snapshot.attributes),
+        },
+        DiscoveryEntryKind::Other => EntryClassification::Skip,
+    }
 }
 
 fn should_descend(entry: &DirEntry, exclusions: &HashSet<String>) -> bool {
@@ -213,50 +372,88 @@ fn should_descend(entry: &DirEntry, exclusions: &HashSet<String>) -> bool {
         return true;
     }
 
-    let is_directory = entry.file_type().is_some_and(|kind| kind.is_dir());
-    if is_directory
-        && entry.file_name().to_str().is_some_and(|name| {
-            exclusions
-                .iter()
-                .any(|excluded| name.eq_ignore_ascii_case(excluded))
-        })
-    {
-        return false;
+    snapshot_entry(entry).map_or(true, |snapshot| {
+        !matches!(
+            classify_snapshot(&snapshot, exclusions),
+            EntryClassification::PruneDirectory
+        )
+    })
+}
+
+fn candidate_from_snapshot(
+    canonical_root: &Path,
+    snapshot: DiscoveryEntrySnapshot,
+    path_open: &dyn PathOpenProvider,
+) -> Result<Option<FileCandidate>, DiscoveryWarning> {
+    if snapshot.kind != DiscoveryEntryKind::File {
+        return Ok(None);
     }
 
-    !is_directory_reparse_point(entry.path())
+    let metadata_only = metadata_only_attributes(snapshot.attributes);
+    let canonical_path = if metadata_only {
+        snapshot.canonical_parent.join(&snapshot.file_name)
+    } else {
+        path_open
+            .canonicalize_hydrated(&snapshot.path)
+            .map_err(|error| io_warning("ENTRY_CANONICALIZE_FAILED", &snapshot.path, error))?
+    };
+    if !canonical_path.starts_with(canonical_root) {
+        return Err(DiscoveryWarning {
+            code: "ENTRY_OUTSIDE_ROOT".into(),
+            path: Some(snapshot.path.to_string_lossy().into_owned()),
+            message: "candidate resolved outside the registered root".into(),
+        });
+    }
+    let relative_path = canonical_path
+        .strip_prefix(canonical_root)
+        .map_err(|_| DiscoveryWarning {
+            code: "ENTRY_OUTSIDE_ROOT".into(),
+            path: Some(snapshot.path.to_string_lossy().into_owned()),
+            message: "candidate resolved outside the registered root".into(),
+        })?
+        .to_string_lossy()
+        .replace('\\', "/");
+
+    Ok(Some(FileCandidate {
+        canonical_path,
+        relative_path,
+        size_bytes: snapshot.size_bytes,
+        modified_at: snapshot.modified_at,
+        metadata_only,
+    }))
 }
 
 #[cfg(windows)]
-fn is_directory_reparse_point(path: &Path) -> bool {
+fn enumerated_attributes(metadata: &fs::Metadata) -> u32 {
     use std::os::windows::fs::MetadataExt;
 
+    metadata.file_attributes()
+}
+
+#[cfg(not(windows))]
+fn enumerated_attributes(_metadata: &fs::Metadata) -> u32 {
+    0
+}
+
+#[cfg(windows)]
+fn is_directory_reparse_attributes(attributes: u32) -> bool {
     const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
 
-    let Ok(link_metadata) = fs::symlink_metadata(path) else {
-        return false;
-    };
-    if link_metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT == 0 {
-        return false;
-    }
-
-    link_metadata.is_dir() || fs::metadata(path).is_ok_and(|metadata| metadata.is_dir())
+    attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0
 }
 
 #[cfg(not(windows))]
-fn is_directory_reparse_point(path: &Path) -> bool {
-    fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_symlink())
+fn is_directory_reparse_attributes(_attributes: u32) -> bool {
+    false
 }
 
 #[cfg(windows)]
-fn is_metadata_only(metadata: &fs::Metadata) -> bool {
-    use std::os::windows::fs::MetadataExt;
-
-    is_metadata_only_file_attributes(metadata.file_attributes())
+fn metadata_only_attributes(attributes: u32) -> bool {
+    is_metadata_only_file_attributes(attributes)
 }
 
 #[cfg(not(windows))]
-fn is_metadata_only(_metadata: &fs::Metadata) -> bool {
+fn metadata_only_attributes(_attributes: u32) -> bool {
     false
 }
 
@@ -310,4 +507,129 @@ pub enum DiscoveryError {
     },
     #[error("registered root is not a directory: {0}")]
     RootIsNotDirectory(PathBuf),
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
+    use std::io;
+    use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{mpsc, Arc};
+    use std::time::{Duration, SystemTime};
+
+    use super::{
+        candidate_from_snapshot, classify_snapshot, spawn_discovery_worker, DiscoveryEntryKind,
+        DiscoveryEntrySnapshot, EntryClassification, FileCandidate, PathOpenProvider,
+        DISCOVERY_CHANNEL_CAPACITY,
+    };
+
+    struct PanicPathOpenProvider;
+
+    impl PathOpenProvider for PanicPathOpenProvider {
+        fn canonicalize_hydrated(&self, _path: &Path) -> io::Result<PathBuf> {
+            panic!("metadata-only and pruned entries must not open or canonicalize their path")
+        }
+    }
+
+    fn candidate(relative_path: &str) -> FileCandidate {
+        FileCandidate {
+            canonical_path: PathBuf::from("C:\\fixture").join(relative_path),
+            relative_path: relative_path.into(),
+            size_bytes: 5,
+            modified_at: Some(SystemTime::UNIX_EPOCH),
+            metadata_only: false,
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn metadata_only_snapshot_never_invokes_path_open_provider() {
+        const FILE_ATTRIBUTE_OFFLINE: u32 = 0x0000_1000;
+
+        let root = PathBuf::from("C:\\fixture");
+        let snapshot = DiscoveryEntrySnapshot {
+            path: root.join("cloud").join("report.pdf"),
+            canonical_parent: root.join("cloud"),
+            file_name: "report.pdf".into(),
+            kind: DiscoveryEntryKind::File,
+            attributes: FILE_ATTRIBUTE_OFFLINE,
+            size_bytes: 42,
+            modified_at: Some(SystemTime::UNIX_EPOCH),
+        };
+
+        let result = candidate_from_snapshot(&root, snapshot, &PanicPathOpenProvider).unwrap();
+
+        assert_eq!(
+            result.unwrap(),
+            FileCandidate {
+                canonical_path: root.join("cloud").join("report.pdf"),
+                relative_path: "cloud/report.pdf".into(),
+                size_bytes: 42,
+                modified_at: Some(SystemTime::UNIX_EPOCH),
+                metadata_only: true,
+            }
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn directory_reparse_snapshot_is_pruned_before_path_open() {
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
+
+        let root = PathBuf::from("C:\\fixture");
+        let snapshot = DiscoveryEntrySnapshot {
+            path: root.join("junction"),
+            canonical_parent: root.clone(),
+            file_name: "junction".into(),
+            kind: DiscoveryEntryKind::Directory,
+            attributes: FILE_ATTRIBUTE_REPARSE_POINT,
+            size_bytes: 0,
+            modified_at: None,
+        };
+
+        assert_eq!(
+            classify_snapshot(&snapshot, &HashSet::new()),
+            EntryClassification::PruneDirectory
+        );
+    }
+
+    #[test]
+    fn first_candidate_is_observable_while_traversal_is_blocked() {
+        let (reached_gate_tx, reached_gate_rx) = mpsc::sync_channel(0);
+        let (release_gate_tx, release_gate_rx) = mpsc::sync_channel(0);
+        let mut stream = spawn_discovery_worker(move |sender| {
+            assert!(sender.send_candidate(candidate("first.txt")));
+            reached_gate_tx.send(()).unwrap();
+            release_gate_rx.recv().unwrap();
+            let _ = sender.send_candidate(candidate("second.txt"));
+        });
+
+        reached_gate_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap();
+        assert_eq!(stream.next().unwrap().relative_path, "first.txt");
+
+        release_gate_tx.send(()).unwrap();
+        assert_eq!(stream.next().unwrap().relative_path, "second.txt");
+        assert!(stream.next().is_none());
+    }
+
+    #[test]
+    fn dropping_stream_cancels_a_bounded_producer() {
+        let produced = Arc::new(AtomicUsize::new(0));
+        let worker_produced = Arc::clone(&produced);
+        let (stopped_tx, stopped_rx) = mpsc::sync_channel(0);
+        let stream = spawn_discovery_worker(move |sender| {
+            while sender.send_candidate(candidate("queued.txt")) {
+                worker_produced.fetch_add(1, Ordering::SeqCst);
+            }
+            stopped_tx.send(()).unwrap();
+        });
+
+        drop(stream);
+
+        stopped_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert!(produced.load(Ordering::SeqCst) <= DISCOVERY_CHANNEL_CAPACITY);
+    }
 }

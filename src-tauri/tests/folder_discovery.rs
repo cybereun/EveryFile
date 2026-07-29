@@ -243,3 +243,21 @@ fn offline_or_recall_attributes_are_metadata_only() {
     }
     assert!(!is_metadata_only_file_attributes(0));
 }
+
+#[test]
+fn renderer_capability_does_not_grant_generic_path_operations() {
+    let capability: serde_json::Value =
+        serde_json::from_str(include_str!("../capabilities/default.json")).unwrap();
+    let permissions = capability["permissions"].as_array().unwrap();
+    let forbidden_prefixes = ["opener:", "fs:", "shell:", "dialog:"];
+
+    for permission in permissions {
+        let permission = permission.as_str().unwrap();
+        assert!(
+            forbidden_prefixes
+                .iter()
+                .all(|prefix| !permission.starts_with(prefix)),
+            "renderer capability permits a generic path operation: {permission}"
+        );
+    }
+}
