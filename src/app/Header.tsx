@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { IconButton } from "../components/IconButton";
 import type { Locale } from "./translations";
 
@@ -84,10 +84,44 @@ export function Header({
   onStatistics,
 }: HeaderProps) {
   const [overflowOpen, setOverflowOpen] = useState(false);
+  const overflowRoot = useRef<HTMLDivElement>(null);
+  const moreTrigger = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     if (!compact) setOverflowOpen(false);
   }, [compact]);
+
+  useEffect(() => {
+    if (!overflowOpen) return;
+
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      setOverflowOpen(false);
+      moreTrigger.current?.focus();
+    };
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      if (
+        event.target instanceof Node &&
+        !overflowRoot.current?.contains(event.target)
+      ) {
+        setOverflowOpen(false);
+      }
+    };
+
+    document.addEventListener("keydown", closeOnEscape);
+    document.addEventListener("pointerdown", closeOnOutsidePointer);
+    return () => {
+      document.removeEventListener("keydown", closeOnEscape);
+      document.removeEventListener("pointerdown", closeOnOutsidePointer);
+    };
+  }, [overflowOpen]);
+
+  const runMenuAction = (action: (() => void) | undefined) => {
+    if (!action) return;
+    action();
+    setOverflowOpen(false);
+  };
 
   return (
     <header className={`app-header${compact ? " app-header--compact" : ""}`}>
@@ -107,8 +141,9 @@ export function Header({
           }
         />
         {compact ? (
-          <div className="header-overflow">
+          <div ref={overflowRoot} className="header-overflow">
             <IconButton
+              ref={moreTrigger}
               label="더보기 / More"
               aria-expanded={overflowOpen}
               aria-controls="header-overflow-menu"
@@ -131,20 +166,20 @@ export function Header({
                 <IconButton
                   label="통계 / Statistics"
                   disabled={!onStatistics}
-                  onClick={onStatistics}
+                  onClick={() => runMenuAction(onStatistics)}
                   icon={<StatisticsIcon />}
                 />
                 <IconButton
                   label="폴더 추가 / Add folder"
                   disabled={!onAddFolder}
-                  onClick={onAddFolder}
+                  onClick={() => runMenuAction(onAddFolder)}
                   tone="accent"
                   icon={<AddFolderIcon />}
                 />
                 <IconButton
                   label="설정 / Settings"
                   disabled={!onSettings}
-                  onClick={onSettings}
+                  onClick={() => runMenuAction(onSettings)}
                   icon={<SettingsIcon />}
                 />
                 <LanguageControl
