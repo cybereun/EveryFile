@@ -13,7 +13,7 @@ pub mod state;
 pub mod statistics;
 
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use indexing::IndexCoordinator;
@@ -24,9 +24,14 @@ use tauri::{Emitter, Manager};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    run_with_reset_completion(None);
+}
+
+pub fn run_with_reset_completion(reset_completion: Option<diagnostics::ResetCompletionStartup>) {
+    let reset_completion = Arc::new(Mutex::new(reset_completion));
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .setup(|app| {
+        .setup(move |app| {
             let app_data_dir = app.path().app_local_data_dir()?;
             let key = SecureKeyStore::load_or_create(&app_data_dir)?;
             let database = Arc::new(Database::open(&app_data_dir.join("everyfile.db"), &key)?);
@@ -86,6 +91,13 @@ pub fn run() {
                 document_id: None,
             })?;
             app.manage(app_state);
+            if let Some(completion) = reset_completion
+                .lock()
+                .map_err(|_| "reset completion lock is unavailable")?
+                .take()
+            {
+                diagnostics::finish_reset_completion_startup(completion)?;
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
