@@ -25,6 +25,7 @@ function response(
         modifiedAt: "2026-07-30T00:00:00Z",
         snippet: `<mark>${fileName}</mark>`,
         score: 1,
+        matchKind: "content",
       },
     ],
     total: 1,
@@ -84,7 +85,7 @@ describe("useImmediateSearch", () => {
     const cancel = vi.fn().mockResolvedValue(false);
     const filters: SearchFilters = {
       ...DEFAULT_SEARCH_FILTERS,
-      mode: "filename",
+      mode: "keyword",
       extensions: ["hwp", "pdf"],
       modifiedAfter: "2026-07-01",
       modifiedBefore: "2026-07-30",
@@ -108,12 +109,13 @@ describe("useImmediateSearch", () => {
     expect(search).toHaveBeenCalledWith(
       expect.objectContaining({
         query: "report",
-        mode: "filename",
+        mode: "keyword",
         extensions: ["hwp", "pdf"],
         modifiedAfter: "2026-07-01",
         modifiedBefore: "2026-07-30",
         folderIds: ["documents"],
         includeFilename: false,
+        termMode: "all",
         sort: "newest",
       }),
     );
@@ -147,21 +149,30 @@ describe("useImmediateSearch", () => {
     ]);
   });
 
-  it("maps every visible term option without disturbing query operators", () => {
-    expect(buildBackendQuery("alpha beta ext:pdf", "all")).toBe(
-      "alpha beta ext:pdf",
+  it("keeps query syntax intact while sending the selected typed term mode", async () => {
+    const search = vi.fn(async (request: SearchRequest) =>
+      response(request.requestId, "result.hwp"),
     );
-    expect(buildBackendQuery("alpha beta ext:pdf", "any")).toBe(
-      "alpha OR beta ext:pdf",
+    const cancel = vi.fn().mockResolvedValue(false);
+    const { result } = renderHook(() =>
+      useImmediateSearch({ search, cancel, debounceMs: 0 }),
     );
-    expect(buildBackendQuery("alpha beta ext:pdf", "exact")).toBe(
-      '"alpha beta" ext:pdf',
+    act(() => {
+      result.current.patchFilters({ option: "any" });
+      result.current.setQuery(
+        String.raw`alpha beta path:"C:\My Files" after:2026-01-01 ext:pdf`,
+      );
+    });
+    await waitFor(() => expect(search).toHaveBeenCalled());
+
+    expect(buildBackendQuery(String.raw`"ext:exe" ext:pdf`)).toBe(
+      String.raw`"ext:exe" ext:pdf`,
     );
-    expect(buildBackendQuery("alpha beta ext:pdf", "exclude")).toBe(
-      "-alpha -beta ext:pdf",
-    );
-    expect(buildBackendQuery("alpha beta ext:pdf", "near")).toBe(
-      "alpha beta ~5 ext:pdf",
+    expect(search).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        query: String.raw`alpha beta path:"C:\My Files" after:2026-01-01 ext:pdf`,
+        termMode: "any",
+      }),
     );
   });
 });

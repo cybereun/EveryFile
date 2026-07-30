@@ -1,4 +1,4 @@
-use everyfile_lib::domain::models::{SearchMode, SearchRequest};
+use everyfile_lib::domain::models::{SearchMode, SearchRequest, TermMode};
 use everyfile_lib::settings::AppSettings;
 
 #[test]
@@ -12,6 +12,7 @@ fn search_request_serializes_with_camel_case_keys() {
         modified_after: None,
         modified_before: None,
         include_filename: true,
+        term_mode: TermMode::All,
         private_search: false,
         sort: "relevance".into(),
         limit: 100,
@@ -24,6 +25,7 @@ fn search_request_serializes_with_camel_case_keys() {
     assert_eq!(value["requestId"], "search-contract");
     assert_eq!(value["folderIds"][0], "folder-1");
     assert_eq!(value["includeFilename"], true);
+    assert_eq!(value["termMode"], "all");
 }
 
 #[test]

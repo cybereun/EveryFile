@@ -33,6 +33,7 @@ function searchResponse(request: SearchRequest): SearchResponse {
         modifiedAt: "2026-07-29T12:30:00Z",
         snippet: null,
         score: 1,
+        matchKind: "filename",
       },
       {
         documentId: "content-hit",
@@ -44,6 +45,7 @@ function searchResponse(request: SearchRequest): SearchResponse {
         snippet:
           '<mark>중간고사</mark> <img src=x onerror="window.__xss=1"> 전략',
         score: 2,
+        matchKind: "content",
       },
     ],
     total: 2,
@@ -79,6 +81,7 @@ describe("SearchWorkspace", () => {
     expect(screen.getByRole("checkbox", { name: "HWP" })).toBeChecked();
     expect(screen.getByRole("checkbox", { name: "PDF" })).toBeChecked();
 
+    fireEvent.click(screen.getByRole("button", { name: "기간" }));
     fireEvent.change(screen.getByLabelText("시작일"), {
       target: { value: "2026-07-01" },
     });
@@ -172,11 +175,13 @@ describe("SearchWorkspace", () => {
   });
 
   it("filters returned rows with search-within-results", async () => {
+    const search = vi.fn(async (request: SearchRequest) => searchResponse(request));
+    const cancel = vi.fn().mockResolvedValue(false);
     render(
       <SearchWorkspace
         folders={folders}
-        searchApi={vi.fn(async (request: SearchRequest) => searchResponse(request))}
-        cancelApi={vi.fn().mockResolvedValue(false)}
+        searchApi={search}
+        cancelApi={cancel}
         openApi={vi.fn().mockResolvedValue(undefined)}
         debounceMs={0}
       />,
@@ -186,12 +191,74 @@ describe("SearchWorkspace", () => {
       target: { value: "중간고사" },
     });
     await screen.findByText("학습 전략.pdf");
+    const searchCalls = search.mock.calls.length;
+    const cancelCalls = cancel.mock.calls.length;
     fireEvent.change(screen.getByRole("textbox", { name: "결과 내 검색" }), {
       target: { value: "학습" },
     });
 
     expect(screen.queryByText("중간고사 계획.hwp")).not.toBeInTheDocument();
     expect(screen.getByText("학습 전략.pdf")).toBeVisible();
+    await new Promise((resolve) => window.setTimeout(resolve, 150));
+    expect(search).toHaveBeenCalledTimes(searchCalls);
+    expect(cancel).toHaveBeenCalledTimes(cancelCalls);
+  });
+
+  it("renders popovers in a portal outside the overflow scroller", () => {
+    render(
+      <div style={{ width: 420 }}>
+        <SearchWorkspace
+          folders={folders}
+          searchApi={vi.fn(async (request: SearchRequest) => searchResponse(request))}
+          cancelApi={vi.fn().mockResolvedValue(false)}
+          openApi={vi.fn().mockResolvedValue(undefined)}
+        />
+      </div>,
+    );
+    const extensionButton = screen.getByRole("button", { name: "확장자" });
+    vi.spyOn(extensionButton, "getBoundingClientRect").mockReturnValue({
+      x: 370,
+      y: 40,
+      top: 40,
+      right: 430,
+      bottom: 72,
+      left: 370,
+      width: 60,
+      height: 32,
+      toJSON: () => ({}),
+    });
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value: 420,
+    });
+
+    fireEvent.click(extensionButton);
+    const menu = screen.getByRole("dialog", { name: "확장자 필터" });
+    expect(screen.getByTestId("search-filter-scroller")).not.toContainElement(menu);
+    expect(menu.parentElement).toBe(document.body);
+    expect(Number.parseFloat(menu.style.left)).toBeLessThanOrEqual(236);
+
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(
+      screen.queryByRole("dialog", { name: "확장자 필터" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("explains and disables unsupported filename-only combinations", () => {
+    render(
+      <SearchWorkspace
+        folders={folders}
+        searchApi={vi.fn(async (request: SearchRequest) => searchResponse(request))}
+        cancelApi={vi.fn().mockResolvedValue(false)}
+        openApi={vi.fn().mockResolvedValue(undefined)}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "파일명" }));
+
+    expect(screen.getByRole("option", { name: /인접 검색/ })).toBeDisabled();
+    expect(screen.getByRole("option", { name: /신뢰도순/ })).toBeDisabled();
+    expect(screen.getByRole("checkbox", { name: "파일명 포함" })).toBeDisabled();
+    expect(screen.getByText(/파일명 검색에서는/)).toBeVisible();
   });
 
   it("saves the current query and detailed filters as a local preset", () => {

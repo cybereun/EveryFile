@@ -1,4 +1,5 @@
 use super::SearchError;
+use crate::domain::models::TermMode;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ParsedQuery {
@@ -11,12 +12,14 @@ pub struct ParsedQuery {
     pub before: Option<String>,
     pub near: Option<u32>,
     pub match_any: bool,
+    pub positive_groups: Vec<Vec<String>>,
 }
 
 impl ParsedQuery {
     pub fn parse(input: &str) -> Result<Self, SearchError> {
         let mut parsed = Self::default();
         let tokens = tokenize(input)?;
+        parsed.positive_groups.push(Vec::new());
         for (index, token) in tokens.iter().enumerate() {
             if token.text.is_empty() {
                 continue;
@@ -24,6 +27,11 @@ impl ParsedQuery {
 
             if token.quoted {
                 parsed.phrases.push(token.text.clone());
+                parsed
+                    .positive_groups
+                    .last_mut()
+                    .expect("positive group is initialized")
+                    .push(token.text.clone());
             } else if token.text == "OR" {
                 let valid_neighbors = index > 0
                     && index + 1 < tokens.len()
@@ -35,6 +43,7 @@ impl ParsedQuery {
                     ));
                 }
                 parsed.match_any = true;
+                parsed.positive_groups.push(Vec::new());
             } else if let Some(value) = token.text.strip_prefix("ext:") {
                 for extension in value.split(',') {
                     parsed.extensions.push(validate_extension(extension)?);
@@ -67,13 +76,24 @@ impl ParsedQuery {
             } else if let Some(value) = token.text.strip_prefix('-') {
                 if value.is_empty() {
                     parsed.terms.push(token.text.clone());
+                    parsed
+                        .positive_groups
+                        .last_mut()
+                        .expect("positive group is initialized")
+                        .push(token.text.clone());
                 } else {
                     parsed.excluded_terms.push(value.to_owned());
                 }
             } else {
                 parsed.terms.push(token.text.clone());
+                parsed
+                    .positive_groups
+                    .last_mut()
+                    .expect("positive group is initialized")
+                    .push(token.text.clone());
             }
         }
+        parsed.positive_groups.retain(|group| !group.is_empty());
         if let (Some(after), Some(before)) = (parsed.after.as_deref(), parsed.before.as_deref()) {
             if after > before {
                 return Err(SearchError::invalid_query(
@@ -104,11 +124,15 @@ impl ParsedQuery {
             && self.before.is_none()
     }
 
-    pub(crate) fn fts_match_expression(&self, include_filename: bool) -> Option<String> {
+    pub(crate) fn fts_match_expression(
+        &self,
+        include_filename: bool,
+        term_mode: TermMode,
+    ) -> Option<String> {
         let positive = self
-            .phrases
+            .positive_groups
             .iter()
-            .chain(self.terms.iter())
+            .flatten()
             .map(|value| fts_literal(value))
             .collect::<Vec<_>>();
 
@@ -116,12 +140,49 @@ impl ParsedQuery {
             return None;
         }
 
-        let positive_expression = if let Some(distance) = self.near.filter(|_| positive.len() > 1) {
-            format!("NEAR({}, {distance})", positive.join(" "))
-        } else if self.match_any {
-            format!("({})", positive.join(" OR "))
+        if term_mode == TermMode::Exclude {
+            return None;
+        }
+        let positive_expression = if self.match_any {
+            self.positive_groups
+                .iter()
+                .map(|group| {
+                    format!(
+                        "({})",
+                        group
+                            .iter()
+                            .map(|value| fts_literal(value))
+                            .collect::<Vec<_>>()
+                            .join(" AND ")
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(" OR ")
         } else {
-            positive.join(" AND ")
+            match term_mode {
+                TermMode::Any => format!("({})", positive.join(" OR ")),
+                TermMode::Exact => fts_literal(
+                    &self
+                        .positive_groups
+                        .iter()
+                        .flatten()
+                        .cloned()
+                        .collect::<Vec<_>>()
+                        .join(" "),
+                ),
+                TermMode::Near => {
+                    let distance = self.near.unwrap_or(5);
+                    format!("NEAR({}, {distance})", positive.join(" "))
+                }
+                TermMode::All => {
+                    if let Some(distance) = self.near {
+                        format!("NEAR({}, {distance})", positive.join(" "))
+                    } else {
+                        positive.join(" AND ")
+                    }
+                }
+                TermMode::Exclude => unreachable!(),
+            }
         };
         let positive_expression = if include_filename {
             positive_expression
@@ -151,9 +212,17 @@ impl ParsedQuery {
         }
     }
 
-    pub(crate) fn excluded_fts_expressions(&self, include_filename: bool) -> Vec<String> {
-        self.excluded_terms
-            .iter()
+    pub(crate) fn excluded_fts_expressions(
+        &self,
+        include_filename: bool,
+        term_mode: TermMode,
+    ) -> Vec<String> {
+        let mut excluded = self.excluded_terms.iter().collect::<Vec<_>>();
+        if term_mode == TermMode::Exclude {
+            excluded.extend(self.positive_groups.iter().flatten());
+        }
+        excluded
+            .into_iter()
             .map(|value| {
                 let literal = fts_literal(value);
                 if include_filename {

@@ -1,9 +1,15 @@
-import { Fragment, useEffect, useMemo, useState, type ReactNode } from "react";
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import type { SearchHit } from "../../lib/types";
 
 interface SearchResultsProps {
   hits: SearchHit[];
-  query: string;
   total: number;
   elapsedMs: number;
   loading: boolean;
@@ -12,19 +18,6 @@ interface SearchResultsProps {
   onLoadMore: () => void;
   onOpen: (documentId: string) => Promise<void>;
   onSelect: (documentId: string) => void;
-}
-
-function filenameMatchesQuery(hit: SearchHit, query: string) {
-  if (!hit.snippet) return true;
-  const terms = query
-    .replace(/\b(?:ext|path|after|before):(?:"[^"]*"|\S+)/gi, " ")
-    .match(/"([^"]+)"|[^\s]+/g)
-    ?.map((term) => term.replace(/^"|"$/g, "").replace(/^-/, ""))
-    .filter((term) => term && term !== "OR" && !term.startsWith("~"));
-  const fileName = hit.fileName.toLocaleLowerCase();
-  return Boolean(
-    terms?.some((term) => fileName.includes(term.toLocaleLowerCase())),
-  );
 }
 
 function formatSize(bytes: number) {
@@ -70,13 +63,11 @@ export function highlightedSnippet(text: string): ReactNode[] {
 function ResultRow({
   hit,
   selected,
-  index,
   onSelect,
   onOpen,
 }: {
   hit: SearchHit;
   selected: boolean;
-  index: number;
   onSelect: () => void;
   onOpen: () => void;
 }) {
@@ -85,7 +76,7 @@ function ResultRow({
     <button
       aria-selected={selected}
       className={`search-result-row${selected ? " is-selected" : ""}`}
-      id={`search-result-${index}`}
+      id={`search-result-${hit.documentId}`}
       onClick={onSelect}
       onDoubleClick={onOpen}
       role="option"
@@ -113,7 +104,6 @@ function ResultRow({
 
 export function SearchResults({
   hits,
-  query,
   total,
   elapsedMs,
   loading,
@@ -123,58 +113,60 @@ export function SearchResults({
   onOpen,
   onSelect,
 }: SearchResultsProps) {
-  const [selectedIndex, setSelectedIndex] = useState(0);
-  const [openError, setOpenError] = useState<string | null>(null);
-  const groups = useMemo(
-    () => [
-      {
-        label: "파일명 일치",
-        hits: hits.filter((hit) => filenameMatchesQuery(hit, query)),
-      },
-      {
-        label: "내용 일치",
-        hits: hits.filter((hit) => !filenameMatchesQuery(hit, query)),
-      },
-    ],
-    [hits, query],
+  const [selectedDocumentId, setSelectedDocumentId] = useState<string | null>(
+    hits[0]?.documentId ?? null,
   );
-  const orderedHits = useMemo(
-    () => groups.flatMap((group) => group.hits),
-    [groups],
+  const selectedDocumentIdRef = useRef(selectedDocumentId);
+  const [openError, setOpenError] = useState<string | null>(null);
+
+  const selectDocument = useCallback(
+    (documentId: string | null, notify = true) => {
+      selectedDocumentIdRef.current = documentId;
+      setSelectedDocumentId(documentId);
+      if (documentId && notify) onSelect(documentId);
+    },
+    [onSelect],
   );
 
   useEffect(() => {
-    setSelectedIndex((current) =>
-      Math.min(current, Math.max(0, orderedHits.length - 1)),
-    );
-  }, [orderedHits.length]);
+    if (
+      selectedDocumentId &&
+      hits.some((hit) => hit.documentId === selectedDocumentId)
+    ) {
+      selectedDocumentIdRef.current = selectedDocumentId;
+      return;
+    }
+    const next = hits[0]?.documentId ?? null;
+    selectDocument(next);
+  }, [hits, selectDocument, selectedDocumentId]);
 
-  const openSelected = async () => {
-    const hit = orderedHits[selectedIndex];
-    if (!hit) return;
+  const openDocument = async (documentId: string | null) => {
+    if (!documentId) return;
     setOpenError(null);
     try {
-      await onOpen(hit.documentId);
+      await onOpen(documentId);
     } catch (caught) {
       setOpenError(caught instanceof Error ? caught.message : "파일을 열지 못했습니다.");
     }
   };
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
-    if (!orderedHits.length) return;
+    if (!hits.length) return;
+    const current = Math.max(
+      0,
+      hits.findIndex((hit) => hit.documentId === selectedDocumentIdRef.current),
+    );
     if (event.key === "ArrowDown") {
       event.preventDefault();
-      const next = Math.min(orderedHits.length - 1, selectedIndex + 1);
-      setSelectedIndex(next);
-      onSelect(orderedHits[next].documentId);
+      const next = hits[Math.min(hits.length - 1, current + 1)];
+      selectDocument(next.documentId);
     } else if (event.key === "ArrowUp") {
       event.preventDefault();
-      const next = Math.max(0, selectedIndex - 1);
-      setSelectedIndex(next);
-      onSelect(orderedHits[next].documentId);
+      const next = hits[Math.max(0, current - 1)];
+      selectDocument(next.documentId);
     } else if (event.key === "Enter") {
       event.preventDefault();
-      void openSelected();
+      void openDocument(selectedDocumentIdRef.current);
     }
   };
 
@@ -190,7 +182,6 @@ export function SearchResults({
     );
   }
 
-  let absoluteIndex = -1;
   return (
     <section className="search-results" aria-label="검색 결과 영역">
       <div className="results-summary" aria-live="polite">
@@ -200,7 +191,7 @@ export function SearchResults({
       </div>
       <div
         aria-activedescendant={
-          orderedHits[selectedIndex] ? `search-result-${selectedIndex}` : undefined
+          selectedDocumentId ? `search-result-${selectedDocumentId}` : undefined
         }
         aria-label="검색 결과"
         className="search-results-list"
@@ -208,30 +199,30 @@ export function SearchResults({
         role="listbox"
         tabIndex={0}
       >
-        {groups.map((group) => {
-          if (group.hits.length === 0) return null;
+        {hits.map((hit, index) => {
+          const previousKind = hits[index - 1]?.matchKind;
+          const labels = {
+            filename: "파일명 일치",
+            content: "내용 일치",
+            both: "파일명·내용 일치",
+            metadata: "필터 일치",
+          };
           return (
-            <Fragment key={group.label}>
-              <h3 className="result-group-heading">{group.label}</h3>
-              {group.hits.map((hit) => {
-                const index = ++absoluteIndex;
-                return (
-                  <ResultRow
-                    hit={hit}
-                    index={index}
-                    key={hit.documentId}
-                    onOpen={() => {
-                      setSelectedIndex(index);
-                      void onOpen(hit.documentId);
-                    }}
-                    onSelect={() => {
-                      setSelectedIndex(index);
-                      onSelect(hit.documentId);
-                    }}
-                    selected={selectedIndex === index}
-                  />
-                );
-              })}
+            <Fragment key={hit.documentId}>
+              {previousKind !== hit.matchKind && (
+                <h3 className="result-group-heading">{labels[hit.matchKind]}</h3>
+              )}
+              <ResultRow
+                hit={hit}
+                onOpen={() => {
+                  selectDocument(hit.documentId);
+                  void openDocument(hit.documentId);
+                }}
+                onSelect={() => {
+                  selectDocument(hit.documentId);
+                }}
+                selected={selectedDocumentId === hit.documentId}
+              />
             </Fragment>
           );
         })}

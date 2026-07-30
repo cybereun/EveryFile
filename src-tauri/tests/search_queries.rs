@@ -34,6 +34,55 @@ fn parses_explicit_any_term_operator() {
 }
 
 #[test]
+fn explicit_or_keeps_and_precedence_in_mixed_groups() {
+    let fixture = Fixture::new();
+    fixture.insert_document(
+        "doc-alpha",
+        "folder-1",
+        r"C:\fixture\alpha.txt",
+        "alpha.txt",
+        "txt",
+        "2026-01-01T00:00:00Z",
+        1,
+        "",
+        "alpha",
+    );
+    fixture.insert_document(
+        "doc-beta",
+        "folder-1",
+        r"C:\fixture\beta.txt",
+        "beta.txt",
+        "txt",
+        "2026-01-01T00:00:00Z",
+        1,
+        "",
+        "beta",
+    );
+    fixture.insert_document(
+        "doc-beta-gamma",
+        "folder-1",
+        r"C:\fixture\beta-gamma.txt",
+        "beta-gamma.txt",
+        "txt",
+        "2026-01-01T00:00:00Z",
+        1,
+        "",
+        "beta gamma",
+    );
+
+    let response = fixture
+        .repository
+        .search(&request("alpha OR beta gamma", SearchMode::Keyword))
+        .unwrap();
+    let ids = response
+        .hits
+        .iter()
+        .map(|hit| hit.document_id.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(ids, ["doc-alpha", "doc-beta-gamma"]);
+}
+
+#[test]
 fn parser_handles_empty_escaped_near_korean_and_hostile_inputs() {
     let empty = ParsedQuery::parse(" \t ").unwrap();
     assert!(empty.is_empty());
@@ -205,6 +254,26 @@ fn any_term_search_and_confidence_sort_are_supported_in_both_modes() {
     let filename = request("alpha OR beta", SearchMode::Filename);
     let filename_results = fixture.repository.search(&filename).unwrap();
     assert_eq!(filename_results.total, 2);
+}
+
+#[test]
+fn backend_rejects_filename_combinations_that_the_ui_disables() {
+    let fixture = Fixture::new();
+    let mut near = request("alpha beta", SearchMode::Filename);
+    near.term_mode = everyfile_lib::domain::models::TermMode::Near;
+    assert!(near_error(&fixture, near));
+
+    let mut without_filename = request("alpha", SearchMode::Filename);
+    without_filename.include_filename = false;
+    assert!(near_error(&fixture, without_filename));
+
+    let mut confidence = request("alpha", SearchMode::Filename);
+    confidence.sort = "confidence".into();
+    assert!(near_error(&fixture, confidence));
+}
+
+fn near_error(fixture: &Fixture, request: SearchRequest) -> bool {
+    fixture.repository.search(&request).is_err()
 }
 
 #[test]
@@ -405,6 +474,14 @@ fn keyword_snippet_uses_the_best_matching_fts_column() {
             .as_deref()
             .unwrap()
             .contains("<mark>"));
+        assert_eq!(
+            response.hits[0].match_kind,
+            if query == "filenameonlyneedle" {
+                everyfile_lib::domain::models::SearchMatchKind::Filename
+            } else {
+                everyfile_lib::domain::models::SearchMatchKind::Content
+            }
+        );
     }
 }
 
@@ -482,6 +559,7 @@ fn request(query: &str, mode: SearchMode) -> SearchRequest {
         modified_after: None,
         modified_before: None,
         include_filename: true,
+        term_mode: everyfile_lib::domain::models::TermMode::All,
         private_search: false,
         sort: "relevance".into(),
         limit: 100,

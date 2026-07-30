@@ -1,6 +1,17 @@
-import { useState } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactNode,
+  type RefObject,
+} from "react";
+import { createPortal } from "react-dom";
 import type { FolderRecord } from "../../lib/types";
 import {
+  parseSearchQuery,
+  removeQueryClause,
+  serializeSearchQuery,
   withExtensionQuery,
   type SearchFilters as SearchFilterState,
 } from "./searchStore";
@@ -13,6 +24,86 @@ interface SearchFiltersProps {
   query: string;
   onFiltersChange: (patch: Partial<SearchFilterState>) => void;
   onQueryChange: (query: string) => void;
+  withinResults: string;
+  onWithinResultsChange: (query: string) => void;
+}
+
+function AnchoredPopover({
+  anchor,
+  label,
+  open,
+  width,
+  onClose,
+  children,
+  className = "",
+}: {
+  anchor: RefObject<HTMLButtonElement | null>;
+  label: string;
+  open: boolean;
+  width: number;
+  onClose: () => void;
+  children: ReactNode;
+  className?: string;
+}) {
+  const menu = useRef<HTMLDivElement>(null);
+  const [position, setPosition] = useState({ left: 8, top: 8 });
+
+  useLayoutEffect(() => {
+    if (!open || !anchor.current) return;
+    const update = () => {
+      const rectangle = anchor.current?.getBoundingClientRect();
+      if (!rectangle) return;
+      const left = Math.max(8, Math.min(rectangle.left, window.innerWidth - width - 8));
+      const estimatedHeight = menu.current?.offsetHeight || 280;
+      const below = rectangle.bottom + 6;
+      const top =
+        below + estimatedHeight <= window.innerHeight
+          ? below
+          : Math.max(8, rectangle.top - estimatedHeight - 6);
+      setPosition({ left, top });
+    };
+    update();
+    window.addEventListener("resize", update);
+    window.addEventListener("scroll", update, true);
+    return () => {
+      window.removeEventListener("resize", update);
+      window.removeEventListener("scroll", update, true);
+    };
+  }, [anchor, open, width]);
+
+  useEffect(() => {
+    if (!open) return;
+    const dismiss = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (!menu.current?.contains(target) && !anchor.current?.contains(target)) onClose();
+    };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        onClose();
+        anchor.current?.focus();
+      }
+    };
+    document.addEventListener("pointerdown", dismiss);
+    document.addEventListener("keydown", escape);
+    return () => {
+      document.removeEventListener("pointerdown", dismiss);
+      document.removeEventListener("keydown", escape);
+    };
+  }, [anchor, onClose, open]);
+
+  if (!open) return null;
+  return createPortal(
+    <div
+      aria-label={label}
+      className={`filter-menu filter-menu--portal ${className}`}
+      ref={menu}
+      role="dialog"
+      style={{ left: position.left, top: position.top, width }}
+    >
+      {children}
+    </div>,
+    document.body,
+  );
 }
 
 function dateString(date: Date) {
@@ -36,10 +127,16 @@ export function SearchFilters({
   query,
   onFiltersChange,
   onQueryChange,
+  withinResults,
+  onWithinResultsChange,
 }: SearchFiltersProps) {
   const [extensionOpen, setExtensionOpen] = useState(false);
   const [dateOpen, setDateOpen] = useState(false);
   const [presetSaved, setPresetSaved] = useState(false);
+  const extensionAnchor = useRef<HTMLButtonElement>(null);
+  const dateAnchor = useRef<HTMLButtonElement>(null);
+  const hasPositiveQuery =
+    parseSearchQuery(query).positiveGroups.length > 0;
 
   const toggleExtension = (extension: string) => {
     const extensions = filters.extensions.includes(extension)
@@ -84,7 +181,9 @@ export function SearchFilters({
               <option value="any">하나 이상</option>
               <option value="exact">정확히 일치</option>
               <option value="exclude">제외 검색</option>
-              <option value="near">인접 검색</option>
+              <option disabled={filters.mode === "filename"} value="near">
+                인접 검색 (문서 내용 전용)
+              </option>
             </select>
           </label>
           <label>
@@ -99,7 +198,12 @@ export function SearchFilters({
               value={filters.sort}
             >
               <option value="relevance">관련도순</option>
-              <option value="confidence">신뢰도순</option>
+              <option
+                disabled={filters.mode === "filename" || !hasPositiveQuery}
+                value="confidence"
+              >
+                신뢰도순 (문서 내용 전용)
+              </option>
               <option value="newest">최신순</option>
               <option value="oldest">오래된순</option>
               <option value="name">이름순</option>
@@ -109,12 +213,22 @@ export function SearchFilters({
           <div className="filter-popover">
             <button
               aria-expanded={extensionOpen}
-              onClick={() => setExtensionOpen((open) => !open)}
+              onClick={() => {
+                setExtensionOpen((open) => !open);
+                setDateOpen(false);
+              }}
+              ref={extensionAnchor}
               type="button"
             >
               확장자
             </button>
-            <div className="filter-menu" hidden={!extensionOpen}>
+            <AnchoredPopover
+              anchor={extensionAnchor}
+              label="확장자 필터"
+              onClose={() => setExtensionOpen(false)}
+              open={extensionOpen}
+              width={176}
+            >
               {EXTENSIONS.map((extension) => (
                 <label key={extension}>
                   <input
@@ -125,17 +239,28 @@ export function SearchFilters({
                   {extension.toUpperCase()}
                 </label>
               ))}
-            </div>
+            </AnchoredPopover>
           </div>
           <div className="filter-popover">
             <button
               aria-expanded={dateOpen}
-              onClick={() => setDateOpen((open) => !open)}
+              onClick={() => {
+                setDateOpen((open) => !open);
+                setExtensionOpen(false);
+              }}
+              ref={dateAnchor}
               type="button"
             >
               기간
             </button>
-            <div className="filter-menu filter-menu--date" hidden={!dateOpen}>
+            <AnchoredPopover
+              anchor={dateAnchor}
+              className="filter-menu--date"
+              label="기간 필터"
+              onClose={() => setDateOpen(false)}
+              open={dateOpen}
+              width={256}
+            >
               <button
                 onClick={() => onFiltersChange(presetDates(0))}
                 type="button"
@@ -181,7 +306,7 @@ export function SearchFilters({
                   />
                 </label>
               </div>
-            </div>
+            </AnchoredPopover>
           </div>
           <label>
             <span className="sr-only">폴더 범위</span>
@@ -206,6 +331,7 @@ export function SearchFilters({
             <input
               aria-label="파일명 포함"
               checked={filters.includeFilename}
+              disabled={filters.mode === "filename"}
               onChange={(event) =>
                 onFiltersChange({ includeFilename: event.target.checked })
               }
@@ -217,12 +343,10 @@ export function SearchFilters({
             <span className="sr-only">결과 내 검색</span>
             <input
               aria-label="결과 내 검색"
-              onChange={(event) =>
-                onFiltersChange({ withinResults: event.target.value })
-              }
+              onChange={(event) => onWithinResultsChange(event.target.value)}
               placeholder="결과 내 검색…"
               type="text"
-              value={filters.withinResults}
+              value={withinResults}
             />
           </label>
           <button onClick={savePreset} type="button">
@@ -230,12 +354,20 @@ export function SearchFilters({
           </button>
         </div>
       </div>
+      {filters.mode === "filename" && (
+        <p className="filter-context-note" role="status">
+          파일명 검색에서는 파일명이 항상 포함되며 인접·신뢰도 검색은 문서 내용
+          모드에서만 사용할 수 있습니다.
+        </p>
+      )}
       <FilterChips
         filters={filters}
         folders={folders}
         query={query}
         onFiltersChange={onFiltersChange}
         onQueryChange={onQueryChange}
+        onWithinResultsChange={onWithinResultsChange}
+        withinResults={withinResults}
       />
     </>
   );
@@ -247,10 +379,40 @@ function FilterChips({
   query,
   onFiltersChange,
   onQueryChange,
+  withinResults,
+  onWithinResultsChange,
 }: SearchFiltersProps) {
   const selectedFolder = folders.find((folder) =>
     filters.folderIds.includes(folder.id),
   );
+  const parsed = parseSearchQuery(query);
+  const queryHasDate = parsed.clauses.some(
+    (clause) => clause.kind === "after" || clause.kind === "before",
+  );
+  const optionLabels: Record<SearchFilterState["option"], string> = {
+    all: "모두 포함",
+    any: "하나 이상",
+    exact: "정확히 일치",
+    exclude: "제외 검색",
+    near: "인접 검색",
+  };
+
+  const clearOption = () => {
+    const clauses = parsed.clauses
+      .filter((clause) => {
+        if (filters.option === "any") return clause.kind !== "or";
+        if (filters.option === "near") return clause.kind !== "near";
+        if (filters.option === "exclude") return clause.kind !== "exclude";
+        return true;
+      })
+      .map((clause) =>
+        filters.option === "exact" && clause.kind === "phrase"
+          ? { ...clause, kind: "term" as const, raw: clause.value }
+          : clause,
+      );
+    onQueryChange(serializeSearchQuery({ ...parsed, clauses }));
+    onFiltersChange({ option: "all" });
+  };
 
   return (
     <div className="filter-chips" aria-label="적용된 필터">
@@ -271,7 +433,7 @@ function FilterChips({
           {extension.toUpperCase()} <span aria-hidden="true">×</span>
         </button>
       ))}
-      {(filters.modifiedAfter || filters.modifiedBefore) && (
+      {(filters.modifiedAfter || filters.modifiedBefore) && !queryHasDate && (
         <button
           aria-label="기간 필터 제거"
           onClick={() =>
@@ -283,6 +445,27 @@ function FilterChips({
           <span aria-hidden="true">×</span>
         </button>
       )}
+      {parsed.clauses
+        .filter((clause) =>
+          ["path", "after", "before"].includes(clause.kind),
+        )
+        .map((clause, index) => (
+          <button
+            aria-label={`${clause.raw} 제거`}
+            key={`${clause.kind}-${clause.raw}-${index}`}
+            onClick={() => {
+              const nextQuery = removeQueryClause(
+                query,
+                (candidate) =>
+                  candidate.kind === clause.kind && candidate.raw === clause.raw,
+              );
+              onQueryChange(nextQuery);
+            }}
+            type="button"
+          >
+            {clause.raw} <span aria-hidden="true">×</span>
+          </button>
+        ))}
       {selectedFolder && (
         <button
           aria-label={`폴더 ${selectedFolder.displayName} 제거`}
@@ -299,6 +482,24 @@ function FilterChips({
           type="button"
         >
           파일명 제외 <span aria-hidden="true">×</span>
+        </button>
+      )}
+      {filters.option !== "all" && (
+        <button
+          aria-label={`${optionLabels[filters.option]} 옵션 제거`}
+          onClick={clearOption}
+          type="button"
+        >
+          {optionLabels[filters.option]} <span aria-hidden="true">×</span>
+        </button>
+      )}
+      {withinResults && (
+        <button
+          aria-label="결과 내 검색 제거"
+          onClick={() => onWithinResultsChange("")}
+          type="button"
+        >
+          결과 내: {withinResults} <span aria-hidden="true">×</span>
         </button>
       )}
     </div>

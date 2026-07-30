@@ -45,6 +45,7 @@ describe("IPC wrappers", () => {
       modifiedAfter: null,
       modifiedBefore: null,
       includeFilename: true,
+      termMode: "all",
       privateSearch: false,
       sort: "relevance",
       limit: 100,

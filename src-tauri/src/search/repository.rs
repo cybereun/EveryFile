@@ -7,7 +7,9 @@ use rusqlite::{params, params_from_iter};
 use serde::Serialize;
 use thiserror::Error;
 
-use crate::domain::models::{SearchHit, SearchMode, SearchRequest, SearchResponse};
+use crate::domain::models::{
+    SearchHit, SearchMatchKind, SearchMode, SearchRequest, SearchResponse, TermMode,
+};
 use crate::indexing::ActivityLimiter;
 use crate::infrastructure::database::Database;
 
@@ -58,8 +60,8 @@ impl SearchRepository {
         }
         let _foreground = self.limiter.begin_foreground();
         let started = Instant::now();
-        validate_request(request)?;
         let parsed = ParsedQuery::parse(&request.query)?;
+        validate_request(request, &parsed)?;
         let limit = if request.limit == 0 {
             DEFAULT_PAGE_SIZE
         } else {
@@ -93,6 +95,12 @@ impl SearchRepository {
                 modified_at: row.get(5)?,
                 snippet: row.get(6)?,
                 score: row.get(7)?,
+                match_kind: match row.get::<_, String>(8)?.as_str() {
+                    "filename" => SearchMatchKind::Filename,
+                    "content" => SearchMatchKind::Content,
+                    "both" => SearchMatchKind::Both,
+                    _ => SearchMatchKind::Metadata,
+                },
             })
         });
         lease.ensure_current()?;
@@ -153,13 +161,17 @@ impl SearchSql {
 
         match request.mode {
             SearchMode::Keyword => {
-                if let Some(expression) = parsed.fts_match_expression(request.include_filename) {
+                if let Some(expression) =
+                    parsed.fts_match_expression(request.include_filename, request.term_mode)
+                {
                     conditions.push("document_fts MATCH ?".to_owned());
                     values.push(expression.into());
                     applied_filters.push("query".into());
                     fts = true;
                 } else {
-                    for expression in parsed.excluded_fts_expressions(request.include_filename) {
+                    for expression in
+                        parsed.excluded_fts_expressions(request.include_filename, request.term_mode)
+                    {
                         conditions.push(
                             "NOT EXISTS (
                                SELECT 1 FROM document_fts
@@ -170,7 +182,10 @@ impl SearchSql {
                         );
                         values.push(expression.into());
                     }
-                    if !parsed.excluded_terms.is_empty() {
+                    if !parsed.excluded_terms.is_empty()
+                        || (request.term_mode == TermMode::Exclude
+                            && (!parsed.terms.is_empty() || !parsed.phrases.is_empty()))
+                    {
                         conditions.push(
                             "EXISTS (
                                SELECT 1 FROM document_fts indexed_fts
@@ -186,27 +201,47 @@ impl SearchSql {
                 }
             }
             SearchMode::Filename => {
-                let positive = parsed
-                    .phrases
-                    .iter()
-                    .chain(parsed.terms.iter())
-                    .collect::<Vec<_>>();
-                if parsed.match_any && !positive.is_empty() {
-                    let alternatives = positive
-                        .iter()
-                        .map(|value| {
+                let positive = parsed.positive_groups.iter().flatten().collect::<Vec<_>>();
+                if parsed.match_any {
+                    let mut alternatives = Vec::new();
+                    for group in &parsed.positive_groups {
+                        let mut members = Vec::new();
+                        for value in group {
                             values.push(format!("%{}%", escape_like(value)).into());
-                            format!(
+                            members.push(format!(
                                 "LOWER(d.file_name) LIKE LOWER(?{}) ESCAPE '\\'",
                                 values.len()
-                            )
-                        })
-                        .collect::<Vec<_>>();
+                            ));
+                        }
+                        alternatives.push(format!("({})", members.join(" AND ")));
+                    }
                     conditions.push(format!("({})", alternatives.join(" OR ")));
                 } else {
-                    for value in positive {
-                        conditions.push("LOWER(d.file_name) LIKE LOWER(?) ESCAPE '\\'".into());
-                        values.push(format!("%{}%", escape_like(value)).into());
+                    let selected = match request.term_mode {
+                        TermMode::Exact if !positive.is_empty() => vec![positive
+                            .iter()
+                            .map(|value| value.as_str())
+                            .collect::<Vec<_>>()
+                            .join(" ")],
+                        _ => positive.iter().map(|value| (*value).clone()).collect(),
+                    };
+                    let mut selected_conditions = Vec::new();
+                    for value in selected {
+                        values.push(format!("%{}%", escape_like(&value)).into());
+                        let comparison = if request.term_mode == TermMode::Exclude {
+                            "NOT LIKE"
+                        } else {
+                            "LIKE"
+                        };
+                        selected_conditions.push(format!(
+                            "LOWER(d.file_name) {comparison} LOWER(?{}) ESCAPE '\\'",
+                            values.len()
+                        ));
+                    }
+                    if request.term_mode == TermMode::Any && !selected_conditions.is_empty() {
+                        conditions.push(format!("({})", selected_conditions.join(" OR ")));
+                    } else {
+                        conditions.extend(selected_conditions);
                     }
                 }
                 for value in &parsed.excluded_terms {
@@ -306,13 +341,28 @@ impl SearchSql {
         } else {
             "NULL"
         };
+        let match_kind = if fts {
+            "CASE
+               WHEN highlight(document_fts, 1, '<mark>', '</mark>') != document_fts.file_name
+                AND (highlight(document_fts, 2, '<mark>', '</mark>') != document_fts.title
+                  OR highlight(document_fts, 3, '<mark>', '</mark>') != document_fts.body)
+                 THEN 'both'
+               WHEN highlight(document_fts, 1, '<mark>', '</mark>') != document_fts.file_name
+                 THEN 'filename'
+               ELSE 'content'
+             END"
+        } else if matches!(request.mode, SearchMode::Filename) {
+            "'filename'"
+        } else {
+            "'metadata'"
+        };
         let order = sort_clause(&request.sort, fts)?;
         let count_sql = format!("SELECT COUNT(*) {from}{where_clause}");
         let limit_parameter = values.len() + 1;
         let offset_parameter = values.len() + 2;
         let hits_sql = format!(
             "SELECT d.id, d.file_name, d.canonical_path, d.extension, d.size_bytes,
-                    d.modified_at, {snippet}, {score} AS score
+                    d.modified_at, {snippet}, {score} AS score, {match_kind}
              {from}{where_clause}
              ORDER BY {order}
              LIMIT ?{limit_parameter} OFFSET ?{offset_parameter}"
@@ -326,8 +376,30 @@ impl SearchSql {
     }
 }
 
-fn validate_request(request: &SearchRequest) -> Result<(), SearchError> {
+fn validate_request(request: &SearchRequest, parsed: &ParsedQuery) -> Result<(), SearchError> {
     sort_clause(&request.sort, matches!(request.mode, SearchMode::Keyword))?;
+    if matches!(request.mode, SearchMode::Filename) {
+        if !request.include_filename {
+            return Err(SearchError::invalid_request(
+                "filename mode always includes the filename",
+            ));
+        }
+        if request.term_mode == TermMode::Near || parsed.near.is_some() {
+            return Err(SearchError::invalid_request(
+                "near search is available only in keyword mode",
+            ));
+        }
+        if request.sort == "confidence" {
+            return Err(SearchError::invalid_request(
+                "confidence sort is available only in keyword mode",
+            ));
+        }
+    }
+    if request.term_mode == TermMode::Near && parsed.terms.len() + parsed.phrases.len() < 2 {
+        return Err(SearchError::invalid_request(
+            "near search requires at least two positive terms or phrases",
+        ));
+    }
     if let (Some(after), Some(before)) = (
         request.modified_after.as_deref(),
         request.modified_before.as_deref(),
@@ -391,9 +463,9 @@ fn add_date_filter(
 
 fn sort_clause(sort: &str, has_score: bool) -> Result<&'static str, SearchError> {
     match sort {
-        "relevance" | "confidence" if has_score => Ok("score ASC, d.modified_at DESC, d.id ASC"),
+        "relevance" if has_score => Ok("score ASC, d.modified_at DESC, d.id ASC"),
+        "confidence" if has_score => Ok("score ASC, d.id ASC"),
         "relevance" => Ok("d.file_name COLLATE NOCASE ASC, d.id ASC"),
-        "confidence" => Ok("d.file_name COLLATE NOCASE ASC, d.id ASC"),
         "newest" => Ok("d.modified_at DESC, d.id ASC"),
         "oldest" => Ok("d.modified_at ASC, d.id ASC"),
         "name" => Ok("d.file_name COLLATE NOCASE ASC, d.id ASC"),
@@ -439,6 +511,7 @@ struct HistoryFilters<'a> {
     modified_after: Option<&'a str>,
     modified_before: Option<&'a str>,
     include_filename: bool,
+    term_mode: &'a str,
     sort: &'a str,
 }
 
@@ -458,8 +531,19 @@ impl<'a> HistoryFilters<'a> {
                 .as_deref()
                 .or(parsed.before.as_deref()),
             include_filename: request.include_filename,
+            term_mode: term_mode_name(request.term_mode),
             sort: &request.sort,
         }
+    }
+}
+
+fn term_mode_name(mode: TermMode) -> &'static str {
+    match mode {
+        TermMode::All => "all",
+        TermMode::Any => "any",
+        TermMode::Exact => "exact",
+        TermMode::Exclude => "exclude",
+        TermMode::Near => "near",
     }
 }
 

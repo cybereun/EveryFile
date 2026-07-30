@@ -7,6 +7,25 @@ pub enum SearchMode {
     Filename,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum TermMode {
+    All,
+    Any,
+    Exact,
+    Exclude,
+    Near,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum SearchMatchKind {
+    Filename,
+    Content,
+    Both,
+    Metadata,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchRequest {
@@ -18,6 +37,7 @@ pub struct SearchRequest {
     pub modified_after: Option<String>,
     pub modified_before: Option<String>,
     pub include_filename: bool,
+    pub term_mode: TermMode,
     pub private_search: bool,
     pub sort: String,
     pub limit: u32,
@@ -35,6 +55,7 @@ pub struct SearchHit {
     pub modified_at: String,
     pub snippet: Option<String>,
     pub score: f64,
+    pub match_kind: SearchMatchKind,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

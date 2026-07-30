@@ -7,8 +7,10 @@ import type {
 import {
   buildBackendQuery,
   DEFAULT_SEARCH_FILTERS,
-  extensionsFromQuery,
+  explicitOptionFromQuery,
   hasSearchCriteria,
+  parseSearchQuery,
+  structuredValuesFromQuery,
   type SearchFilters,
 } from "./searchStore";
 
@@ -48,36 +50,57 @@ export function useImmediateSearch({
   const latestGeneration = useRef(0);
 
   const setQuery = useCallback((value: string) => {
-    const previousExtensions = extensionsFromQuery(queryRef.current);
+    const previous = structuredValuesFromQuery(queryRef.current);
+    const next = structuredValuesFromQuery(value);
     queryRef.current = value;
     setRawQuery(value);
-    const extensions = extensionsFromQuery(value);
-    if (previousExtensions.length === 0 && extensions.length === 0) return;
     setFilters((current) => {
-      if (
-        current.extensions.length === extensions.length &&
-        current.extensions.every((extension, index) => extension === extensions[index])
-      ) {
-        return current;
+      const patch: Partial<SearchFilters> = {};
+      if (previous.extensions.length > 0 || next.extensions.length > 0) {
+        patch.extensions = next.extensions;
       }
-      return { ...current, extensions };
+      if (previous.modifiedAfter || next.modifiedAfter) {
+        patch.modifiedAfter = next.modifiedAfter;
+      }
+      if (previous.modifiedBefore || next.modifiedBefore) {
+        patch.modifiedBefore = next.modifiedBefore;
+      }
+      const explicitOption = explicitOptionFromQuery(value);
+      if (explicitOption) patch.option = explicitOption;
+      if (
+        current.sort === "confidence" &&
+        parseSearchQuery(value).positiveGroups.length === 0
+      ) {
+        patch.sort = "relevance";
+      }
+      if (Object.keys(patch).length === 0) return current;
+      return { ...current, ...patch };
     });
   }, []);
 
   const patchFilters = useCallback((patch: Partial<SearchFilters>) => {
-    setFilters((current) => ({ ...current, ...patch }));
+    setFilters((current) => {
+      const next = { ...current, ...patch };
+      if (next.mode === "filename") {
+        next.includeFilename = true;
+        if (next.option === "near") next.option = "all";
+        if (next.sort === "confidence") next.sort = "relevance";
+      }
+      return next;
+    });
   }, []);
 
   const makeRequest = useCallback(
     (requestId: string, offset: number): SearchRequest => ({
       requestId,
-      query: buildBackendQuery(query, filters.option),
+      query: buildBackendQuery(query),
       mode: filters.mode,
       folderIds: filters.folderIds,
       extensions: filters.extensions,
       modifiedAfter: filters.modifiedAfter,
       modifiedBefore: filters.modifiedBefore,
       includeFilename: filters.includeFilename,
+      termMode: filters.option,
       privateSearch: false,
       sort: filters.sort,
       limit: pageSize,

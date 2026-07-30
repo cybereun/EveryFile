@@ -1,4 +1,6 @@
 export type SearchMode = "keyword" | "filename";
+export type SearchTermMode = "all" | "any" | "exact" | "exclude" | "near";
+export type SearchMatchKind = "filename" | "content" | "both" | "metadata";
 
 export interface SearchRequest {
   requestId: string;
@@ -9,6 +11,7 @@ export interface SearchRequest {
   modifiedAfter: string | null;
   modifiedBefore: string | null;
   includeFilename: boolean;
+  termMode: SearchTermMode;
   privateSearch: boolean;
   sort: string;
   limit: number;
@@ -24,6 +27,7 @@ export interface SearchHit {
   modifiedAt: string;
   snippet: string | null;
   score: number;
+  matchKind: SearchMatchKind;
 }
 
 export interface FolderRecord {

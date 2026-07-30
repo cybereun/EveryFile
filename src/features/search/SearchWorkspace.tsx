@@ -1,6 +1,7 @@
 import {
   forwardRef,
   useMemo,
+  useState,
   type Ref,
 } from "react";
 import type { FolderRecord, SearchRequest, SearchResponse } from "../../lib/types";
@@ -35,12 +36,13 @@ export const SearchWorkspace = forwardRef<HTMLInputElement, SearchWorkspaceProps
     },
     ref: Ref<HTMLInputElement>,
   ) {
+    const [withinResults, setWithinResults] = useState("");
     const search = useImmediateSearch({
       search: searchApi,
       cancel: cancelApi,
       debounceMs,
     });
-    const within = search.filters.withinResults.trim().toLocaleLowerCase();
+    const within = withinResults.trim().toLocaleLowerCase();
     const visibleHits = useMemo(() => {
       if (!within) return search.hits;
       return search.hits.filter((hit) =>
@@ -63,9 +65,11 @@ export const SearchWorkspace = forwardRef<HTMLInputElement, SearchWorkspaceProps
         <SearchFilters
           filters={search.filters}
           folders={folders}
+          query={search.query}
           onFiltersChange={search.patchFilters}
           onQueryChange={search.setQuery}
-          query={search.query}
+          onWithinResultsChange={setWithinResults}
+          withinResults={withinResults}
         />
         <SearchResults
           elapsedMs={search.elapsedMs}
@@ -76,7 +80,6 @@ export const SearchWorkspace = forwardRef<HTMLInputElement, SearchWorkspaceProps
           onLoadMore={() => void search.loadMore()}
           onOpen={openApi}
           onSelect={onSelectDocument}
-          query={search.query}
           total={within ? visibleHits.length : search.total}
         />
       </section>
