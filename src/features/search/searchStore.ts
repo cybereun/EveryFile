@@ -14,6 +14,7 @@ export interface SearchFilters {
   option: SearchOption;
   sort: SearchSort;
   extensions: string[];
+  extensionless: boolean;
   modifiedAfter: string | null;
   modifiedBefore: string | null;
   folderIds: string[];
@@ -25,6 +26,7 @@ export const DEFAULT_SEARCH_FILTERS: SearchFilters = {
   option: "all",
   sort: "relevance",
   extensions: [],
+  extensionless: false,
   modifiedAfter: null,
   modifiedBefore: null,
   folderIds: [],
@@ -275,6 +277,7 @@ export function hasSearchCriteria(query: string, filters: SearchFilters) {
   return Boolean(
     query.trim() ||
       filters.extensions.length ||
+      filters.extensionless ||
       filters.modifiedAfter ||
       filters.modifiedBefore ||
       filters.folderIds.length,

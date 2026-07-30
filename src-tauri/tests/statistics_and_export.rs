@@ -74,6 +74,23 @@ fn statistics_history_retention_and_private_rows_are_local_and_correct() {
 }
 
 #[test]
+fn statistics_json_uses_decimal_strings_for_exact_integer_fields() {
+    let fixture = Fixture::new();
+    fixture.seed_documents();
+
+    let value = serde_json::to_value(fixture.statistics.get_statistics().unwrap()).unwrap();
+
+    assert!(value["totalDocuments"].is_string());
+    assert!(value["indexedDocuments"].is_string());
+    assert!(value["totalBytes"].is_string());
+    assert!(value["totalSearches"].is_string());
+    assert!(value["uniqueSearchTerms"].is_string());
+    assert!(value["byExtension"][0]["count"].is_string());
+    assert!(value["byFolder"][0]["count"].is_string());
+    assert!(value["recentlyModified"][0]["sizeBytes"].is_string());
+}
+
+#[test]
 fn history_can_be_deleted_cleared_and_unlimited_retention_keeps_rows() {
     let fixture = Fixture::new();
     fixture.insert_history("one", "2020-01-01T00:00:00Z");
@@ -159,6 +176,33 @@ fn exports_quote_csv_preserve_xlsx_numbers_and_use_atomic_sibling_writes() {
 }
 
 #[test]
+fn csv_escapes_formulae_after_leading_whitespace_and_control_characters() {
+    let temp = tempfile::tempdir().unwrap();
+    let request = ExportRequest::SearchResults {
+        hits: vec![SearchHit {
+            document_id: "doc-formula".into(),
+            file_name: "safe.txt".into(),
+            path: r"C:\Documents\safe.txt".into(),
+            extension: "txt".into(),
+            size_bytes: 1,
+            modified_at: "2026-07-30T00:00:00Z".into(),
+            snippet: Some(" \n\t=HYPERLINK(\"https://example.invalid\")".into()),
+            score: 1.0,
+            match_kind: SearchMatchKind::Content,
+        }],
+    };
+    let destination = temp.path().join("formula.csv");
+
+    export_to_destination(&request, ExportFormat::Csv, Some(&destination)).unwrap();
+
+    let csv = fs::read_to_string(destination).unwrap();
+    assert!(
+        csv.contains("' \n\t=HYPERLINK"),
+        "dangerous excerpt must be prefixed with an apostrophe before CSV quoting"
+    );
+}
+
+#[test]
 fn cancelled_and_invalid_exports_create_no_file() {
     let temp = tempfile::tempdir().unwrap();
     let request = ExportRequest::SearchResults { hits: Vec::new() };
@@ -192,6 +236,20 @@ fn settings_are_validated_and_persisted_in_the_encrypted_database() {
     settings.history_retention_days = 31;
     assert!(repository.save(&settings).is_err());
     assert_eq!(repository.load().unwrap().history_retention_days, 365);
+
+    for unsupported in ["minimizeToTray", "startWithWindows", "startHidden"] {
+        let mut settings = AppSettings::default();
+        match unsupported {
+            "minimizeToTray" => settings.minimize_to_tray = true,
+            "startWithWindows" => settings.start_with_windows = true,
+            "startHidden" => settings.start_hidden = true,
+            _ => unreachable!(),
+        }
+        assert!(
+            repository.save(&settings).is_err(),
+            "{unsupported} must be rejected until its runtime behavior is implemented"
+        );
+    }
 
     fixture
         .database
@@ -305,6 +363,62 @@ fn diagnostics_redact_roots_retain_locally_and_reset_never_escapes_app_data() {
     assert!(app_data.exists());
     assert_eq!(fs::read_dir(&app_data).unwrap().count(), 0);
     assert!(temp.path().exists());
+}
+
+#[test]
+fn diagnostics_redaction_prefers_longest_root_and_normalizes_windows_spellings() {
+    let temp = tempfile::tempdir().unwrap();
+    let app_data = temp.path().join("com.cybereun.everyfile");
+    fs::create_dir_all(&app_data).unwrap();
+    let logger = DiagnosticsLogger::new(
+        &app_data,
+        vec![
+            std::path::PathBuf::from(r"C:\Users"),
+            std::path::PathBuf::from(r"C:\Users\Alice\Private"),
+            std::path::PathBuf::from(r"C:\Ä\문서"),
+        ],
+    )
+    .unwrap();
+
+    let redacted = logger.redact(r"\\?\C:/Users/Alice/Private/report.pdf and c:\ä\문서\secret.pdf");
+
+    assert_eq!(
+        redacted,
+        "[REGISTERED_ROOT]/report.pdf and [REGISTERED_ROOT]\\secret.pdf"
+    );
+    assert!(!redacted.contains("Alice"));
+    assert!(!redacted.contains('ä'));
+}
+
+#[cfg(windows)]
+#[test]
+fn reset_rejects_a_reparse_root_and_preserves_the_junction_victim() {
+    use std::os::windows::process::CommandExt;
+
+    let temp = tempfile::tempdir().unwrap();
+    let local_appdata = temp.path().join("Local");
+    let victim = local_appdata.join("Victim");
+    let app_data = local_appdata.join("com.cybereun.everyfile");
+    fs::create_dir_all(&victim).unwrap();
+    fs::write(victim.join("must-survive"), b"victim").unwrap();
+    let status = std::process::Command::new("cmd")
+        .args([
+            "/C",
+            "mklink",
+            "/J",
+            &app_data.to_string_lossy(),
+            &victim.to_string_lossy(),
+        ])
+        .creation_flags(0x0800_0000)
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    assert!(validate_reset_target(&local_appdata, &app_data).is_err());
+    assert!(remove_app_data_contents(&local_appdata, &app_data).is_err());
+    assert_eq!(fs::read(victim.join("must-survive")).unwrap(), b"victim");
+
+    fs::remove_dir(&app_data).unwrap();
 }
 
 struct Fixture {

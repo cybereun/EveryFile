@@ -59,6 +59,7 @@ export function useImmediateSearch({
       const patch: Partial<SearchFilters> = {};
       if (previous.extensions.length > 0 || next.extensions.length > 0) {
         patch.extensions = next.extensions;
+        if (next.extensions.length > 0) patch.extensionless = false;
       }
       if (previous.modifiedAfter || next.modifiedAfter) {
         patch.modifiedAfter = next.modifiedAfter;
@@ -80,6 +81,8 @@ export function useImmediateSearch({
   }, []);
 
   const patchFilters = useCallback((patch: Partial<SearchFilters>) => {
+    if (patch.extensionless) patch.extensions = [];
+    if (patch.extensions?.length) patch.extensionless = false;
     if (patch.option) {
       const normalized = queryForTermMode(queryRef.current, patch.option);
       if (normalized !== queryRef.current) {
@@ -105,6 +108,7 @@ export function useImmediateSearch({
       mode: filters.mode,
       folderIds: filters.folderIds,
       extensions: filters.extensions,
+      extensionless: filters.extensionless,
       modifiedAfter: filters.modifiedAfter,
       modifiedBefore: filters.modifiedBefore,
       includeFilename: filters.includeFilename,

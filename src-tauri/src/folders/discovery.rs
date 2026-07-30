@@ -19,6 +19,7 @@ const DEFAULT_EXCLUDED_DIRECTORIES: &[&str] = &[".git", "node_modules", "$RECYCL
 #[derive(Debug, Clone)]
 pub struct DiscoveryOptions {
     excluded_directories: HashSet<String>,
+    excluded_path_patterns: Vec<String>,
 }
 
 impl Default for DiscoveryOptions {
@@ -28,6 +29,7 @@ impl Default for DiscoveryOptions {
                 .iter()
                 .map(|name| (*name).to_owned())
                 .collect(),
+            excluded_path_patterns: Vec::new(),
         }
     }
 }
@@ -35,6 +37,11 @@ impl Default for DiscoveryOptions {
 impl DiscoveryOptions {
     pub fn with_excluded_directory(mut self, name: impl Into<String>) -> Self {
         self.excluded_directories.insert(name.into());
+        self
+    }
+
+    pub fn with_excluded_path_patterns(mut self, patterns: Vec<String>) -> Self {
+        self.excluded_path_patterns = patterns;
         self
     }
 }
@@ -236,7 +243,10 @@ where
 
 fn walk_root(canonical_root: PathBuf, options: DiscoveryOptions, sender: DiscoverySender) {
     let excluded_directories = Arc::new(options.excluded_directories);
+    let excluded_path_patterns = Arc::new(options.excluded_path_patterns);
     let filter_exclusions = Arc::clone(&excluded_directories);
+    let filter_patterns = Arc::clone(&excluded_path_patterns);
+    let filter_root = canonical_root.clone();
     let mut builder = WalkBuilder::new(&canonical_root);
     builder
         .hidden(false)
@@ -247,7 +257,9 @@ fn walk_root(canonical_root: PathBuf, options: DiscoveryOptions, sender: Discove
         .git_exclude(false)
         .parents(false)
         .sort_by_file_path(|left, right| left.cmp(right))
-        .filter_entry(move |entry| should_descend(entry, &filter_exclusions));
+        .filter_entry(move |entry| {
+            should_descend(entry, &filter_root, &filter_exclusions, &filter_patterns)
+        });
 
     let path_open = OsPathOpenProvider;
     for result in builder.build() {
@@ -276,6 +288,9 @@ fn walk_root(canonical_root: PathBuf, options: DiscoveryOptions, sender: Discove
                 continue;
             }
         };
+        if path_matches_exclusion(&canonical_root, &snapshot.path, &excluded_path_patterns) {
+            continue;
+        }
         if !matches!(
             classify_snapshot(&snapshot, &excluded_directories),
             EntryClassification::Candidate { .. }
@@ -391,17 +406,70 @@ fn classify_snapshot(
     }
 }
 
-fn should_descend(entry: &DirEntry, exclusions: &HashSet<String>) -> bool {
+fn should_descend(
+    entry: &DirEntry,
+    root: &Path,
+    exclusions: &HashSet<String>,
+    patterns: &[String],
+) -> bool {
     if entry.depth() == 0 {
         return true;
     }
 
     snapshot_entry(entry).map_or(true, |snapshot| {
+        if path_matches_exclusion(root, &snapshot.path, patterns) {
+            return false;
+        }
         !matches!(
             classify_snapshot(&snapshot, exclusions),
             EntryClassification::PruneDirectory
         )
     })
+}
+
+fn path_matches_exclusion(root: &Path, path: &Path, patterns: &[String]) -> bool {
+    let relative = path
+        .strip_prefix(root)
+        .unwrap_or(path)
+        .to_string_lossy()
+        .replace('\\', "/")
+        .to_lowercase();
+    patterns.iter().any(|pattern| {
+        let normalized = pattern.trim().replace('\\', "/").to_lowercase();
+        wildcard_path_match(&normalized, &relative)
+            || path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| wildcard_path_match(&normalized, &name.to_lowercase()))
+    })
+}
+
+fn wildcard_path_match(pattern: &str, value: &str) -> bool {
+    let pattern = pattern.as_bytes();
+    let value = value.as_bytes();
+    let (mut pattern_index, mut value_index) = (0, 0);
+    let (mut star, mut retry_value) = (None, 0);
+    while value_index < value.len() {
+        if pattern_index < pattern.len()
+            && (pattern[pattern_index] == b'?' || pattern[pattern_index] == value[value_index])
+        {
+            pattern_index += 1;
+            value_index += 1;
+        } else if pattern_index < pattern.len() && pattern[pattern_index] == b'*' {
+            while pattern_index < pattern.len() && pattern[pattern_index] == b'*' {
+                pattern_index += 1;
+            }
+            star = Some(pattern_index);
+            retry_value = value_index;
+        } else if let Some(after_star) = star {
+            retry_value += 1;
+            value_index = retry_value;
+            pattern_index = after_star;
+        } else {
+            return false;
+        }
+    }
+    pattern[pattern_index..].iter().all(|byte| *byte == b'*')
 }
 
 fn candidate_from_snapshot(
@@ -544,9 +612,9 @@ mod tests {
     use std::time::{Duration, SystemTime};
 
     use super::{
-        candidate_from_snapshot, classify_snapshot, spawn_discovery_worker, DiscoveryEntryKind,
-        DiscoveryEntrySnapshot, EntryClassification, FileCandidate, PathOpenProvider,
-        DISCOVERY_CHANNEL_CAPACITY,
+        candidate_from_snapshot, classify_snapshot, discover_all, spawn_discovery_worker,
+        DiscoveryEntryKind, DiscoveryEntrySnapshot, DiscoveryOptions, EntryClassification,
+        FileCandidate, PathOpenProvider, DISCOVERY_CHANNEL_CAPACITY,
     };
 
     struct PanicPathOpenProvider;
@@ -700,5 +768,34 @@ mod tests {
             .expect("stream drop did not join its released worker");
         dropper.join().unwrap();
         assert_eq!(active_workers.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn configured_path_patterns_exclude_matching_files_and_subtrees() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(temp.path().join("cache").join("nested")).unwrap();
+        std::fs::write(temp.path().join("keep.txt"), b"keep").unwrap();
+        std::fs::write(temp.path().join("secret.tmp"), b"secret").unwrap();
+        std::fs::write(
+            temp.path().join("cache").join("nested").join("hidden.txt"),
+            b"hidden",
+        )
+        .unwrap();
+
+        let report = discover_all(
+            temp.path(),
+            DiscoveryOptions::default()
+                .with_excluded_path_patterns(vec!["*.tmp".into(), "cache/**".into()]),
+        )
+        .unwrap();
+
+        assert_eq!(
+            report
+                .files
+                .iter()
+                .map(|candidate| candidate.relative_path.as_str())
+                .collect::<Vec<_>>(),
+            ["keep.txt"]
+        );
     }
 }

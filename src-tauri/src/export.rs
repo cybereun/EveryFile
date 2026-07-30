@@ -158,8 +158,10 @@ fn render_csv(hits: &[SearchHit]) -> Vec<u8> {
 }
 
 fn csv_text(value: &str) -> String {
-    let first = value.chars().next();
-    if matches!(first, Some('=' | '+' | '-' | '@' | '\t' | '\r')) {
+    let first_significant = value
+        .chars()
+        .find(|character| !character.is_whitespace() && !character.is_control());
+    if matches!(first_significant, Some('=' | '+' | '-' | '@')) {
         format!("'{value}")
     } else {
         value.to_owned()

@@ -6,6 +6,14 @@ import {
 } from "../../lib/ipc";
 import type { SearchFrequency, SearchHistoryRecord } from "../../lib/types";
 
+function formatInteger(value: string) {
+  try {
+    return BigInt(value).toLocaleString("ko-KR");
+  } catch {
+    return "0";
+  }
+}
+
 interface SearchHistoryTabProps {
   loadHistory?: () => Promise<SearchHistoryRecord[]>;
   deleteHistory?: (id: string) => Promise<void>;
@@ -22,6 +30,7 @@ export function SearchHistoryTab({
   frequentSearches = [],
 }: SearchHistoryTabProps) {
   const [history, setHistory] = useState<SearchHistoryRecord[]>([]);
+  const [frequent, setFrequent] = useState(frequentSearches);
   const [message, setMessage] = useState("");
 
   useEffect(() => {
@@ -38,22 +47,26 @@ export function SearchHistoryTab({
     };
   }, [loadHistory]);
 
-  if (history.length === 0 && frequentSearches.length === 0) {
+  useEffect(() => {
+    setFrequent(frequentSearches);
+  }, [frequentSearches]);
+
+  if (history.length === 0 && frequent.length === 0) {
     return <p role="status">{message || "저장된 검색 히스토리가 없습니다."}</p>;
   }
 
   return (
     <>
-      {frequentSearches.length > 0 && (
+      {frequent.length > 0 && (
         <section className="frequent-searches" aria-labelledby="frequent-searches-heading">
           <h3 id="frequent-searches-heading">자주 검색</h3>
           <ol>
-            {frequentSearches.map((item) => (
+            {frequent.map((item) => (
               <li key={item.query}>
                 <button type="button" onClick={() => onSearch?.(item.query)}>
                   {item.query}
                 </button>
-                <span>{item.count.toLocaleString()}회</span>
+                <span>{formatInteger(item.count)}회</span>
               </li>
             ))}
           </ol>
@@ -69,6 +82,7 @@ export function SearchHistoryTab({
               onClick={async () => {
                 await clearHistory();
                 setHistory([]);
+                setFrequent([]);
               }}
             >
               전체 삭제
@@ -96,7 +110,7 @@ export function SearchHistoryTab({
                   {record.query}
                 </button>
               </th>
-              <td>{record.resultCount.toLocaleString()}</td>
+              <td>{formatInteger(record.resultCount)}</td>
               <td>
                 <time dateTime={record.searchedAt}>
                   {new Date(record.searchedAt).toLocaleString()}

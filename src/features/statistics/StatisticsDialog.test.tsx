@@ -4,18 +4,21 @@ import type { DocumentStatistics } from "../../lib/types";
 import { StatisticsDialog } from "./StatisticsDialog";
 
 const statistics: DocumentStatistics = {
-  totalDocuments: 3,
-  indexedDocuments: 2,
-  totalBytes: 42,
-  byExtension: [{ label: "pdf", count: 2 }],
-  byFolder: [{ id: "documents", label: "Documents", count: 3 }],
-  byYear: [{ label: "2026", count: 3 }],
+  totalDocuments: "3",
+  indexedDocuments: "2",
+  totalBytes: "42",
+  byExtension: [
+    { label: "pdf", count: "2" },
+    { label: "(none)", count: "1" },
+  ],
+  byFolder: [{ id: "documents", label: "Documents", count: "3" }],
+  byYear: [{ label: "2026", count: "3" }],
   recentlyModified: [],
   largestDocuments: [],
-  parseStates: [{ label: "indexed", count: 2 }],
-  totalSearches: 4,
-  uniqueSearchTerms: 2,
-  frequentSearches: [{ query: "report", count: 3, lastSearchedAt: "2026-01-01T00:00:00Z" }],
+  parseStates: [{ label: "indexed", count: "2" }],
+  totalSearches: "4",
+  uniqueSearchTerms: "2",
+  frequentSearches: [{ query: "report", count: "3", lastSearchedAt: "2026-01-01T00:00:00Z" }],
   recentSearches: [],
 };
 
@@ -52,8 +55,8 @@ describe("StatisticsDialog", () => {
             query: "report",
             mode: "keyword",
             filters: {},
-            resultCount: 2,
-            elapsedMs: 5,
+            resultCount: "2",
+            elapsedMs: "5",
             searchedAt: "2026-01-01T00:00:00Z",
           },
         ]}
@@ -64,5 +67,71 @@ describe("StatisticsDialog", () => {
     expect(await screen.findByText("report")).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "report 기록 삭제" }));
     expect(remove).toHaveBeenCalledWith("history-1");
+  });
+
+  it("submits an explicit extensionless filter for the extensionless bucket", async () => {
+    const apply = vi.fn();
+    render(
+      <StatisticsDialog
+        open
+        onClose={() => undefined}
+        loadStatistics={async () => statistics}
+        loadHistory={async () => []}
+        onApplyFilter={apply}
+      />,
+    );
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "(NONE) 문서 1개 검색" }),
+    );
+    expect(apply).toHaveBeenCalledWith({ extensionless: true });
+  });
+
+  it("renders aggregate decimal strings without losing integers above 2^53", async () => {
+    render(
+      <StatisticsDialog
+        open
+        onClose={() => undefined}
+        loadStatistics={async () => ({
+          ...statistics,
+          totalDocuments: "9007199254740993",
+          totalBytes: "9007199254740993123",
+        })}
+        loadHistory={async () => []}
+      />,
+    );
+
+    expect(await screen.findByText("9,007,199,254,740,993")).toBeVisible();
+    expect(screen.getByText(/7\.81 EB/)).toBeVisible();
+  });
+
+  it("clears both recent and frequent history views after a successful clear", async () => {
+    const clear = vi.fn(async () => undefined);
+    render(
+      <StatisticsDialog
+        open
+        onClose={() => undefined}
+        loadStatistics={async () => statistics}
+        loadHistory={async () => [
+          {
+            id: "history-1",
+            query: "report",
+            mode: "keyword",
+            filters: {},
+            resultCount: "2",
+            elapsedMs: "5",
+            searchedAt: "2026-01-01T00:00:00Z",
+          },
+        ]}
+        clearHistory={clear}
+      />,
+    );
+    fireEvent.click(await screen.findByRole("tab", { name: "검색 히스토리" }));
+    expect(await screen.findByText("자주 검색")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "전체 삭제" }));
+
+    expect(clear).toHaveBeenCalledOnce();
+    expect(await screen.findByText("저장된 검색 히스토리가 없습니다.")).toBeVisible();
+    expect(screen.queryByText("자주 검색")).not.toBeInTheDocument();
   });
 });

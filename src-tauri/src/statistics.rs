@@ -407,8 +407,11 @@ fn non_negative(value: i64) -> u64 {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct DocumentStatistics {
+    #[serde(serialize_with = "serialize_u64_decimal")]
     pub total_documents: u64,
+    #[serde(serialize_with = "serialize_u64_decimal")]
     pub indexed_documents: u64,
+    #[serde(serialize_with = "serialize_u64_decimal")]
     pub total_bytes: u64,
     pub by_extension: Vec<StatisticsBucket>,
     pub by_folder: Vec<FolderStatisticsBucket>,
@@ -416,7 +419,9 @@ pub struct DocumentStatistics {
     pub recently_modified: Vec<DocumentSummary>,
     pub largest_documents: Vec<DocumentSummary>,
     pub parse_states: Vec<StatisticsBucket>,
+    #[serde(serialize_with = "serialize_u64_decimal")]
     pub total_searches: u64,
+    #[serde(serialize_with = "serialize_u64_decimal")]
     pub unique_search_terms: u64,
     pub frequent_searches: Vec<SearchTermCount>,
     pub recent_searches: Vec<SearchHistoryRecord>,
@@ -426,6 +431,7 @@ pub struct DocumentStatistics {
 #[serde(rename_all = "camelCase")]
 pub struct StatisticsBucket {
     pub label: String,
+    #[serde(serialize_with = "serialize_u64_decimal")]
     pub count: u64,
 }
 
@@ -434,6 +440,7 @@ pub struct StatisticsBucket {
 pub struct FolderStatisticsBucket {
     pub id: String,
     pub label: String,
+    #[serde(serialize_with = "serialize_u64_decimal")]
     pub count: u64,
 }
 
@@ -444,6 +451,7 @@ pub struct DocumentSummary {
     pub file_name: String,
     pub path: String,
     pub extension: String,
+    #[serde(serialize_with = "serialize_u64_decimal")]
     pub size_bytes: u64,
     pub modified_at: String,
     pub folder_name: String,
@@ -454,6 +462,7 @@ pub struct DocumentSummary {
 #[serde(rename_all = "camelCase")]
 pub struct SearchTermCount {
     pub query: String,
+    #[serde(serialize_with = "serialize_u64_decimal")]
     pub count: u64,
     pub last_searched_at: String,
 }
@@ -465,10 +474,19 @@ pub struct SearchHistoryRecord {
     pub query: String,
     pub mode: String,
     pub filters: serde_json::Value,
+    #[serde(serialize_with = "serialize_u64_decimal")]
     pub result_count: u64,
+    #[serde(serialize_with = "serialize_u64_decimal")]
     pub elapsed_ms: u64,
     pub searched_at: String,
     pub private_search: bool,
+}
+
+fn serialize_u64_decimal<S>(value: &u64, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    serializer.serialize_str(&value.to_string())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

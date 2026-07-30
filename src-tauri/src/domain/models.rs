@@ -34,6 +34,8 @@ pub struct SearchRequest {
     pub mode: SearchMode,
     pub folder_ids: Vec<String>,
     pub extensions: Vec<String>,
+    #[serde(default)]
+    pub extensionless: bool,
     pub modified_after: Option<String>,
     pub modified_before: Option<String>,
     pub include_filename: bool,

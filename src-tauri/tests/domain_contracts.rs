@@ -9,6 +9,7 @@ fn search_request_serializes_with_camel_case_keys() {
         mode: SearchMode::Keyword,
         folder_ids: vec!["folder-1".into()],
         extensions: vec!["hwp".into(), "pdf".into()],
+        extensionless: true,
         modified_after: None,
         modified_before: None,
         include_filename: true,
@@ -24,6 +25,7 @@ fn search_request_serializes_with_camel_case_keys() {
     assert_eq!(value["mode"], "keyword");
     assert_eq!(value["requestId"], "search-contract");
     assert_eq!(value["folderIds"][0], "folder-1");
+    assert_eq!(value["extensionless"], true);
     assert_eq!(value["includeFilename"], true);
     assert_eq!(value["termMode"], "all");
 }

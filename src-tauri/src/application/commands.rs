@@ -53,6 +53,10 @@ pub fn save_settings(
     StatisticsRepository::new(state.database.clone())
         .run_history_retention(saved.history_retention_days)
         .map_err(|error| error.to_string())?;
+    state
+        .indexing
+        .apply_runtime_settings(&saved)
+        .map_err(|error| error.to_string())?;
     *current_settings = saved;
     Ok(current_settings.clone())
 }
@@ -422,13 +426,24 @@ pub async fn retry_parse(
 }
 
 #[tauri::command]
-pub fn reset_application_data(app: AppHandle, confirmed: bool) -> Result<(), CommandError> {
+pub async fn reset_application_data(
+    app: AppHandle,
+    confirmed: bool,
+    state: State<'_, AppState>,
+) -> Result<(), CommandError> {
     require_reset_confirmation(confirmed).map_err(CommandError::from)?;
     let app_data_dir = app
         .path()
         .app_local_data_dir()
         .map_err(|error| CommandError::new("APP_DATA_PATH_FAILED", error.to_string()))?;
-    start_reset_worker(&app_data_dir).map_err(CommandError::from)?;
+    state
+        .prepare_for_reset()
+        .await
+        .map_err(|error| CommandError::new("RESET_QUIESCE_FAILED", error.to_string()))?;
+    if let Err(error) = start_reset_worker(&app_data_dir) {
+        app.exit(1);
+        return Err(CommandError::from(error));
+    }
     app.exit(0);
     Ok(())
 }

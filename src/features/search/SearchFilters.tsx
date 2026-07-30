@@ -143,6 +143,7 @@ export function SearchFilters({
       ? filters.extensions.filter((value) => value !== extension)
       : [...filters.extensions, extension];
     onQueryChange(withExtensionQuery(query, extensions));
+    onFiltersChange({ extensionless: false });
   };
 
   const savePreset = () => {
@@ -239,6 +240,22 @@ export function SearchFilters({
                   {extension.toUpperCase()}
                 </label>
               ))}
+              <label>
+                <input
+                  checked={filters.extensionless}
+                  onChange={(event) => {
+                    onFiltersChange({
+                      extensionless: event.target.checked,
+                      extensions: event.target.checked ? [] : filters.extensions,
+                    });
+                    if (event.target.checked) {
+                      onQueryChange(withExtensionQuery(query, []));
+                    }
+                  }}
+                  type="checkbox"
+                />
+                확장자 없음
+              </label>
             </AnchoredPopover>
           </div>
           <div className="filter-popover">
@@ -421,6 +438,15 @@ function FilterChips({
           {extension.toUpperCase()} <span aria-hidden="true">×</span>
         </button>
       ))}
+      {filters.extensionless && (
+        <button
+          aria-label="확장자 없음 필터 제거"
+          onClick={() => onFiltersChange({ extensionless: false })}
+          type="button"
+        >
+          확장자 없음 <span aria-hidden="true">×</span>
+        </button>
+      )}
       {(filters.modifiedAfter || filters.modifiedBefore) && !queryHasDate && (
         <button
           aria-label="기간 필터 제거"

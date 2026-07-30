@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Condvar, Mutex, Weak};
+use std::sync::{Arc, Condvar, Mutex, RwLock, Weak};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use rand::RngExt;
@@ -11,7 +11,7 @@ use thiserror::Error;
 use tokio::sync::{mpsc, Notify};
 use tokio::task::JoinHandle;
 
-use crate::domain::models::{FolderRecord, IndexFailure, IndexStatus, JobState};
+use crate::domain::models::{AppSettings, FolderRecord, IndexFailure, IndexStatus, JobState};
 use crate::folders::discovery::{discover, DiscoveryOptions, DiscoveryPoll, FileCandidate};
 use crate::infrastructure::database::Database;
 use crate::parsing::{ParseErrorCode, ParsedDocument, ParserClient, ParserError};
@@ -142,12 +142,19 @@ type StatusSink = dyn Fn(IndexStatus) -> Result<(), String> + Send + Sync;
 pub struct IndexCoordinator {
     database: Arc<Database>,
     parser: Arc<dyn DocumentParser>,
-    max_file_size_bytes: u64,
+    runtime_settings: Arc<RwLock<RuntimeIndexSettings>>,
     limiter: ActivityLimiter,
     runtimes: Arc<tokio::sync::Mutex<HashMap<JobId, Arc<JobRuntime>>>>,
     status_sink: Option<Arc<StatusSink>>,
     discovery_probe: Arc<dyn DiscoveryProbe>,
     attempt_tokens: Arc<dyn ParseAttemptTokenGenerator>,
+}
+
+#[derive(Clone)]
+struct RuntimeIndexSettings {
+    max_file_size_bytes: u64,
+    excluded_path_patterns: Vec<String>,
+    indexing_intensity: String,
 }
 
 struct JobRuntime {
@@ -329,7 +336,11 @@ impl IndexCoordinator {
         Self {
             database,
             parser,
-            max_file_size_bytes,
+            runtime_settings: Arc::new(RwLock::new(RuntimeIndexSettings {
+                max_file_size_bytes,
+                excluded_path_patterns: Vec::new(),
+                indexing_intensity: "balanced".into(),
+            })),
             limiter: ActivityLimiter::default(),
             runtimes: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             status_sink,
@@ -340,6 +351,44 @@ impl IndexCoordinator {
 
     pub fn activity_limiter(&self) -> ActivityLimiter {
         self.limiter.clone()
+    }
+
+    pub fn apply_runtime_settings(&self, settings: &AppSettings) -> Result<(), IndexingError> {
+        let replacement = RuntimeIndexSettings {
+            max_file_size_bytes: settings.max_file_size_bytes,
+            excluded_path_patterns: settings.excluded_path_patterns.clone(),
+            indexing_intensity: settings.indexing_intensity.clone(),
+        };
+        *self
+            .runtime_settings
+            .write()
+            .map_err(|_| IndexingError::RuntimeSettingsUnavailable)? = replacement;
+        Ok(())
+    }
+
+    fn discovery_options(&self) -> Result<DiscoveryOptions, IndexingError> {
+        let settings = self
+            .runtime_settings
+            .read()
+            .map_err(|_| IndexingError::RuntimeSettingsUnavailable)?;
+        Ok(DiscoveryOptions::default()
+            .with_excluded_path_patterns(settings.excluded_path_patterns.clone()))
+    }
+
+    async fn apply_intensity_delay(&self) -> Result<(), IndexingError> {
+        let intensity = self
+            .runtime_settings
+            .read()
+            .map_err(|_| IndexingError::RuntimeSettingsUnavailable)?
+            .indexing_intensity
+            .clone();
+        match intensity.as_str() {
+            "low" => tokio::time::sleep(Duration::from_millis(20)).await,
+            "balanced" => tokio::task::yield_now().await,
+            "high" => {}
+            _ => return Err(IndexingError::RuntimeSettingsUnavailable),
+        }
+        Ok(())
     }
 
     pub async fn start(&self, folder_id: &str) -> Result<JobId, IndexingError> {
@@ -426,6 +475,19 @@ impl IndexCoordinator {
         }
     }
 
+    pub async fn shutdown_all(&self) {
+        let job_ids = self
+            .runtimes
+            .lock()
+            .await
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        for job_id in job_ids {
+            self.shutdown_local(&job_id).await;
+        }
+    }
+
     pub async fn recover(&self) -> Result<Vec<JobId>, IndexingError> {
         let jobs = {
             let connection = self.database.connection();
@@ -502,8 +564,9 @@ impl IndexCoordinator {
             Some(path) => path,
             None => return Ok(()),
         };
+        let discovery_options = self.discovery_options()?;
         let candidate = tokio::task::spawn_blocking(move || {
-            let stream = discover(&folder, DiscoveryOptions::default())?;
+            let stream = discover(&folder, discovery_options)?;
             Ok::<_, IndexingError>(
                 stream
                     .into_iter()
@@ -799,7 +862,7 @@ impl IndexCoordinator {
             ReconciliationScratch::begin(Arc::clone(&self.database), folder_id)
         })?;
         control.checkpoint()?;
-        let mut stream = discover(&folder, DiscoveryOptions::default())?;
+        let mut stream = discover(&folder, self.discovery_options()?)?;
         let discovery_result = (|| {
             loop {
                 control.checkpoint()?;
@@ -975,8 +1038,9 @@ impl IndexCoordinator {
         let stop = Arc::clone(runtime);
         let probe = Arc::clone(&self.discovery_probe);
         let discovery_job_id = job_id.to_owned();
+        let discovery_options = self.discovery_options()?;
         tokio::task::spawn_blocking(move || {
-            let stream = discover(&folder, DiscoveryOptions::default())?;
+            let stream = discover(&folder, discovery_options)?;
             for candidate in stream {
                 if stop.stop.load(Ordering::Acquire) {
                     return Ok::<(), IndexingError>(());
@@ -1042,12 +1106,17 @@ impl IndexCoordinator {
             return Err(IndexingError::StateChanged);
         }
         self.discovery_probe.before_reconciliation_parser_start();
+        self.apply_intensity_delay().await?;
         let (parser_operation, parsing_checkpoint) =
             runtime.begin_parser_operation(|| self.mark_document_parsing(&candidate))?;
 
         let parser = Arc::clone(&self.parser);
         let parse_path = trusted_path.clone();
-        let max_bytes = self.max_file_size_bytes;
+        let max_bytes = self
+            .runtime_settings
+            .read()
+            .map_err(|_| IndexingError::RuntimeSettingsUnavailable)?
+            .max_file_size_bytes;
         let parsed =
             tokio::task::spawn_blocking(move || parser.parse(&parse_path, max_bytes)).await;
         let attempt_result = runtime.finish_parser_operation(
@@ -2464,6 +2533,8 @@ pub enum IndexingError {
     WorkerFailure(String),
     #[error("reconciliation was cancelled")]
     ReconciliationCancelled,
+    #[error("runtime indexing settings are unavailable")]
+    RuntimeSettingsUnavailable,
     #[error("folder discovery failed")]
     Discovery(#[from] crate::folders::discovery::DiscoveryError),
     #[error("indexing database operation failed")]
@@ -2488,6 +2559,7 @@ impl IndexingError {
             Self::StateChanged => "INDEX_STATE_CHANGED",
             Self::WorkerFailure(_) => "INDEX_WORKER_FAILED",
             Self::ReconciliationCancelled => "INDEX_RECONCILIATION_CANCELLED",
+            Self::RuntimeSettingsUnavailable => "INDEX_RUNTIME_SETTINGS_UNAVAILABLE",
             Self::Discovery(_) => "INDEX_DISCOVERY_FAILED",
             Self::Database(_) => "INDEX_DATABASE_ERROR",
             Self::Serialization(_) => "INDEX_SERIALIZATION_ERROR",
@@ -2517,6 +2589,25 @@ mod tests {
 
     impl DocumentParser for TestParser {
         fn parse(&self, path: &Path, _max_bytes: u64) -> Result<ParsedDocument, ParserError> {
+            let body = fs::read_to_string(path).unwrap();
+            Ok(ParsedDocument {
+                title: None,
+                markdown: body.clone(),
+                plain_text: body,
+                blocks: vec![],
+                metadata: serde_json::json!({}),
+                warnings: vec![],
+            })
+        }
+    }
+
+    struct RecordingParser {
+        max_bytes: Arc<std::sync::Mutex<Vec<u64>>>,
+    }
+
+    impl DocumentParser for RecordingParser {
+        fn parse(&self, path: &Path, max_bytes: u64) -> Result<ParsedDocument, ParserError> {
+            self.max_bytes.lock().unwrap().push(max_bytes);
             let body = fs::read_to_string(path).unwrap();
             Ok(ParsedDocument {
                 title: None,
@@ -2663,6 +2754,70 @@ mod tests {
                 .unwrap();
             coordinator.reconcile(&folder.id).await.unwrap();
             assert!(coordinator.runtimes.lock().await.is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn saved_runtime_settings_change_size_exclusions_and_work_intensity() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("root");
+        fs::create_dir(&root).unwrap();
+        fs::write(root.join("included.txt"), "included").unwrap();
+        fs::write(root.join("excluded.skip"), "excluded").unwrap();
+        let key = SecretKey::from_bytes(Zeroizing::new([92_u8; 32]));
+        let database = Arc::new(Database::open(&temp.path().join("index.db"), &key).unwrap());
+        database.migrate().unwrap();
+        let folder = FolderRepository::new(Arc::clone(&database))
+            .register(&root)
+            .unwrap();
+        let observed = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let coordinator = IndexCoordinator::with_parser(
+            Arc::clone(&database),
+            Arc::new(RecordingParser {
+                max_bytes: Arc::clone(&observed),
+            }),
+            999,
+        );
+        coordinator
+            .apply_runtime_settings(&crate::domain::models::AppSettings {
+                max_file_size_bytes: 123,
+                excluded_path_patterns: vec!["*.skip".into()],
+                indexing_intensity: "high".into(),
+                ..Default::default()
+            })
+            .unwrap();
+
+        let first = coordinator.start(&folder.id).await.unwrap();
+        wait_for_completed(&coordinator, &first).await;
+        assert_eq!(*observed.lock().unwrap(), [123]);
+
+        coordinator
+            .apply_runtime_settings(&crate::domain::models::AppSettings {
+                max_file_size_bytes: 456,
+                excluded_path_patterns: vec!["*.txt".into()],
+                indexing_intensity: "low".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        let started = Instant::now();
+        let second = coordinator.start(&folder.id).await.unwrap();
+        wait_for_completed(&coordinator, &second).await;
+
+        assert!(
+            started.elapsed() >= Duration::from_millis(15),
+            "low intensity must yield CPU time before parser work"
+        );
+        assert_eq!(*observed.lock().unwrap(), [123, 456]);
+    }
+
+    async fn wait_for_completed(coordinator: &IndexCoordinator, job_id: &str) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if coordinator.job_state(job_id).unwrap() == JobState::Completed {
+                return;
+            }
+            assert!(Instant::now() < deadline, "indexing job did not complete");
+            tokio::time::sleep(Duration::from_millis(10)).await;
         }
     }
 

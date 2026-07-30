@@ -53,8 +53,9 @@ export function SettingsDialog({
   const [errors, setErrors] = useState<ParseErrorRecord[]>([]);
   const [message, setMessage] = useState("");
   const [logFolder, setLogFolder] = useState<string>();
+  const [resetConfirmationOpen, setResetConfirmationOpen] = useState(false);
   const close = useCallback(() => onClose(), [onClose]);
-  const dialogRef = useModalDialog(open, close);
+  const dialogRef = useModalDialog(open && !resetConfirmationOpen, close);
 
   useEffect(() => {
     if (!open) return;
@@ -83,6 +84,8 @@ export function SettingsDialog({
         role="dialog"
         aria-modal="true"
         aria-labelledby="settings-title"
+        aria-hidden={resetConfirmationOpen || undefined}
+        inert={resetConfirmationOpen || undefined}
       >
         <header className="dialog-header">
           <h2 id="settings-title">설정</h2>
@@ -136,6 +139,7 @@ export function SettingsDialog({
               settings={settings}
               onChange={setSettings}
               onReset={resetApplicationData}
+              onConfirmationChange={setResetConfirmationOpen}
             />
           ) : (
             <DiagnosticsSettings
@@ -160,7 +164,12 @@ export function SettingsDialog({
             onClick={async () => {
               if (!settings) return;
               try {
-                const saved = await persistSettings(settings);
+                const saved = await persistSettings({
+                  ...settings,
+                  startWithWindows: false,
+                  startHidden: false,
+                  minimizeToTray: false,
+                });
                 setSettings(saved);
                 onSaved?.(saved);
                 setMessage("저장했습니다.");

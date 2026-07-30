@@ -51,6 +51,18 @@ impl SearchRegistry {
         control.cancel(&self.interrupt);
         true
     }
+
+    pub fn cancel_all(&self) {
+        let mut active = self.inner.lock();
+        for control in active.values() {
+            control.cancel(&self.interrupt);
+        }
+        active.clear();
+    }
+
+    pub fn is_idle(&self) -> bool {
+        self.inner.lock().is_empty()
+    }
 }
 
 struct SearchControl {
@@ -258,5 +270,20 @@ mod tests {
         assert!(matches!(cancellation, Err(SearchError::Cancelled)));
         new.finish(|| Ok(())).unwrap();
         worker.join().unwrap();
+    }
+
+    #[test]
+    fn cancel_all_revokes_every_active_search_lease() {
+        let connection = Connection::open_in_memory().unwrap();
+        let registry = SearchRegistry::new(Arc::new(connection.get_interrupt_handle()));
+        let lease = registry.begin("active-request").unwrap();
+
+        registry.cancel_all();
+
+        assert!(matches!(
+            lease.ensure_current(),
+            Err(SearchError::Cancelled)
+        ));
+        assert!(registry.is_idle());
     }
 }

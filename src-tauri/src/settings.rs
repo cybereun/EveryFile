@@ -51,6 +51,11 @@ impl SettingsRepository {
 }
 
 fn validate(settings: &AppSettings) -> Result<(), SettingsError> {
+    if settings.minimize_to_tray || settings.start_with_windows || settings.start_hidden {
+        return Err(SettingsError::Invalid(
+            "startup and tray settings are unavailable in this version".into(),
+        ));
+    }
     if !matches!(settings.language.as_str(), "ko" | "en") {
         return Err(SettingsError::Invalid("language must be ko or en".into()));
     }

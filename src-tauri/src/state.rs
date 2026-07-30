@@ -1,5 +1,8 @@
 use std::collections::HashMap;
-use std::sync::{atomic::AtomicBool, Arc, RwLock};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, RwLock,
+};
 
 use crate::folders::repository::FolderRepository;
 use crate::indexing::{IndexCoordinator, IndexWatcher};
@@ -82,6 +85,16 @@ impl AppState {
             .insert(folder_id.to_owned(), watcher);
         Ok(job_id)
     }
+
+    pub async fn prepare_for_reset(&self) -> Result<(), StateError> {
+        self.database_ready.store(false, Ordering::Release);
+        self.searches.cancel_all();
+        self.pdf_reads.cancel_all();
+        self.watchers.lock().await.clear();
+        self.indexing.shutdown_all().await;
+        self.database.close()?;
+        Ok(())
+    }
 }
 
 #[derive(Debug, Error)]
@@ -92,4 +105,6 @@ pub enum StateError {
     Indexing(#[from] crate::indexing::IndexingError),
     #[error(transparent)]
     Watcher(#[from] crate::indexing::WatcherError),
+    #[error(transparent)]
+    Database(#[from] crate::infrastructure::database::DatabaseError),
 }

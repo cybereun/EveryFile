@@ -52,6 +52,9 @@ pub fn run() {
                 Some(status_sink),
             ));
             let app_state = state::AppState::new(database, indexing);
+            app_state
+                .indexing
+                .apply_runtime_settings(&persisted_settings)?;
             *app_state
                 .settings
                 .write()

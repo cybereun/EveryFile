@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use parking_lot::{Mutex, MutexGuard};
+use parking_lot::{MappedMutexGuard, Mutex, MutexGuard};
 use rusqlite::{Connection, InterruptHandle};
 use thiserror::Error;
 use zeroize::Zeroizing;
@@ -22,7 +22,7 @@ const SETTINGS_AND_MAINTENANCE_MIGRATION: &str =
     include_str!("../../migrations/0007_settings_and_maintenance.sql");
 
 pub struct Database {
-    connection: Mutex<Connection>,
+    connection: Mutex<Option<Connection>>,
     interrupt: std::sync::Arc<InterruptHandle>,
 }
 
@@ -45,13 +45,13 @@ impl Database {
 
         let interrupt = std::sync::Arc::new(connection.get_interrupt_handle());
         Ok(Self {
-            connection: Mutex::new(connection),
+            connection: Mutex::new(Some(connection)),
             interrupt,
         })
     }
 
     pub fn migrate(&self) -> Result<(), DatabaseError> {
-        let mut connection = self.connection.lock();
+        let mut connection = self.connection();
         let transaction = connection.transaction().map_err(DatabaseError::Migration)?;
         transaction
             .execute_batch(INITIAL_MIGRATION)
@@ -100,12 +100,28 @@ impl Database {
         transaction.commit().map_err(DatabaseError::Migration)
     }
 
-    pub fn connection(&self) -> MutexGuard<'_, Connection> {
-        self.connection.lock()
+    pub fn connection(&self) -> MappedMutexGuard<'_, Connection> {
+        MutexGuard::map(self.connection.lock(), |connection| {
+            connection
+                .as_mut()
+                .expect("database connection must not be used after shutdown")
+        })
     }
 
     pub fn interrupt_handle(&self) -> std::sync::Arc<InterruptHandle> {
         std::sync::Arc::clone(&self.interrupt)
+    }
+
+    pub fn close(&self) -> Result<(), DatabaseError> {
+        self.interrupt.interrupt();
+        let connection = self.connection.lock().take();
+        if let Some(connection) = connection {
+            if let Err((connection, error)) = connection.close() {
+                *self.connection.lock() = Some(connection);
+                return Err(DatabaseError::Close(error));
+            }
+        }
+        Ok(())
     }
 }
 
@@ -143,4 +159,6 @@ pub enum DatabaseError {
     Configure(#[source] rusqlite::Error),
     #[error("failed to apply database migration")]
     Migration(#[source] rusqlite::Error),
+    #[error("failed to close database")]
+    Close(#[source] rusqlite::Error),
 }

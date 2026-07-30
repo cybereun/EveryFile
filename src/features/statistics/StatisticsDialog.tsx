@@ -21,20 +21,39 @@ export interface StatisticsDialogProps {
   loadStatistics?: () => Promise<DocumentStatistics>;
   loadHistory?: () => Promise<SearchHistoryRecord[]>;
   deleteHistory?: (id: string) => Promise<void>;
+  clearHistory?: () => Promise<void>;
   onApplyFilter?: (filter: StatisticsSearchFilter) => void;
   onSearchHistory?: (query: string) => void;
 }
 
-function formatBytes(bytes: number) {
-  if (bytes < 1024) return `${bytes} B`;
-  const units = ["KB", "MB", "GB", "TB"];
-  let value = bytes / 1024;
+function decimal(value: string) {
+  try {
+    return BigInt(value);
+  } catch {
+    return 0n;
+  }
+}
+
+function formatInteger(value: string) {
+  return decimal(value).toLocaleString("ko-KR");
+}
+
+function formatBytes(encodedBytes: string) {
+  const bytes = decimal(encodedBytes);
+  if (bytes < 1024n) return `${bytes} B`;
+  const units = ["KB", "MB", "GB", "TB", "PB", "EB"];
+  let value = Number(bytes) / 1024;
   let unit = units[0];
   for (let index = 1; value >= 1024 && index < units.length; index += 1) {
     value /= 1024;
     unit = units[index];
   }
   return `${value.toFixed(value >= 10 ? 1 : 2)} ${unit}`;
+}
+
+function ratioPercent(value: string, total: bigint) {
+  const count = decimal(value);
+  return total === 0n ? 0 : Number((count * 10_000n) / total) / 100;
 }
 
 function DistributionTable({
@@ -46,7 +65,7 @@ function DistributionTable({
   label: string;
   onSelect: (bucket: StatisticsBucket) => void;
 }) {
-  const total = buckets.reduce((sum, bucket) => sum + bucket.count, 0);
+  const total = buckets.reduce((sum, bucket) => sum + decimal(bucket.count), 0n);
   return (
     <table className="data-table distribution-table" aria-label={label}>
       <thead>
@@ -70,8 +89,8 @@ function DistributionTable({
                 {bucket.label.toUpperCase()}
               </button>
             </th>
-            <td>{bucket.count.toLocaleString()}</td>
-            <td>{total ? Math.round((bucket.count / total) * 100) : 0}%</td>
+            <td>{formatInteger(bucket.count)}</td>
+            <td>{Math.round(ratioPercent(bucket.count, total))}%</td>
           </tr>
         ))}
       </tbody>
@@ -85,6 +104,7 @@ export function StatisticsDialog({
   loadStatistics = getStatistics,
   loadHistory = () => listSearchHistory(100, 0),
   deleteHistory = deleteSearchHistory,
+  clearHistory,
   onApplyFilter,
   onSearchHistory,
 }: StatisticsDialogProps) {
@@ -165,6 +185,7 @@ export function StatisticsDialog({
             <SearchHistoryTab
               loadHistory={loadHistory}
               deleteHistory={deleteHistory}
+              clearHistory={clearHistory}
               onSearch={onSearchHistory}
               frequentSearches={statistics?.frequentSearches}
             />
@@ -173,8 +194,8 @@ export function StatisticsDialog({
           ) : (
             <>
               <section className="statistics-summary" aria-label="문서 통계 요약">
-                <div><strong>{statistics.totalDocuments.toLocaleString()}</strong><span>총 문서</span></div>
-                <div><strong>{statistics.indexedDocuments.toLocaleString()}</strong><span>색인 완료</span></div>
+                <div><strong>{formatInteger(statistics.totalDocuments)}</strong><span>총 문서</span></div>
+                <div><strong>{formatInteger(statistics.indexedDocuments)}</strong><span>색인 완료</span></div>
                 <div><strong>{formatBytes(statistics.totalBytes)}</strong><span>총 크기</span></div>
               </section>
               <div className="statistics-grid">
@@ -184,7 +205,11 @@ export function StatisticsDialog({
                     buckets={statistics.byExtension}
                     label="파일 유형별 문서 수"
                     onSelect={(bucket) => {
-                      onApplyFilter?.({ extensions: [bucket.label.toLowerCase()] });
+                      onApplyFilter?.(
+                        bucket.label === "(none)"
+                          ? { extensionless: true }
+                          : { extensions: [bucket.label.toLowerCase()] },
+                      );
                       close();
                     }}
                   />
@@ -208,7 +233,7 @@ export function StatisticsDialog({
                               {bucket.label}
                             </button>
                           </th>
-                          <td>{bucket.count.toLocaleString()}</td>
+                          <td>{formatInteger(bucket.count)}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -231,18 +256,22 @@ export function StatisticsDialog({
                                 width: `${Math.max(
                                   3,
                                   Math.round(
-                                    (bucket.count /
-                                      Math.max(
-                                        1,
-                                        ...statistics.byYear.map((item) => item.count),
-                                      )) *
-                                      100,
+                                    ratioPercent(
+                                      bucket.count,
+                                      statistics.byYear.reduce(
+                                        (largest, item) =>
+                                          decimal(item.count) > largest
+                                            ? decimal(item.count)
+                                            : largest,
+                                        1n,
+                                      ),
+                                    ),
                                   ),
                                 )}%`,
                               }}
                               aria-hidden="true"
                             />
-                            {bucket.count.toLocaleString()}
+                            {formatInteger(bucket.count)}
                           </td>
                         </tr>
                       ))}
@@ -257,7 +286,7 @@ export function StatisticsDialog({
                       {statistics.parseStates.map((bucket) => (
                         <tr key={bucket.label}>
                           <th scope="row">{bucket.label}</th>
-                          <td>{bucket.count.toLocaleString()}</td>
+                          <td>{formatInteger(bucket.count)}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -291,8 +320,8 @@ export function StatisticsDialog({
                 </section>
               </div>
               <section className="search-statistics-summary" aria-label="검색 통계 요약">
-                <div><strong>{statistics.totalSearches.toLocaleString()}</strong><span>총 검색 횟수</span></div>
-                <div><strong>{statistics.uniqueSearchTerms.toLocaleString()}</strong><span>고유 검색어</span></div>
+                <div><strong>{formatInteger(statistics.totalSearches)}</strong><span>총 검색 횟수</span></div>
+                <div><strong>{formatInteger(statistics.uniqueSearchTerms)}</strong><span>고유 검색어</span></div>
               </section>
             </>
           )}

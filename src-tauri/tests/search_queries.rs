@@ -164,6 +164,44 @@ fn quoted_extension_syntax_matches_the_duplicate_dto_filter() {
 }
 
 #[test]
+fn extensionless_filter_matches_only_documents_without_an_extension() {
+    let fixture = Fixture::new();
+    fixture.insert_document(
+        "doc-extensionless",
+        "folder-1",
+        r"C:\fixture\README",
+        "README",
+        "",
+        "2026-01-01T00:00:00Z",
+        1,
+        "",
+        "project notes",
+    );
+    fixture.insert_document(
+        "doc-txt",
+        "folder-1",
+        r"C:\fixture\README.txt",
+        "README.txt",
+        "txt",
+        "2026-01-01T00:00:00Z",
+        1,
+        "",
+        "project notes",
+    );
+    let mut filtered = request("", SearchMode::Keyword);
+    filtered.extensionless = true;
+
+    let response = fixture.repository.search(&filtered).unwrap();
+
+    assert_eq!(response.total, 1);
+    assert_eq!(response.hits[0].document_id, "doc-extensionless");
+    assert!(response
+        .applied_filters
+        .iter()
+        .any(|filter| filter == "extensionless"));
+}
+
+#[test]
 fn parser_handles_empty_escaped_near_korean_and_hostile_inputs() {
     let empty = ParsedQuery::parse(" \t ").unwrap();
     assert!(empty.is_empty());
@@ -641,6 +679,7 @@ fn request(query: &str, mode: SearchMode) -> SearchRequest {
         mode,
         folder_ids: Vec::new(),
         extensions: Vec::new(),
+        extensionless: false,
         modified_after: None,
         modified_before: None,
         include_filename: true,

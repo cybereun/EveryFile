@@ -140,6 +140,32 @@ describe("SearchWorkspace", () => {
     });
   });
 
+  it("turns a statistics extensionless callback into a real backend search", async () => {
+    const search = vi.fn(async (request: SearchRequest) => searchResponse(request));
+    render(
+      <SearchWorkspace
+        folders={folders}
+        statisticsFilter={{ extensionless: true }}
+        searchApi={search}
+        cancelApi={vi.fn().mockResolvedValue(false)}
+        openApi={vi.fn().mockResolvedValue(undefined)}
+        debounceMs={0}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(search).toHaveBeenCalledWith(
+        expect.objectContaining({
+          extensionless: true,
+          extensions: [],
+        }),
+      ),
+    );
+    expect(
+      screen.getByRole("button", { name: "확장자 없음 필터 제거" }),
+    ).toBeVisible();
+  });
+
   it("groups dense results, supports keyboard open, and never interprets snippet HTML", async () => {
     const open = vi.fn().mockResolvedValue(undefined);
     render(

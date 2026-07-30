@@ -30,7 +30,9 @@ export function useModalDialog(open: boolean, onClose: () => void) {
       }
       if (event.key !== "Tab" || !dialog) return;
       const focusable = [...dialog.querySelectorAll<HTMLElement>(focusableSelector)].filter(
-        (element) => element.offsetParent !== null || element === document.activeElement,
+        (element) =>
+          element.getAttribute("aria-hidden") !== "true" &&
+          !element.closest("[inert]"),
       );
       if (focusable.length === 0) return;
       const firstElement = focusable[0];

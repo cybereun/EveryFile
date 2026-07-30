@@ -277,6 +277,10 @@ impl SearchSql {
                 .collect::<Result<Vec<_>, _>>()?,
             "extension",
         );
+        if request.extensionless {
+            conditions.push("TRIM(d.extension) = ''".into());
+            applied_filters.push("extensionless".into());
+        }
         add_list_filter(
             &mut conditions,
             &mut values,

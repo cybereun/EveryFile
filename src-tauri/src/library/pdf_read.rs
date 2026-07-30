@@ -36,6 +36,18 @@ impl PdfReadRegistry {
         cancelled.store(true, Ordering::Release);
         true
     }
+
+    pub fn cancel_all(&self) {
+        let mut active = self.active.lock();
+        for cancelled in active.values() {
+            cancelled.store(true, Ordering::Release);
+        }
+        active.clear();
+    }
+
+    pub fn is_idle(&self) -> bool {
+        self.active.lock().is_empty()
+    }
 }
 
 pub struct PdfReadLease {
@@ -144,5 +156,16 @@ mod tests {
             registry.begin(&"a".repeat(129)),
             Err(PdfReadError::InvalidRequest)
         ));
+    }
+
+    #[test]
+    fn cancel_all_revokes_every_active_pdf_lease() {
+        let registry = PdfReadRegistry::default();
+        let lease = registry.begin("pdf-active").unwrap();
+
+        registry.cancel_all();
+
+        assert!(lease.is_cancelled());
+        assert!(registry.is_idle());
     }
 }

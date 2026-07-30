@@ -8,6 +8,7 @@ export interface SearchRequest {
   mode: SearchMode;
   folderIds: string[];
   extensions: string[];
+  extensionless?: boolean;
   modifiedAfter: string | null;
   modifiedBefore: string | null;
   includeFilename: boolean;
@@ -159,7 +160,7 @@ export interface AppSettings {
 
 export interface StatisticsBucket {
   label: string;
-  count: number;
+  count: string;
 }
 
 export interface FolderStatisticsBucket extends StatisticsBucket {
@@ -171,7 +172,7 @@ export interface StatisticsDocument {
   fileName: string;
   path: string;
   extension: string;
-  sizeBytes: number;
+  sizeBytes: string;
   modifiedAt: string;
 }
 
@@ -180,29 +181,29 @@ export interface SearchHistoryRecord {
   query: string;
   mode: string;
   filters: Record<string, unknown>;
-  resultCount: number;
-  elapsedMs: number;
+  resultCount: string;
+  elapsedMs: string;
   searchedAt: string;
 }
 
 export interface SearchFrequency {
   query: string;
-  count: number;
+  count: string;
   lastSearchedAt: string;
 }
 
 export interface DocumentStatistics {
-  totalDocuments: number;
-  indexedDocuments: number;
-  totalBytes: number;
+  totalDocuments: string;
+  indexedDocuments: string;
+  totalBytes: string;
   byExtension: StatisticsBucket[];
   byFolder: FolderStatisticsBucket[];
   byYear: StatisticsBucket[];
   recentlyModified: StatisticsDocument[];
   largestDocuments: StatisticsDocument[];
   parseStates: StatisticsBucket[];
-  totalSearches: number;
-  uniqueSearchTerms: number;
+  totalSearches: string;
+  uniqueSearchTerms: string;
   frequentSearches: SearchFrequency[];
   recentSearches: SearchHistoryRecord[];
 }
@@ -216,6 +217,7 @@ export interface ParseErrorRecord {
 
 export type StatisticsSearchFilter =
   | { extensions: string[] }
+  | { extensionless: true }
   | { folderIds: string[] };
 
 export type ExportFormat = "csv" | "xlsx" | "markdown";
