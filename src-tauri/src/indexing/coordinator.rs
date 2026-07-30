@@ -183,30 +183,49 @@ impl JobRuntime {
         }
     }
 
-    fn begin_parser_operation(
+    fn begin_parser_operation<T>(
         &self,
-        mutation: impl FnOnce() -> Result<(), IndexingError>,
-    ) -> Result<ParserOperationLease, IndexingError> {
+        mutation: impl FnOnce() -> Result<T, IndexingError>,
+    ) -> Result<(ParserOperationLease, T), IndexingError> {
         if let Some(gate) = &self.reconciliation_gate {
-            let operation = gate.begin_operation(mutation)?;
-            Ok(ParserOperationLease {
-                _reconciliation: Some(operation),
-            })
+            let (operation, value) = gate.begin_operation(mutation)?;
+            Ok((
+                ParserOperationLease {
+                    reconciliation: Some(operation),
+                },
+                value,
+            ))
         } else {
             let _commit = self.commit_gate.lock();
             if self.stop.load(Ordering::Acquire) {
                 return Err(IndexingError::StateChanged);
             }
-            mutation()?;
-            Ok(ParserOperationLease {
-                _reconciliation: None,
-            })
+            let value = mutation()?;
+            Ok((
+                ParserOperationLease {
+                    reconciliation: None,
+                },
+                value,
+            ))
+        }
+    }
+
+    fn finish_parser_operation<T>(
+        &self,
+        operation: ParserOperationLease,
+        commit: impl FnOnce() -> Result<T, IndexingError>,
+        compensate: impl FnOnce() -> Result<(), IndexingError>,
+    ) -> Result<T, IndexingError> {
+        if let Some(operation) = operation.reconciliation {
+            operation.finish(commit, compensate)
+        } else {
+            self.with_mutation(commit)
         }
     }
 }
 
 struct ParserOperationLease {
-    _reconciliation: Option<ActiveReconciliationOperation>,
+    reconciliation: Option<ActiveReconciliationOperation>,
 }
 
 impl IndexCoordinator {
@@ -476,9 +495,33 @@ impl IndexCoordinator {
             .database
             .connection()
             .query_row(
-                "SELECT size_bytes, modified_at FROM documents
-                 WHERE folder_id = ?1 AND canonical_path = ?2",
-                params![folder_id, candidate.canonical_path.to_string_lossy()],
+                "SELECT documents.size_bytes, documents.modified_at
+                 FROM documents
+                 WHERE documents.folder_id = ?1
+                   AND documents.canonical_path = ?2
+                   AND (
+                     (
+                       ?3
+                       AND documents.parse_state = 'metadata_only'
+                     )
+                     OR (
+                       NOT ?3
+                       AND documents.parse_state = 'parsed'
+                       AND EXISTS (
+                         SELECT 1 FROM document_content
+                         WHERE document_content.document_id = documents.id
+                       )
+                       AND EXISTS (
+                         SELECT 1 FROM document_fts
+                         WHERE document_fts.document_id = documents.id
+                       )
+                     )
+                   )",
+                params![
+                    folder_id,
+                    candidate.canonical_path.to_string_lossy(),
+                    candidate.metadata_only
+                ],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .optional()?;
@@ -923,7 +966,7 @@ impl IndexCoordinator {
             return Err(IndexingError::StateChanged);
         }
         self.discovery_probe.before_reconciliation_parser_start();
-        let parser_operation =
+        let (parser_operation, parsing_checkpoint) =
             runtime.begin_parser_operation(|| self.mark_document_parsing(&candidate))?;
 
         let parser = Arc::clone(&self.parser);
@@ -931,20 +974,23 @@ impl IndexCoordinator {
         let max_bytes = self.max_file_size_bytes;
         let parsed =
             tokio::task::spawn_blocking(move || parser.parse(&parse_path, max_bytes)).await;
-        drop(parser_operation);
-        runtime.with_mutation(|| match parsed {
-            Ok(Ok(document)) => self.complete_success(job_id, &candidate, document),
-            Ok(Err(error)) => {
-                let (code, message) = parser_failure(&error);
-                self.complete_failure(job_id, &candidate, code, &message)
-            }
-            Err(_) => self.complete_failure(
-                job_id,
-                &candidate,
-                "PARSER_WORKER_STOPPED",
-                "parser worker stopped unexpectedly",
-            ),
-        })
+        runtime.finish_parser_operation(
+            parser_operation,
+            || match parsed {
+                Ok(Ok(document)) => self.complete_success(job_id, &candidate, document),
+                Ok(Err(error)) => {
+                    let (code, message) = parser_failure(&error);
+                    self.complete_failure(job_id, &candidate, code, &message)
+                }
+                Err(_) => self.complete_failure(
+                    job_id,
+                    &candidate,
+                    "PARSER_WORKER_STOPPED",
+                    "parser worker stopped unexpectedly",
+                ),
+            },
+            || self.compensate_cancelled_parse(&candidate, &parsing_checkpoint),
+        )
     }
 
     fn validate_immediately_before_parse(
@@ -1060,13 +1106,114 @@ impl IndexCoordinator {
         Ok(canonical.starts_with(root).then_some(canonical))
     }
 
-    fn mark_document_parsing(&self, candidate: &PersistedCandidate) -> Result<(), IndexingError> {
-        let folder_id: String = self.database.connection().query_row(
-            "SELECT folder_id FROM index_jobs WHERE id = ?1",
-            [&candidate.job_id],
+    fn mark_document_parsing(
+        &self,
+        candidate: &PersistedCandidate,
+    ) -> Result<DocumentParsingCheckpoint, IndexingError> {
+        let mut connection = self.database.connection();
+        let transaction = connection.transaction()?;
+        let folder_id = folder_id_for_job(&transaction, &candidate.job_id)?;
+        let previous = transaction
+            .query_row(
+                "SELECT id, folder_id, file_name, extension, size_bytes, modified_at,
+                        parse_state, parse_error_code
+                 FROM documents WHERE canonical_path = ?1",
+                [candidate.canonical_path.to_string_lossy()],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        DocumentMetadataSnapshot {
+                            folder_id: row.get(1)?,
+                            file_name: row.get(2)?,
+                            extension: row.get(3)?,
+                            size_bytes: row.get(4)?,
+                            modified_at: row.get(5)?,
+                            parse_state: row.get(6)?,
+                            parse_error_code: row.get(7)?,
+                        },
+                    ))
+                },
+            )
+            .optional()?;
+        upsert_metadata_transaction(&transaction, &folder_id, candidate, "parsing", None)?;
+        let document_id = match &previous {
+            Some((document_id, _)) => document_id.clone(),
+            None => transaction.query_row(
+                "SELECT id FROM documents WHERE canonical_path = ?1",
+                [candidate.canonical_path.to_string_lossy()],
+                |row| row.get(0),
+            )?,
+        };
+        transaction.commit()?;
+        Ok(DocumentParsingCheckpoint {
+            document_id,
+            previous: previous.map(|(_, metadata)| metadata),
+        })
+    }
+
+    fn compensate_cancelled_parse(
+        &self,
+        candidate: &PersistedCandidate,
+        checkpoint: &DocumentParsingCheckpoint,
+    ) -> Result<(), IndexingError> {
+        let mut connection = self.database.connection();
+        let transaction = connection.transaction()?;
+        let still_owned: bool = transaction.query_row(
+            "SELECT EXISTS (
+               SELECT 1 FROM documents
+               WHERE id = ?1
+                 AND canonical_path = ?2
+                 AND parse_state = 'parsing'
+                 AND size_bytes = ?3
+                 AND modified_at = ?4
+             )",
+            params![
+                checkpoint.document_id,
+                candidate.canonical_path.to_string_lossy(),
+                candidate.size_bytes,
+                candidate.modified_at,
+            ],
             |row| row.get(0),
         )?;
-        upsert_metadata(&self.database, &folder_id, candidate, "parsing", None)
+        if !still_owned {
+            transaction.commit()?;
+            return Ok(());
+        }
+
+        if let Some(previous) = &checkpoint.previous {
+            transaction.execute(
+                "UPDATE documents
+                 SET folder_id = ?2,
+                     file_name = ?3,
+                     extension = ?4,
+                     size_bytes = ?5,
+                     modified_at = ?6,
+                     parse_state = ?7,
+                     parse_error_code = ?8
+                 WHERE id = ?1",
+                params![
+                    checkpoint.document_id,
+                    previous.folder_id,
+                    previous.file_name,
+                    previous.extension,
+                    previous.size_bytes,
+                    previous.modified_at,
+                    previous.parse_state,
+                    previous.parse_error_code,
+                ],
+            )?;
+        } else {
+            transaction.execute(
+                "DELETE FROM document_fts WHERE document_id = ?1",
+                [&checkpoint.document_id],
+            )?;
+            transaction.execute(
+                "DELETE FROM documents WHERE id = ?1",
+                [&checkpoint.document_id],
+            )?;
+        }
+        transaction.commit()?;
+        Ok(())
     }
 
     fn complete_metadata_only(
@@ -1351,6 +1498,21 @@ struct PersistedCandidate {
     metadata_only: bool,
 }
 
+struct DocumentParsingCheckpoint {
+    document_id: String,
+    previous: Option<DocumentMetadataSnapshot>,
+}
+
+struct DocumentMetadataSnapshot {
+    folder_id: String,
+    file_name: String,
+    extension: String,
+    size_bytes: i64,
+    modified_at: String,
+    parse_state: String,
+    parse_error_code: Option<String>,
+}
+
 struct ReconciliationMutationState {
     cancelled: bool,
     active_operations: usize,
@@ -1421,10 +1583,10 @@ impl ReconciliationMutationGate {
         Ok(created)
     }
 
-    fn begin_operation(
+    fn begin_operation<T>(
         self: &Arc<Self>,
-        mutation: impl FnOnce() -> Result<(), IndexingError>,
-    ) -> Result<ActiveReconciliationOperation, IndexingError> {
+        mutation: impl FnOnce() -> Result<T, IndexingError>,
+    ) -> Result<(ActiveReconciliationOperation, T), IndexingError> {
         let mut state = self
             .state
             .lock()
@@ -1432,11 +1594,14 @@ impl ReconciliationMutationGate {
         if state.cancelled {
             return Err(IndexingError::ReconciliationCancelled);
         }
-        mutation()?;
+        let value = mutation()?;
         state.active_operations += 1;
-        Ok(ActiveReconciliationOperation {
-            gate: Arc::clone(self),
-        })
+        Ok((
+            ActiveReconciliationOperation {
+                gate: Arc::clone(self),
+            },
+            value,
+        ))
     }
 
     fn clear_active_runtime(&self, runtime: &Arc<JobRuntime>) {
@@ -1493,6 +1658,28 @@ impl ReconciliationMutationGate {
 
 struct ActiveReconciliationOperation {
     gate: Arc<ReconciliationMutationGate>,
+}
+
+impl ActiveReconciliationOperation {
+    fn finish<T>(
+        self,
+        commit: impl FnOnce() -> Result<T, IndexingError>,
+        compensate: impl FnOnce() -> Result<(), IndexingError>,
+    ) -> Result<T, IndexingError> {
+        let state = self
+            .gate
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let result = if state.cancelled {
+            compensate()?;
+            Err(IndexingError::ReconciliationCancelled)
+        } else {
+            commit()
+        };
+        drop(state);
+        result
+    }
 }
 
 impl Drop for ActiveReconciliationOperation {
@@ -1752,17 +1939,6 @@ fn send_pending_candidates(
             }
         }
     }
-}
-
-fn upsert_metadata(
-    database: &Database,
-    folder_id: &str,
-    candidate: &PersistedCandidate,
-    parse_state: &str,
-    error_code: Option<&str>,
-) -> Result<(), IndexingError> {
-    let connection = database.connection();
-    upsert_metadata_transaction(&connection, folder_id, candidate, parse_state, error_code)
 }
 
 fn upsert_metadata_transaction(

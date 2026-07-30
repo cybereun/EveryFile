@@ -890,7 +890,9 @@ async fn abort_during_an_active_parser_waits_and_blocks_the_final_commit() {
         Arc::clone(&probe),
     ));
     let folder_id = harness.folder_id.clone();
-    let reconciliation = tokio::spawn(async move { coordinator.reconcile(&folder_id).await });
+    let reconciliation_coordinator = Arc::clone(&coordinator);
+    let reconciliation =
+        tokio::spawn(async move { reconciliation_coordinator.reconcile(&folder_id).await });
     parser.wait_until_entered();
 
     reconciliation.abort();
@@ -904,30 +906,225 @@ async fn abort_during_an_active_parser_waits_and_blocks_the_final_commit() {
     parser.release();
     assert!(reconciliation.await.unwrap_err().is_cancelled());
     assert_eq!(parser.active.load(Ordering::Acquire), 0);
-    let connection = harness.database.connection();
-    let committed_content: i64 = connection
+    let cancelled_state: (i64, i64, i64) = harness
+        .database
+        .connection()
         .query_row(
-            "SELECT COUNT(*) FROM document_content
-             WHERE document_id IN (
-               SELECT id FROM documents
-               WHERE folder_id = ?1 AND file_name = 'in-flight.txt'
-             )",
+            "SELECT
+               (SELECT COUNT(*) FROM documents
+                WHERE folder_id = ?1 AND file_name = 'in-flight.txt'
+                  AND parse_state = 'parsing'),
+               (SELECT COUNT(*) FROM document_content
+                WHERE document_id IN (
+                  SELECT id FROM documents
+                  WHERE folder_id = ?1 AND file_name = 'in-flight.txt'
+                )),
+               (SELECT COUNT(*) FROM document_fts
+                WHERE document_id IN (
+                  SELECT id FROM documents
+                  WHERE folder_id = ?1 AND file_name = 'in-flight.txt'
+                ))",
             [&harness.folder_id],
-            |row| row.get(0),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
         .unwrap();
-    let committed_fts: i64 = connection
+    assert_eq!(cancelled_state, (0, 0, 0));
+
+    coordinator.reconcile(&harness.folder_id).await.unwrap();
+    let recovered: (String, String, String) = harness
+        .database
+        .connection()
         .query_row(
-            "SELECT COUNT(*) FROM document_fts
-             WHERE document_id IN (
-               SELECT id FROM documents
-               WHERE folder_id = ?1 AND file_name = 'in-flight.txt'
-             )",
+            "SELECT documents.parse_state, document_content.body, document_fts.body
+             FROM documents
+             JOIN document_content ON document_content.document_id = documents.id
+             JOIN document_fts ON document_fts.document_id = documents.id
+             WHERE documents.folder_id = ?1
+               AND documents.file_name = 'in-flight.txt'",
             [&harness.folder_id],
-            |row| row.get(0),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
         .unwrap();
-    assert_eq!((committed_content, committed_fts), (0, 0));
+    assert_eq!(
+        recovered,
+        (
+            "parsed".to_owned(),
+            "in-flight".to_owned(),
+            "in-flight".to_owned()
+        )
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn abort_during_an_active_parser_restores_existing_content_for_retry() {
+    let harness = IndexHarness::new().with_valid_file("existing.txt");
+    let initial_job = harness.start().await;
+    assert_eq!(
+        harness.wait_until_finished(&initial_job).await.state,
+        JobState::Completed
+    );
+    let before: (i64, String, String, Option<String>, String, String) = harness
+        .database
+        .connection()
+        .query_row(
+            "SELECT documents.size_bytes, documents.modified_at,
+                    documents.parse_state, documents.parse_error_code,
+                    document_content.body, document_fts.body
+             FROM documents
+             JOIN document_content ON document_content.document_id = documents.id
+             JOIN document_fts ON document_fts.document_id = documents.id
+             WHERE documents.folder_id = ?1
+               AND documents.file_name = 'existing.txt'",
+            [&harness.folder_id],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                ))
+            },
+        )
+        .unwrap();
+    assert_eq!(before.2, "parsed");
+    assert_eq!(before.4, "existing");
+    assert_eq!(before.5, "existing");
+
+    harness.write("existing.txt", "replacement body indexed after retry");
+    let parser = Arc::new(GatedParser::default());
+    let probe = Arc::new(BlockingReconciliationProbe::new(
+        ReconciliationBarrier::CancellationOnly,
+    ));
+    let coordinator = Arc::new(IndexCoordinator::with_parser_and_discovery_probe(
+        Arc::clone(&harness.database),
+        Arc::clone(&parser),
+        10 * 1024 * 1024,
+        Arc::clone(&probe),
+    ));
+    let folder_id = harness.folder_id.clone();
+    let reconciliation_coordinator = Arc::clone(&coordinator);
+    let reconciliation =
+        tokio::spawn(async move { reconciliation_coordinator.reconcile(&folder_id).await });
+    parser.wait_until_entered();
+
+    reconciliation.abort();
+    probe.wait_until_cancelled();
+    assert_eq!(parser.active.load(Ordering::Acquire), 1);
+    assert!(
+        !reconciliation.is_finished(),
+        "reconciliation abort returned while its parser was active"
+    );
+
+    parser.release();
+    assert!(reconciliation.await.unwrap_err().is_cancelled());
+    assert_eq!(parser.active.load(Ordering::Acquire), 0);
+    let after_cancel: (i64, String, String, Option<String>, String, String) = harness
+        .database
+        .connection()
+        .query_row(
+            "SELECT documents.size_bytes, documents.modified_at,
+                    documents.parse_state, documents.parse_error_code,
+                    document_content.body, document_fts.body
+             FROM documents
+             JOIN document_content ON document_content.document_id = documents.id
+             JOIN document_fts ON document_fts.document_id = documents.id
+             WHERE documents.folder_id = ?1
+               AND documents.file_name = 'existing.txt'",
+            [&harness.folder_id],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                ))
+            },
+        )
+        .unwrap();
+    assert_eq!(after_cancel, before);
+
+    coordinator.reconcile(&harness.folder_id).await.unwrap();
+    let recovered: (String, String, String) = harness
+        .database
+        .connection()
+        .query_row(
+            "SELECT documents.parse_state, document_content.body, document_fts.body
+             FROM documents
+             JOIN document_content ON document_content.document_id = documents.id
+             JOIN document_fts ON document_fts.document_id = documents.id
+             WHERE documents.folder_id = ?1
+               AND documents.file_name = 'existing.txt'",
+            [&harness.folder_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        recovered,
+        (
+            "parsed".to_owned(),
+            "replacement body indexed after retry".to_owned(),
+            "replacement body indexed after retry".to_owned()
+        )
+    );
+}
+
+#[tokio::test]
+async fn reconciliation_retries_matching_nonterminal_and_incomplete_documents() {
+    let harness = IndexHarness::new().with_files([
+        "parsing.txt",
+        "failed.txt",
+        "pending.txt",
+        "missing-content.txt",
+        "missing-fts.txt",
+        "ready.txt",
+    ]);
+    let initial_job = harness.start().await;
+    assert_eq!(
+        harness.wait_until_finished(&initial_job).await.state,
+        JobState::Completed
+    );
+    harness
+        .database
+        .connection()
+        .execute_batch(
+            "UPDATE documents SET parse_state = 'parsing'
+             WHERE file_name = 'parsing.txt';
+             UPDATE documents SET parse_state = 'failed', parse_error_code = 'DAMAGED'
+             WHERE file_name = 'failed.txt';
+             UPDATE documents SET parse_state = 'pending'
+             WHERE file_name = 'pending.txt';
+             DELETE FROM document_content
+             WHERE document_id IN (
+               SELECT id FROM documents WHERE file_name = 'missing-content.txt'
+             );
+             DELETE FROM document_fts
+             WHERE document_id IN (
+               SELECT id FROM documents WHERE file_name = 'missing-fts.txt'
+             );",
+        )
+        .unwrap();
+
+    let coordinator = harness.coordinator.read().unwrap().clone();
+    coordinator.reconcile(&harness.folder_id).await.unwrap();
+
+    for name in [
+        "parsing.txt",
+        "failed.txt",
+        "pending.txt",
+        "missing-content.txt",
+        "missing-fts.txt",
+    ] {
+        assert_eq!(
+            harness.parse_count(name),
+            2,
+            "{name} was incorrectly accepted as content-ready"
+        );
+    }
+    assert_eq!(harness.parse_count("ready.txt"), 1);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
