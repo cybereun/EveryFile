@@ -1429,6 +1429,133 @@ async fn watcher_rename_makes_a_late_failure_stale_and_reindexes_the_new_path() 
     assert_watcher_rename_invalidates_an_active_attempt(SupersededAttemptOutcome::Failure).await;
 }
 
+#[cfg(windows)]
+#[tokio::test]
+async fn unmatched_rename_deletes_the_long_identity_for_an_8_3_source_alias() {
+    let harness = IndexHarness::new();
+    harness.write("old.txt", "stalealiasneedle");
+    let initial_job = harness.start().await;
+    assert_eq!(
+        harness.wait_until_finished(&initial_job).await.state,
+        JobState::Completed
+    );
+    let stored: (String, String, i64, String) = harness
+        .database
+        .connection()
+        .query_row(
+            "SELECT id, canonical_path, size_bytes, modified_at
+             FROM documents WHERE file_name = 'old.txt'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .unwrap();
+    let old = harness.root.join("old.txt");
+    let stored_without_verbatim = stored.1.strip_prefix(r"\\?\").unwrap_or(&stored.1);
+    assert_ne!(
+        old.to_string_lossy().to_lowercase(),
+        stored_without_verbatim.to_lowercase(),
+        "test fixture did not produce an 8.3 source-parent alias"
+    );
+
+    let new = harness.root.join("new.txt");
+    fs::rename(&old, &new).unwrap();
+    fs::write(
+        &new,
+        "freshaliasneedle with a deliberately changed file identity",
+    )
+    .unwrap();
+    assert!(
+        !old.exists(),
+        "the source candidate must remain absent during identity resolution"
+    );
+    let destination_metadata = fs::metadata(&new).unwrap();
+    let destination_identity = (
+        i64::try_from(destination_metadata.len()).unwrap(),
+        destination_metadata
+            .modified()
+            .unwrap()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+            .to_string(),
+    );
+    assert_ne!(
+        (stored.2, stored.3.as_str()),
+        (destination_identity.0, destination_identity.1.as_str()),
+        "test fixture did not force the identity-mismatch branch"
+    );
+
+    let coordinator = harness.coordinator.read().unwrap().clone();
+    let watcher = IndexWatcher::start_for_manual_events(coordinator, harness.folder_id.clone())
+        .await
+        .unwrap();
+    watcher
+        .ingest(WatchChange::Rename { from: old, to: new })
+        .await
+        .unwrap();
+    watcher.flush().await.unwrap();
+
+    let old_document_rows: i64 = harness
+        .database
+        .connection()
+        .query_row(
+            "SELECT COUNT(*) FROM documents WHERE canonical_path = ?1",
+            [&stored.1],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let old_fts_rows: i64 = harness
+        .database
+        .connection()
+        .query_row(
+            "SELECT COUNT(*) FROM document_fts WHERE document_id = ?1",
+            [&stored.0],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(old_document_rows, 0);
+    assert_eq!(old_fts_rows, 0);
+    assert!(harness.search("stalealiasneedle").await.is_empty());
+
+    let destination: (String, String, String, i64, i64) = harness
+        .database
+        .connection()
+        .query_row(
+            "SELECT documents.parse_state, document_content.body, document_fts.body,
+                    (SELECT COUNT(*) FROM document_content
+                     WHERE document_id = documents.id),
+                    (SELECT COUNT(*) FROM document_fts
+                     WHERE document_id = documents.id)
+             FROM documents
+             JOIN document_content ON document_content.document_id = documents.id
+             JOIN document_fts ON document_fts.document_id = documents.id
+             WHERE documents.file_name = 'new.txt'",
+            [],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        destination,
+        (
+            "parsed".into(),
+            "freshaliasneedle with a deliberately changed file identity".into(),
+            "freshaliasneedle with a deliberately changed file identity".into(),
+            1,
+            1,
+        )
+    );
+    assert_eq!(harness.parse_count("new.txt"), 1);
+    assert_eq!(harness.search("freshaliasneedle").await.len(), 1);
+}
+
 #[tokio::test]
 async fn watcher_does_not_drop_a_legitimate_write_after_a_completed_batch() {
     let harness = IndexHarness::new().with_valid_file("later.txt");

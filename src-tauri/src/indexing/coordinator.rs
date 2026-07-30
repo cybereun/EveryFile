@@ -673,7 +673,7 @@ impl IndexCoordinator {
             (matched, invalidated_active_attempt)
         };
         if !matched {
-            self.delete_document(folder_id, from)?;
+            self.delete_stored_document(folder_id, &old)?;
             self.reindex_discovered_path(folder_id, &trusted_to).await?;
         } else if invalidated_active_attempt {
             self.reindex_discovered_path(folder_id, &trusted_to).await?;
@@ -697,6 +697,14 @@ impl IndexCoordinator {
         let Some(canonical_path) = self.stored_path_for_event(folder_id, path)? else {
             return Ok(());
         };
+        self.delete_stored_document(folder_id, &canonical_path)
+    }
+
+    fn delete_stored_document(
+        &self,
+        folder_id: &str,
+        canonical_path: &str,
+    ) -> Result<(), IndexingError> {
         let mut connection = self.database.connection();
         let transaction = connection.transaction()?;
         transaction.execute(
