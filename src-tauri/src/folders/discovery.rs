@@ -157,6 +157,11 @@ impl Iterator for DiscoveryStream {
 }
 
 impl DiscoveryStream {
+    pub(crate) fn cancel_and_join(&mut self) {
+        self.cancelled.store(true, Ordering::Release);
+        self.join_finished_worker();
+    }
+
     fn join_finished_worker(&mut self) {
         if let Some(worker) = self.worker.take() {
             let _ = worker.join();
@@ -166,10 +171,7 @@ impl DiscoveryStream {
 
 impl Drop for DiscoveryStream {
     fn drop(&mut self) {
-        self.cancelled.store(true, Ordering::Release);
-        if self.worker.as_ref().is_some_and(JoinHandle::is_finished) {
-            self.join_finished_worker();
-        }
+        self.cancel_and_join();
     }
 }
 
@@ -538,6 +540,7 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{mpsc, Arc};
+    use std::thread;
     use std::time::{Duration, SystemTime};
 
     use super::{
@@ -641,7 +644,7 @@ mod tests {
     fn dropping_stream_cancels_a_bounded_producer() {
         let produced = Arc::new(AtomicUsize::new(0));
         let worker_produced = Arc::clone(&produced);
-        let (stopped_tx, stopped_rx) = mpsc::sync_channel(0);
+        let (stopped_tx, stopped_rx) = mpsc::sync_channel(1);
         let stream = spawn_discovery_worker(move |sender| {
             while sender.send_candidate(candidate("queued.txt")) {
                 worker_produced.fetch_add(1, Ordering::SeqCst);
@@ -653,5 +656,49 @@ mod tests {
 
         stopped_rx.recv_timeout(Duration::from_secs(1)).unwrap();
         assert!(produced.load(Ordering::SeqCst) <= DISCOVERY_CHANNEL_CAPACITY);
+    }
+
+    #[test]
+    fn dropping_stream_cancels_and_joins_a_gated_producer() {
+        let active_workers = Arc::new(AtomicUsize::new(0));
+        let worker_count = Arc::clone(&active_workers);
+        let (started_tx, started_rx) = mpsc::sync_channel(0);
+        let (cancelled_tx, cancelled_rx) = mpsc::sync_channel(0);
+        let (release_tx, release_rx) = mpsc::sync_channel(0);
+        let stream = spawn_discovery_worker(move |sender| {
+            worker_count.fetch_add(1, Ordering::SeqCst);
+            started_tx.send(()).unwrap();
+            while !sender.is_cancelled() {
+                thread::yield_now();
+            }
+            cancelled_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+            worker_count.fetch_sub(1, Ordering::SeqCst);
+        });
+        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+
+        let (drop_finished_tx, drop_finished_rx) = mpsc::sync_channel(0);
+        let dropper = thread::spawn(move || {
+            drop(stream);
+            drop_finished_tx.send(()).unwrap();
+        });
+        cancelled_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("stream drop did not cancel its producer");
+
+        assert!(
+            drop_finished_rx
+                .recv_timeout(Duration::from_millis(100))
+                .is_err(),
+            "stream drop returned while its discovery worker was still active"
+        );
+        assert_eq!(active_workers.load(Ordering::SeqCst), 1);
+
+        release_tx.send(()).unwrap();
+        drop_finished_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("stream drop did not join its released worker");
+        dropper.join().unwrap();
+        assert_eq!(active_workers.load(Ordering::SeqCst), 0);
     }
 }

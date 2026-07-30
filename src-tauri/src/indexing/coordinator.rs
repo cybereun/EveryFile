@@ -53,6 +53,14 @@ pub trait DocumentParser: Send + Sync + 'static {
 
 pub trait DiscoveryProbe: Send + Sync + 'static {
     fn candidate_persisted(&self, buffered_candidates: usize);
+
+    fn before_reconciliation_candidate_mutation(&self) {}
+
+    fn before_reconciliation_parser_start(&self) {}
+
+    fn before_reconciliation_stale_delete(&self) {}
+
+    fn reconciliation_cancelled(&self) {}
 }
 
 struct NoopDiscoveryProbe;
@@ -134,19 +142,71 @@ struct JobRuntime {
     ownership: tokio::sync::Mutex<()>,
     gate: tokio::sync::Mutex<()>,
     commit_gate: parking_lot::Mutex<()>,
+    reconciliation_gate: Option<Arc<ReconciliationMutationGate>>,
     handle: tokio::sync::Mutex<Option<JoinHandle<()>>>,
 }
 
 impl JobRuntime {
     fn new() -> Self {
+        Self::with_reconciliation_gate(None)
+    }
+
+    fn for_reconciliation(gate: Arc<ReconciliationMutationGate>) -> Self {
+        Self::with_reconciliation_gate(Some(gate))
+    }
+
+    fn with_reconciliation_gate(
+        reconciliation_gate: Option<Arc<ReconciliationMutationGate>>,
+    ) -> Self {
         Self {
             stop: AtomicBool::new(false),
             ownership: tokio::sync::Mutex::new(()),
             gate: tokio::sync::Mutex::new(()),
             commit_gate: parking_lot::Mutex::new(()),
+            reconciliation_gate,
             handle: tokio::sync::Mutex::new(None),
         }
     }
+
+    fn with_mutation<T>(
+        &self,
+        mutation: impl FnOnce() -> Result<T, IndexingError>,
+    ) -> Result<T, IndexingError> {
+        if let Some(gate) = &self.reconciliation_gate {
+            gate.with_mutation(mutation)
+        } else {
+            let _commit = self.commit_gate.lock();
+            if self.stop.load(Ordering::Acquire) {
+                return Err(IndexingError::StateChanged);
+            }
+            mutation()
+        }
+    }
+
+    fn begin_parser_operation(
+        &self,
+        mutation: impl FnOnce() -> Result<(), IndexingError>,
+    ) -> Result<ParserOperationLease, IndexingError> {
+        if let Some(gate) = &self.reconciliation_gate {
+            let operation = gate.begin_operation(mutation)?;
+            Ok(ParserOperationLease {
+                _reconciliation: Some(operation),
+            })
+        } else {
+            let _commit = self.commit_gate.lock();
+            if self.stop.load(Ordering::Acquire) {
+                return Err(IndexingError::StateChanged);
+            }
+            mutation()?;
+            Ok(ParserOperationLease {
+                _reconciliation: None,
+            })
+        }
+    }
+}
+
+struct ParserOperationLease {
+    _reconciliation: Option<ActiveReconciliationOperation>,
 }
 
 impl IndexCoordinator {
@@ -595,7 +655,9 @@ impl IndexCoordinator {
         let coordinator = self.clone();
         let folder_id = folder_id.to_owned();
         let runtime = tokio::runtime::Handle::current();
-        let control = Arc::new(ReconciliationControl::new());
+        let control = Arc::new(ReconciliationControl::new(Arc::clone(
+            &self.discovery_probe,
+        )));
         let _owner = ReconciliationOwner::new(Arc::clone(&control));
         tokio::task::spawn_blocking(move || {
             let _finished = ReconciliationFinished::new(Arc::clone(&control));
@@ -614,39 +676,50 @@ impl IndexCoordinator {
         control.checkpoint()?;
         let folder = self.registered_folder(folder_id)?;
         control.checkpoint()?;
-        let scratch = ReconciliationScratch::begin(Arc::clone(&self.database), folder_id)?;
+        let scratch = control.with_mutation(|| {
+            ReconciliationScratch::begin(Arc::clone(&self.database), folder_id)
+        })?;
         control.checkpoint()?;
         let mut stream = discover(&folder, DiscoveryOptions::default())?;
-        loop {
-            control.checkpoint()?;
-            let candidate = match stream.next_with_timeout(Duration::from_millis(10)) {
-                DiscoveryPoll::Candidate(candidate) => candidate,
-                DiscoveryPoll::Pending => continue,
-                DiscoveryPoll::Finished => break,
-            };
-            control.checkpoint()?;
-            scratch.record(&candidate.canonical_path)?;
-            self.discovery_probe.candidate_persisted(1);
-            control.checkpoint()?;
-            if self.candidate_matches_stored_identity(folder_id, &candidate)? {
-                continue;
+        let discovery_result = (|| {
+            loop {
+                control.checkpoint()?;
+                let candidate = match stream.next_with_timeout(Duration::from_millis(10)) {
+                    DiscoveryPoll::Candidate(candidate) => candidate,
+                    DiscoveryPoll::Pending => continue,
+                    DiscoveryPoll::Finished => break,
+                };
+                control.checkpoint()?;
+                self.discovery_probe
+                    .before_reconciliation_candidate_mutation();
+                control.with_mutation(|| scratch.record(&candidate.canonical_path))?;
+                self.discovery_probe.candidate_persisted(1);
+
+                let job_id = random_id();
+                let job_runtime = Arc::new(JobRuntime::for_reconciliation(
+                    control.reconciliation_gate(),
+                ));
+                let created = control.with_direct_job_mutation(&job_runtime, || {
+                    if self.candidate_matches_stored_identity(folder_id, &candidate)? {
+                        return Ok(false);
+                    }
+                    self.create_single_candidate_job(&job_id, folder_id, candidate)?;
+                    Ok(true)
+                })?;
+                if !created {
+                    continue;
+                }
+                runtime.block_on(self.run_job(job_id.clone(), Arc::clone(&job_runtime)));
+                control.clear_active_runtime(&job_runtime);
+                if let Err(error) = control.checkpoint() {
+                    let _ = self.cas_cancellable_state(&job_id);
+                    return Err(error);
+                }
             }
-            control.checkpoint()?;
-            let job_id = random_id();
-            self.create_single_candidate_job(&job_id, folder_id, candidate)?;
-            if let Err(error) = control.checkpoint() {
-                let _ = self.cas_cancellable_state(&job_id);
-                return Err(error);
-            }
-            let job_runtime = Arc::new(JobRuntime::new());
-            control.set_active_runtime(&job_runtime);
-            runtime.block_on(self.run_job(job_id.clone(), Arc::clone(&job_runtime)));
-            control.clear_active_runtime(&job_runtime);
-            if let Err(error) = control.checkpoint() {
-                let _ = self.cas_cancellable_state(&job_id);
-                return Err(error);
-            }
-        }
+            Ok::<(), IndexingError>(())
+        })();
+        stream.cancel_and_join();
+        discovery_result?;
 
         loop {
             control.checkpoint()?;
@@ -654,7 +727,8 @@ impl IndexCoordinator {
                 break;
             };
             control.checkpoint()?;
-            self.delete_document(folder_id, Path::new(&path))?;
+            self.discovery_probe.before_reconciliation_stale_delete();
+            control.with_mutation(|| self.delete_document(folder_id, Path::new(&path)))?;
         }
         Ok(())
     }
@@ -711,7 +785,7 @@ impl IndexCoordinator {
         if matches!(self.job_state(&job_id), Ok(JobState::Discovering)) {
             if let Err(error) = self.run_discovery(&job_id, &runtime).await {
                 if !runtime.stop.load(Ordering::Acquire) {
-                    let _ = self.fail_active_job(&job_id, &error);
+                    let _ = runtime.with_mutation(|| self.fail_active_job(&job_id, &error));
                 }
                 self.emit_status(&job_id);
                 return;
@@ -744,7 +818,7 @@ impl IndexCoordinator {
             }
             if let Err(error) = self.process_candidate(&job_id, candidate, &runtime).await {
                 if !runtime.stop.load(Ordering::Acquire) {
-                    let _ = self.fail_active_job(&job_id, &error);
+                    let _ = runtime.with_mutation(|| self.fail_active_job(&job_id, &error));
                 }
                 drop(gate);
                 self.emit_status(&job_id);
@@ -759,7 +833,8 @@ impl IndexCoordinator {
         let _ = producer.await;
 
         if !runtime.stop.load(Ordering::Acquire) {
-            let _ = self.cas_state(&job_id, JobState::Parsing, JobState::Completed);
+            let _ = runtime
+                .with_mutation(|| self.cas_state(&job_id, JobState::Parsing, JobState::Completed));
             self.emit_status(&job_id);
         }
     }
@@ -825,44 +900,39 @@ impl IndexCoordinator {
         if runtime.stop.load(Ordering::Acquire) {
             return Err(IndexingError::StateChanged);
         }
-        self.set_current_path(job_id, &candidate.canonical_path.to_string_lossy())?;
+        runtime.with_mutation(|| {
+            self.set_current_path(job_id, &candidate.canonical_path.to_string_lossy())
+        })?;
         if candidate.metadata_only || path_is_metadata_only(&candidate.canonical_path)? {
-            let _commit = runtime.commit_gate.lock();
-            if runtime.stop.load(Ordering::Acquire) {
-                return Err(IndexingError::StateChanged);
-            }
-            return self.complete_metadata_only(job_id, &candidate);
+            return runtime.with_mutation(|| self.complete_metadata_only(job_id, &candidate));
         }
         let trusted_path = match self.validate_immediately_before_parse(job_id, &candidate) {
             Ok(path) => path,
             Err(error) => {
-                let _commit = runtime.commit_gate.lock();
-                if runtime.stop.load(Ordering::Acquire) {
-                    return Err(IndexingError::StateChanged);
-                }
-                return self.complete_failure(
-                    job_id,
-                    &candidate,
-                    "PATH_TRUST_FAILED",
-                    &error.to_string(),
-                );
+                return runtime.with_mutation(|| {
+                    self.complete_failure(
+                        job_id,
+                        &candidate,
+                        "PATH_TRUST_FAILED",
+                        &error.to_string(),
+                    )
+                });
             }
         };
         if runtime.stop.load(Ordering::Acquire) {
             return Err(IndexingError::StateChanged);
         }
-        self.mark_document_parsing(&candidate)?;
+        self.discovery_probe.before_reconciliation_parser_start();
+        let parser_operation =
+            runtime.begin_parser_operation(|| self.mark_document_parsing(&candidate))?;
 
         let parser = Arc::clone(&self.parser);
         let parse_path = trusted_path.clone();
         let max_bytes = self.max_file_size_bytes;
         let parsed =
             tokio::task::spawn_blocking(move || parser.parse(&parse_path, max_bytes)).await;
-        let _commit = runtime.commit_gate.lock();
-        if runtime.stop.load(Ordering::Acquire) {
-            return Err(IndexingError::StateChanged);
-        }
-        match parsed {
+        drop(parser_operation);
+        runtime.with_mutation(|| match parsed {
             Ok(Ok(document)) => self.complete_success(job_id, &candidate, document),
             Ok(Err(error)) => {
                 let (code, message) = parser_failure(&error);
@@ -874,7 +944,7 @@ impl IndexCoordinator {
                 "PARSER_WORKER_STOPPED",
                 "parser worker stopped unexpectedly",
             ),
-        }
+        })
     }
 
     fn validate_immediately_before_parse(
@@ -1281,53 +1351,203 @@ struct PersistedCandidate {
     metadata_only: bool,
 }
 
-struct ReconciliationControl {
-    cancelled: AtomicBool,
-    active_runtime: parking_lot::Mutex<Option<Weak<JobRuntime>>>,
-    finished: (Mutex<bool>, Condvar),
+struct ReconciliationMutationState {
+    cancelled: bool,
+    active_operations: usize,
+    active_runtime: Option<Weak<JobRuntime>>,
 }
 
-impl ReconciliationControl {
+struct ReconciliationMutationGate {
+    state: Mutex<ReconciliationMutationState>,
+    idle: Condvar,
+}
+
+impl ReconciliationMutationGate {
     fn new() -> Self {
         Self {
-            cancelled: AtomicBool::new(false),
-            active_runtime: parking_lot::Mutex::new(None),
-            finished: (Mutex::new(false), Condvar::new()),
+            state: Mutex::new(ReconciliationMutationState {
+                cancelled: false,
+                active_operations: 0,
+                active_runtime: None,
+            }),
+            idle: Condvar::new(),
         }
     }
 
     fn checkpoint(&self) -> Result<(), IndexingError> {
-        if self.cancelled.load(Ordering::Acquire) {
+        let state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if state.cancelled {
             Err(IndexingError::ReconciliationCancelled)
         } else {
             Ok(())
         }
     }
 
-    fn cancel(&self) {
-        self.cancelled.store(true, Ordering::Release);
-        if let Some(runtime) = self.active_runtime.lock().as_ref().and_then(Weak::upgrade) {
-            runtime.stop.store(true, Ordering::Release);
-            let _commit = runtime.commit_gate.lock();
+    fn with_mutation<T>(
+        &self,
+        mutation: impl FnOnce() -> Result<T, IndexingError>,
+    ) -> Result<T, IndexingError> {
+        let state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if state.cancelled {
+            return Err(IndexingError::ReconciliationCancelled);
         }
+        let result = mutation();
+        drop(state);
+        result
     }
 
-    fn set_active_runtime(&self, runtime: &Arc<JobRuntime>) {
-        *self.active_runtime.lock() = Some(Arc::downgrade(runtime));
-        if self.cancelled.load(Ordering::Acquire) {
-            runtime.stop.store(true, Ordering::Release);
+    fn with_direct_job_mutation(
+        &self,
+        runtime: &Arc<JobRuntime>,
+        mutation: impl FnOnce() -> Result<bool, IndexingError>,
+    ) -> Result<bool, IndexingError> {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if state.cancelled {
+            return Err(IndexingError::ReconciliationCancelled);
         }
+        let created = mutation()?;
+        if created {
+            state.active_runtime = Some(Arc::downgrade(runtime));
+        }
+        Ok(created)
+    }
+
+    fn begin_operation(
+        self: &Arc<Self>,
+        mutation: impl FnOnce() -> Result<(), IndexingError>,
+    ) -> Result<ActiveReconciliationOperation, IndexingError> {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if state.cancelled {
+            return Err(IndexingError::ReconciliationCancelled);
+        }
+        mutation()?;
+        state.active_operations += 1;
+        Ok(ActiveReconciliationOperation {
+            gate: Arc::clone(self),
+        })
     }
 
     fn clear_active_runtime(&self, runtime: &Arc<JobRuntime>) {
-        let mut active = self.active_runtime.lock();
-        if active
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if state
+            .active_runtime
             .as_ref()
             .and_then(Weak::upgrade)
             .is_some_and(|current| Arc::ptr_eq(&current, runtime))
         {
-            *active = None;
+            state.active_runtime = None;
         }
+    }
+
+    fn publish_stop(&self) {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        state.cancelled = true;
+        if let Some(runtime) = state.active_runtime.as_ref().and_then(Weak::upgrade) {
+            runtime.stop.store(true, Ordering::Release);
+        }
+    }
+
+    fn wait_until_idle(&self) {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        while state.active_operations != 0 {
+            state = self
+                .idle
+                .wait(state)
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+        }
+    }
+
+    fn finish_operation(&self) {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        debug_assert!(state.active_operations > 0);
+        state.active_operations = state.active_operations.saturating_sub(1);
+        if state.active_operations == 0 {
+            self.idle.notify_all();
+        }
+    }
+}
+
+struct ActiveReconciliationOperation {
+    gate: Arc<ReconciliationMutationGate>,
+}
+
+impl Drop for ActiveReconciliationOperation {
+    fn drop(&mut self) {
+        self.gate.finish_operation();
+    }
+}
+
+struct ReconciliationControl {
+    mutation_gate: Arc<ReconciliationMutationGate>,
+    probe: Arc<dyn DiscoveryProbe>,
+    finished: (Mutex<bool>, Condvar),
+}
+
+impl ReconciliationControl {
+    fn new(probe: Arc<dyn DiscoveryProbe>) -> Self {
+        Self {
+            mutation_gate: Arc::new(ReconciliationMutationGate::new()),
+            probe,
+            finished: (Mutex::new(false), Condvar::new()),
+        }
+    }
+
+    fn checkpoint(&self) -> Result<(), IndexingError> {
+        self.mutation_gate.checkpoint()
+    }
+
+    fn with_mutation<T>(
+        &self,
+        mutation: impl FnOnce() -> Result<T, IndexingError>,
+    ) -> Result<T, IndexingError> {
+        self.mutation_gate.with_mutation(mutation)
+    }
+
+    fn with_direct_job_mutation(
+        &self,
+        runtime: &Arc<JobRuntime>,
+        mutation: impl FnOnce() -> Result<bool, IndexingError>,
+    ) -> Result<bool, IndexingError> {
+        self.mutation_gate
+            .with_direct_job_mutation(runtime, mutation)
+    }
+
+    fn reconciliation_gate(&self) -> Arc<ReconciliationMutationGate> {
+        Arc::clone(&self.mutation_gate)
+    }
+
+    fn cancel(&self) {
+        self.mutation_gate.publish_stop();
+        self.probe.reconciliation_cancelled();
+        self.mutation_gate.wait_until_idle();
+    }
+
+    fn clear_active_runtime(&self, runtime: &Arc<JobRuntime>) {
+        self.mutation_gate.clear_active_runtime(runtime);
     }
 
     fn mark_finished(&self) {

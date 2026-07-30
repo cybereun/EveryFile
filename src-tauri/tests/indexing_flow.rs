@@ -81,6 +81,55 @@ impl DocumentParser for FakeParser {
     }
 }
 
+#[derive(Default)]
+struct GatedParser {
+    entered: (Mutex<bool>, Condvar),
+    release: (Mutex<bool>, Condvar),
+    active: AtomicUsize,
+}
+
+impl GatedParser {
+    fn wait_until_entered(&self) {
+        let (entered, ready) = &self.entered;
+        let entered = entered.lock().unwrap();
+        let (entered, timeout) = ready
+            .wait_timeout_while(entered, Duration::from_secs(2), |entered| !*entered)
+            .unwrap();
+        assert!(*entered, "parser was never invoked");
+        assert!(!timeout.timed_out());
+    }
+
+    fn release(&self) {
+        let (release, ready) = &self.release;
+        *release.lock().unwrap() = true;
+        ready.notify_all();
+    }
+}
+
+impl DocumentParser for GatedParser {
+    fn parse(&self, path: &Path, _max_bytes: u64) -> Result<ParsedDocument, ParserError> {
+        self.active.fetch_add(1, Ordering::AcqRel);
+        let (entered, entered_ready) = &self.entered;
+        *entered.lock().unwrap() = true;
+        entered_ready.notify_all();
+        let (release, release_ready) = &self.release;
+        let mut released = release.lock().unwrap();
+        while !*released {
+            released = release_ready.wait(released).unwrap();
+        }
+        let body = fs::read_to_string(path).unwrap();
+        self.active.fetch_sub(1, Ordering::AcqRel);
+        Ok(ParsedDocument {
+            title: None,
+            markdown: body.clone(),
+            plain_text: body,
+            blocks: vec![],
+            metadata: serde_json::json!({}),
+            warnings: vec![],
+        })
+    }
+}
+
 struct IndexHarness {
     _temp: TempDir,
     root: PathBuf,
@@ -363,6 +412,97 @@ impl DiscoveryProbe for BlockingDiscoveryProbe {
         while !*released {
             released = release_ready.wait(released).unwrap();
         }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ReconciliationBarrier {
+    CandidateMutation,
+    ParserStart,
+    StaleDelete,
+    CancellationOnly,
+}
+
+struct BlockingReconciliationProbe {
+    stage: ReconciliationBarrier,
+    entered: (Mutex<bool>, Condvar),
+    release: (Mutex<bool>, Condvar),
+    cancelled: (Mutex<bool>, Condvar),
+}
+
+impl BlockingReconciliationProbe {
+    fn new(stage: ReconciliationBarrier) -> Self {
+        Self {
+            stage,
+            entered: (Mutex::new(false), Condvar::new()),
+            release: (Mutex::new(false), Condvar::new()),
+            cancelled: (Mutex::new(false), Condvar::new()),
+        }
+    }
+
+    fn block_at(&self, stage: ReconciliationBarrier) {
+        if self.stage != stage {
+            return;
+        }
+        let (entered, entered_ready) = &self.entered;
+        *entered.lock().unwrap() = true;
+        entered_ready.notify_all();
+        let (release, release_ready) = &self.release;
+        let mut released = release.lock().unwrap();
+        while !*released {
+            released = release_ready.wait(released).unwrap();
+        }
+    }
+
+    fn wait_until_entered(&self) {
+        let (entered, ready) = &self.entered;
+        let entered = entered.lock().unwrap();
+        let (entered, timeout) = ready
+            .wait_timeout_while(entered, Duration::from_secs(2), |entered| !*entered)
+            .unwrap();
+        assert!(
+            *entered,
+            "reconciliation never reached the requested barrier"
+        );
+        assert!(!timeout.timed_out());
+    }
+
+    fn wait_until_cancelled(&self) {
+        let (cancelled, ready) = &self.cancelled;
+        let cancelled = cancelled.lock().unwrap();
+        let (cancelled, timeout) = ready
+            .wait_timeout_while(cancelled, Duration::from_secs(2), |cancelled| !*cancelled)
+            .unwrap();
+        assert!(*cancelled, "reconciliation never published cancellation");
+        assert!(!timeout.timed_out());
+    }
+
+    fn release(&self) {
+        let (release, ready) = &self.release;
+        *release.lock().unwrap() = true;
+        ready.notify_all();
+    }
+}
+
+impl DiscoveryProbe for BlockingReconciliationProbe {
+    fn candidate_persisted(&self, _buffered_candidates: usize) {}
+
+    fn before_reconciliation_candidate_mutation(&self) {
+        self.block_at(ReconciliationBarrier::CandidateMutation);
+    }
+
+    fn before_reconciliation_parser_start(&self) {
+        self.block_at(ReconciliationBarrier::ParserStart);
+    }
+
+    fn before_reconciliation_stale_delete(&self) {
+        self.block_at(ReconciliationBarrier::StaleDelete);
+    }
+
+    fn reconciliation_cancelled(&self) {
+        let (cancelled, ready) = &self.cancelled;
+        *cancelled.lock().unwrap() = true;
+        ready.notify_all();
     }
 }
 
@@ -653,6 +793,178 @@ async fn aborted_reconciliation_cleans_run_scoped_scratch_rows() {
         .is_some());
     assert!(harness.document("a.txt").await.is_none());
     assert!(harness.document("b.txt").await.is_none());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn abort_before_candidate_mutation_writes_no_scratch_job_or_document() {
+    let harness = IndexHarness::new().with_valid_file("after-cancel.txt");
+    harness
+        .database
+        .connection()
+        .execute_batch(
+            "CREATE TABLE reconciliation_mutation_audit (
+               canonical_path TEXT NOT NULL
+             );
+             CREATE TRIGGER audit_reconciliation_seen
+             AFTER INSERT ON reconciliation_seen_v2
+             BEGIN
+               INSERT INTO reconciliation_mutation_audit (canonical_path)
+               VALUES (NEW.canonical_path);
+             END;",
+        )
+        .unwrap();
+    let probe = Arc::new(BlockingReconciliationProbe::new(
+        ReconciliationBarrier::CandidateMutation,
+    ));
+    let coordinator = Arc::new(IndexCoordinator::with_parser_and_discovery_probe(
+        Arc::clone(&harness.database),
+        Arc::clone(&harness.parser),
+        10 * 1024 * 1024,
+        Arc::clone(&probe),
+    ));
+    let folder_id = harness.folder_id.clone();
+    let reconciliation = tokio::spawn(async move { coordinator.reconcile(&folder_id).await });
+    probe.wait_until_entered();
+
+    reconciliation.abort();
+    probe.wait_until_cancelled();
+    probe.release();
+    assert!(reconciliation.await.unwrap_err().is_cancelled());
+
+    let (scratch_writes, jobs) = {
+        let connection = harness.database.connection();
+        let scratch_writes: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM reconciliation_mutation_audit",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let jobs: i64 = connection
+            .query_row("SELECT COUNT(*) FROM index_jobs", [], |row| row.get(0))
+            .unwrap();
+        (scratch_writes, jobs)
+    };
+    assert_eq!(scratch_writes, 0);
+    assert_eq!(jobs, 0);
+    assert_eq!(harness.parse_count("after-cancel.txt"), 0);
+    assert!(harness.document("after-cancel.txt").await.is_none());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn abort_before_parser_start_never_marks_or_invokes_the_parser() {
+    let harness = IndexHarness::new().with_valid_file("after-cancel.txt");
+    let probe = Arc::new(BlockingReconciliationProbe::new(
+        ReconciliationBarrier::ParserStart,
+    ));
+    let coordinator = Arc::new(IndexCoordinator::with_parser_and_discovery_probe(
+        Arc::clone(&harness.database),
+        Arc::clone(&harness.parser),
+        10 * 1024 * 1024,
+        Arc::clone(&probe),
+    ));
+    let folder_id = harness.folder_id.clone();
+    let reconciliation = tokio::spawn(async move { coordinator.reconcile(&folder_id).await });
+    probe.wait_until_entered();
+
+    reconciliation.abort();
+    probe.wait_until_cancelled();
+    probe.release();
+    assert!(reconciliation.await.unwrap_err().is_cancelled());
+
+    assert_eq!(harness.parse_count("after-cancel.txt"), 0);
+    assert!(harness.document("after-cancel.txt").await.is_none());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn abort_during_an_active_parser_waits_and_blocks_the_final_commit() {
+    let harness = IndexHarness::new().with_valid_file("in-flight.txt");
+    let parser = Arc::new(GatedParser::default());
+    let probe = Arc::new(BlockingReconciliationProbe::new(
+        ReconciliationBarrier::CancellationOnly,
+    ));
+    let coordinator = Arc::new(IndexCoordinator::with_parser_and_discovery_probe(
+        Arc::clone(&harness.database),
+        Arc::clone(&parser),
+        10 * 1024 * 1024,
+        Arc::clone(&probe),
+    ));
+    let folder_id = harness.folder_id.clone();
+    let reconciliation = tokio::spawn(async move { coordinator.reconcile(&folder_id).await });
+    parser.wait_until_entered();
+
+    reconciliation.abort();
+    probe.wait_until_cancelled();
+    assert_eq!(parser.active.load(Ordering::Acquire), 1);
+    assert!(
+        !reconciliation.is_finished(),
+        "reconciliation abort returned while its parser was active"
+    );
+
+    parser.release();
+    assert!(reconciliation.await.unwrap_err().is_cancelled());
+    assert_eq!(parser.active.load(Ordering::Acquire), 0);
+    let connection = harness.database.connection();
+    let committed_content: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM document_content
+             WHERE document_id IN (
+               SELECT id FROM documents
+               WHERE folder_id = ?1 AND file_name = 'in-flight.txt'
+             )",
+            [&harness.folder_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let committed_fts: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM document_fts
+             WHERE document_id IN (
+               SELECT id FROM documents
+               WHERE folder_id = ?1 AND file_name = 'in-flight.txt'
+             )",
+            [&harness.folder_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!((committed_content, committed_fts), (0, 0));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn abort_after_stale_selection_never_deletes_the_document() {
+    let harness = IndexHarness::new();
+    let stale_path = harness.root.join("must-survive-cancel.txt");
+    harness
+        .database
+        .connection()
+        .execute(
+            "INSERT INTO documents
+             (id, folder_id, canonical_path, file_name, extension, size_bytes,
+              modified_at, parse_state)
+             VALUES ('stale-doc', ?1, ?2, 'must-survive-cancel.txt', 'txt',
+                     1, '1', 'indexed')",
+            rusqlite::params![harness.folder_id, stale_path.to_string_lossy()],
+        )
+        .unwrap();
+    let probe = Arc::new(BlockingReconciliationProbe::new(
+        ReconciliationBarrier::StaleDelete,
+    ));
+    let coordinator = Arc::new(IndexCoordinator::with_parser_and_discovery_probe(
+        Arc::clone(&harness.database),
+        Arc::clone(&harness.parser),
+        10 * 1024 * 1024,
+        Arc::clone(&probe),
+    ));
+    let folder_id = harness.folder_id.clone();
+    let reconciliation = tokio::spawn(async move { coordinator.reconcile(&folder_id).await });
+    probe.wait_until_entered();
+
+    reconciliation.abort();
+    probe.wait_until_cancelled();
+    probe.release();
+    assert!(reconciliation.await.unwrap_err().is_cancelled());
+
+    assert!(harness.document("must-survive-cancel.txt").await.is_some());
 }
 
 #[tokio::test]
