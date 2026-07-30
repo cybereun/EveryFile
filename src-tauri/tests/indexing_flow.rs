@@ -18,6 +18,74 @@ use everyfile_lib::state::AppState;
 use tempfile::TempDir;
 use zeroize::Zeroizing;
 
+#[cfg(windows)]
+fn normalized_windows_test_path(path: &Path) -> String {
+    path.to_string_lossy()
+        .trim_start_matches(r"\\?\")
+        .replace('/', r"\")
+        .to_lowercase()
+}
+
+#[cfg(windows)]
+fn classify_short_path_alias(long: &Path, returned: PathBuf) -> Option<PathBuf> {
+    (normalized_windows_test_path(long) != normalized_windows_test_path(&returned))
+        .then_some(returned)
+}
+
+#[cfg(windows)]
+fn windows_short_path_alias(long: &Path) -> std::io::Result<Option<PathBuf>> {
+    use std::os::windows::ffi::{OsStrExt, OsStringExt};
+    use windows::core::PCWSTR;
+    use windows::Win32::Storage::FileSystem::GetShortPathNameW;
+
+    let input = long
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let required = unsafe { GetShortPathNameW(PCWSTR(input.as_ptr()), None) };
+    if required == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+
+    let mut capacity = required as usize;
+    loop {
+        let mut output = vec![0_u16; capacity];
+        let written =
+            unsafe { GetShortPathNameW(PCWSTR(input.as_ptr()), Some(output.as_mut_slice())) };
+        if written == 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        if (written as usize) < output.len() {
+            output.truncate(written as usize);
+            let returned = PathBuf::from(std::ffi::OsString::from_wide(&output));
+            return Ok(classify_short_path_alias(long, returned));
+        }
+        capacity = written as usize;
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn unchanged_windows_short_path_reports_capability_unavailable() {
+    let long = Path::new(r"\\?\C:\Users\Long User\Documents");
+    let returned = PathBuf::from(r"C:\Users\Long User\Documents");
+
+    assert_eq!(classify_short_path_alias(long, returned), None);
+}
+
+#[cfg(windows)]
+#[test]
+fn distinct_windows_short_path_reports_the_8_3_alias() {
+    let long = Path::new(r"\\?\C:\Users\Long User\Documents");
+    let returned = PathBuf::from(r"C:\Users\LONGUS~1\DOCUME~1");
+
+    assert_eq!(
+        classify_short_path_alias(long, returned.clone()),
+        Some(returned)
+    );
+}
+
 struct FakeParser {
     counts: Mutex<HashMap<String, usize>>,
     damaged: Mutex<HashSet<String>>,
@@ -1449,15 +1517,23 @@ async fn unmatched_rename_deletes_the_long_identity_for_an_8_3_source_alias() {
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         )
         .unwrap();
-    let old = harness.root.join("old.txt");
-    let stored_without_verbatim = stored.1.strip_prefix(r"\\?\").unwrap_or(&stored.1);
+    let long_parent = Path::new(&stored.1).parent().unwrap();
+    assert!(long_parent.is_dir());
+    let Some(short_parent) = windows_short_path_alias(long_parent).unwrap() else {
+        eprintln!(
+            "SKIP: Windows did not provide a distinct 8.3 alias for {}; \
+             unmatched rename alias coverage is unavailable on this volume",
+            long_parent.display()
+        );
+        return;
+    };
     assert_ne!(
-        old.to_string_lossy().to_lowercase(),
-        stored_without_verbatim.to_lowercase(),
-        "test fixture did not produce an 8.3 source-parent alias"
+        normalized_windows_test_path(long_parent),
+        normalized_windows_test_path(&short_parent)
     );
+    let old = short_parent.join("old.txt");
 
-    let new = harness.root.join("new.txt");
+    let new = short_parent.join("new.txt");
     fs::rename(&old, &new).unwrap();
     fs::write(
         &new,
