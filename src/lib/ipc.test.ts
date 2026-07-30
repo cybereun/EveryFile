@@ -11,6 +11,7 @@ import {
   getPreview,
   getSettings,
   listFolders,
+  openSourceFile,
   pauseIndexing,
   resumeIndexing,
   saveSettings,
@@ -55,6 +56,7 @@ describe("IPC wrappers", () => {
     await listFolders();
     await searchDocuments(request);
     await cancelSearch("search-1");
+    await openSourceFile("document-1");
     await getPreview("document-1");
     await startIndexing("folder-1");
     await pauseIndexing("job-1");
@@ -68,6 +70,7 @@ describe("IPC wrappers", () => {
       ["list_folders"],
       ["search_documents", { request }],
       ["cancel_search", { requestId: "search-1" }],
+      ["open_source_file", { documentId: "document-1" }],
       ["get_preview", { documentId: "document-1" }],
       ["start_indexing", { folderId: "folder-1" }],
       ["pause_indexing", { jobId: "job-1" }],

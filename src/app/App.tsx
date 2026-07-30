@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ResizablePane } from "../components/ResizablePane";
 import { IndexStatusController } from "../features/folders/IndexStatus";
+import { SearchWorkspace } from "../features/search/SearchWorkspace";
 import type { FolderRecord } from "../lib/types";
 import "../styles/app.css";
 import { Header } from "./Header";
@@ -26,6 +27,7 @@ export interface AppProps {
   onAddFolder?: () => void;
   onSettings?: () => void;
   onStatistics?: () => void;
+  onDocumentSelect?: (documentId: string) => void;
 }
 
 function readPersistedWidth(key: string, fallback: number, min: number, max: number) {
@@ -110,22 +112,6 @@ function isTextEntryTarget(target: EventTarget | null) {
   );
 }
 
-function SearchIcon() {
-  return (
-    <svg
-      aria-hidden="true"
-      fill="none"
-      stroke="currentColor"
-      strokeLinecap="round"
-      strokeWidth="2"
-      viewBox="0 0 24 24"
-    >
-      <circle cx="11" cy="11" r="7" />
-      <path d="m16 16 5 5" />
-    </svg>
-  );
-}
-
 function FolderPane({ folders }: { folders: FolderRecord[] }) {
   return (
     <aside className="folder-pane" aria-label="등록 폴더 / Indexed folders">
@@ -197,9 +183,12 @@ export function App({
   onAddFolder,
   onSettings,
   onStatistics,
+  onDocumentSelect,
 }: AppProps) {
   const [locale, setLocale] = useState<Locale>(defaultLocale);
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [workspaceSelectedDocumentId, setWorkspaceSelectedDocumentId] =
+    useState(selectedDocumentId);
   const searchInput = useRef<HTMLInputElement>(null);
   const [leftWidth, setLeftWidth] = usePersistedWidth(
     LEFT_PANE_KEY,
@@ -248,6 +237,10 @@ export function App({
     ? Math.min(rightWidth, rightMaximumForLayout)
     : rightWidth;
   const compactHeader = workspaceWidth <= COMPACT_HEADER_BREAKPOINT;
+
+  useEffect(() => {
+    setWorkspaceSelectedDocumentId(selectedDocumentId);
+  }, [selectedDocumentId]);
 
   useEffect(() => {
     const handleShortcut = (event: KeyboardEvent) => {
@@ -309,34 +302,14 @@ export function App({
         </ResizablePane>
 
         <section className="center-pane" aria-label="검색 작업 공간 / Search workspace">
-          <section
-            className="search-panel"
-            role="search"
-            aria-label="파일 검색 / File search"
-          >
-            <h2>내 파일에서 찾기</h2>
-            <label className="search-field">
-              <SearchIcon />
-              <span className="sr-only">검색어 / Search query</span>
-              <input
-                ref={searchInput}
-                type="search"
-                placeholder="파일명이나 문서 속 단어를 입력하세요"
-              />
-              <kbd className="shortcut-hint" aria-hidden="true">
-                /
-              </kbd>
-            </label>
-          </section>
-          <div className="workspace-empty">
-            <div>
-              <strong>Anything in your files.</strong>
-              <p>
-                파일 이름과 문서 내용을 한곳에서 빠르게 검색하세요. 검색 데이터는
-                이 PC 안에 머뭅니다.
-              </p>
-            </div>
-          </div>
+          <SearchWorkspace
+            folders={folders}
+            onSelectDocument={(documentId) => {
+              setWorkspaceSelectedDocumentId(documentId);
+              onDocumentSelect?.(documentId);
+            }}
+            ref={searchInput}
+          />
           <IndexStatusController />
         </section>
 
@@ -350,7 +323,7 @@ export function App({
           resizeEdge="left"
           width={renderedRightWidth}
         >
-          <PreviewPane selectedDocumentId={selectedDocumentId} />
+          <PreviewPane selectedDocumentId={workspaceSelectedDocumentId} />
         </ResizablePane>
       </main>
       <footer className="app-status">

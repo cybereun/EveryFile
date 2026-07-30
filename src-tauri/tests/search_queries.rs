@@ -24,6 +24,16 @@ fn parses_combined_search_operators_without_sql_fragments() {
 }
 
 #[test]
+fn parses_explicit_any_term_operator() {
+    let parsed = ParsedQuery::parse("중간고사 OR 수행평가").unwrap();
+
+    assert_eq!(parsed.terms, ["중간고사", "수행평가"]);
+    assert!(parsed.match_any);
+    assert!(ParsedQuery::parse("OR 중간고사").is_err());
+    assert!(ParsedQuery::parse("중간고사 OR").is_err());
+}
+
+#[test]
 fn parser_handles_empty_escaped_near_korean_and_hostile_inputs() {
     let empty = ParsedQuery::parse(" \t ").unwrap();
     assert!(empty.is_empty());
@@ -159,6 +169,42 @@ fn filename_search_escapes_like_metacharacters_and_honors_sort_and_page_cap() {
     assert_eq!(response.total, 1);
     assert_eq!(response.hits[0].document_id, "doc-percent");
     assert!(!response.has_more);
+}
+
+#[test]
+fn any_term_search_and_confidence_sort_are_supported_in_both_modes() {
+    let fixture = Fixture::new();
+    fixture.insert_document(
+        "doc-alpha",
+        "folder-1",
+        r"C:\fixture\alpha.txt",
+        "alpha.txt",
+        "txt",
+        "2026-01-01T00:00:00Z",
+        1,
+        "",
+        "alpha only",
+    );
+    fixture.insert_document(
+        "doc-beta",
+        "folder-1",
+        r"C:\fixture\beta.txt",
+        "beta.txt",
+        "txt",
+        "2026-01-01T00:00:00Z",
+        1,
+        "",
+        "beta only",
+    );
+
+    let mut keyword = request("alpha OR beta", SearchMode::Keyword);
+    keyword.sort = "confidence".into();
+    let keyword_results = fixture.repository.search(&keyword).unwrap();
+    assert_eq!(keyword_results.total, 2);
+
+    let filename = request("alpha OR beta", SearchMode::Filename);
+    let filename_results = fixture.repository.search(&filename).unwrap();
+    assert_eq!(filename_results.total, 2);
 }
 
 #[test]

@@ -21,6 +21,9 @@ export const searchDocuments = (request: SearchRequest) =>
 export const cancelSearch = (requestId: string) =>
   invoke<boolean>("cancel_search", { requestId });
 
+export const openSourceFile = (documentId: string) =>
+  invoke<void>("open_source_file", { documentId });
+
 export const getPreview = (documentId: string) =>
   invoke<PreviewDocument>("get_preview", { documentId });
 

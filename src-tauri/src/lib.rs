@@ -61,6 +61,7 @@ pub fn run() {
             application::commands::get_index_status,
             application::commands::search_documents,
             application::commands::cancel_search,
+            application::commands::open_source_file,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

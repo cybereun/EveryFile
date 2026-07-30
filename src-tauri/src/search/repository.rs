@@ -191,9 +191,23 @@ impl SearchSql {
                     .iter()
                     .chain(parsed.terms.iter())
                     .collect::<Vec<_>>();
-                for value in positive {
-                    conditions.push("LOWER(d.file_name) LIKE LOWER(?) ESCAPE '\\'".into());
-                    values.push(format!("%{}%", escape_like(value)).into());
+                if parsed.match_any && !positive.is_empty() {
+                    let alternatives = positive
+                        .iter()
+                        .map(|value| {
+                            values.push(format!("%{}%", escape_like(value)).into());
+                            format!(
+                                "LOWER(d.file_name) LIKE LOWER(?{}) ESCAPE '\\'",
+                                values.len()
+                            )
+                        })
+                        .collect::<Vec<_>>();
+                    conditions.push(format!("({})", alternatives.join(" OR ")));
+                } else {
+                    for value in positive {
+                        conditions.push("LOWER(d.file_name) LIKE LOWER(?) ESCAPE '\\'".into());
+                        values.push(format!("%{}%", escape_like(value)).into());
+                    }
                 }
                 for value in &parsed.excluded_terms {
                     conditions.push("LOWER(d.file_name) NOT LIKE LOWER(?) ESCAPE '\\'".into());
@@ -377,8 +391,9 @@ fn add_date_filter(
 
 fn sort_clause(sort: &str, has_score: bool) -> Result<&'static str, SearchError> {
     match sort {
-        "relevance" if has_score => Ok("score ASC, d.modified_at DESC, d.id ASC"),
+        "relevance" | "confidence" if has_score => Ok("score ASC, d.modified_at DESC, d.id ASC"),
         "relevance" => Ok("d.file_name COLLATE NOCASE ASC, d.id ASC"),
+        "confidence" => Ok("d.file_name COLLATE NOCASE ASC, d.id ASC"),
         "newest" => Ok("d.modified_at DESC, d.id ASC"),
         "oldest" => Ok("d.modified_at ASC, d.id ASC"),
         "name" => Ok("d.file_name COLLATE NOCASE ASC, d.id ASC"),

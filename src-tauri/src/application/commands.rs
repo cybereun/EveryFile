@@ -5,6 +5,7 @@ use tauri::AppHandle;
 use tauri::State;
 use tauri_plugin_dialog::DialogExt;
 
+use crate::application::source_open::{open_indexed_source, SourceOpenError};
 use crate::domain::models::{FolderRecord, SearchRequest, SearchResponse};
 use crate::folders::repository::{FolderError, FolderRepository};
 use crate::indexing::{IndexStatus, IndexingError, JobId};
@@ -167,6 +168,14 @@ pub fn cancel_search(request_id: String, state: State<'_, AppState>) -> bool {
     state.searches.cancel(&request_id)
 }
 
+#[tauri::command]
+pub fn open_source_file(
+    document_id: String,
+    state: State<'_, AppState>,
+) -> Result<(), CommandError> {
+    open_indexed_source(&state.database, &document_id).map_err(CommandError::from)
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CommandError {
@@ -197,6 +206,12 @@ impl From<IndexingError> for CommandError {
 
 impl From<SearchError> for CommandError {
     fn from(error: SearchError) -> Self {
+        Self::new(error.code(), error.to_string())
+    }
+}
+
+impl From<SourceOpenError> for CommandError {
+    fn from(error: SourceOpenError) -> Self {
         Self::new(error.code(), error.to_string())
     }
 }

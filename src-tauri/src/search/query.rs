@@ -10,18 +10,31 @@ pub struct ParsedQuery {
     pub after: Option<String>,
     pub before: Option<String>,
     pub near: Option<u32>,
+    pub match_any: bool,
 }
 
 impl ParsedQuery {
     pub fn parse(input: &str) -> Result<Self, SearchError> {
         let mut parsed = Self::default();
-        for token in tokenize(input)? {
+        let tokens = tokenize(input)?;
+        for (index, token) in tokens.iter().enumerate() {
             if token.text.is_empty() {
                 continue;
             }
 
             if token.quoted {
-                parsed.phrases.push(token.text);
+                parsed.phrases.push(token.text.clone());
+            } else if token.text == "OR" {
+                let valid_neighbors = index > 0
+                    && index + 1 < tokens.len()
+                    && !is_any_operator(&tokens[index - 1])
+                    && !is_any_operator(&tokens[index + 1]);
+                if !valid_neighbors {
+                    return Err(SearchError::invalid_query(
+                        "OR must appear between positive search terms",
+                    ));
+                }
+                parsed.match_any = true;
             } else if let Some(value) = token.text.strip_prefix("ext:") {
                 for extension in value.split(',') {
                     parsed.extensions.push(validate_extension(extension)?);
@@ -53,12 +66,12 @@ impl ParsedQuery {
                 }
             } else if let Some(value) = token.text.strip_prefix('-') {
                 if value.is_empty() {
-                    parsed.terms.push(token.text);
+                    parsed.terms.push(token.text.clone());
                 } else {
                     parsed.excluded_terms.push(value.to_owned());
                 }
             } else {
-                parsed.terms.push(token.text);
+                parsed.terms.push(token.text.clone());
             }
         }
         if let (Some(after), Some(before)) = (parsed.after.as_deref(), parsed.before.as_deref()) {
@@ -71,6 +84,11 @@ impl ParsedQuery {
         if parsed.near.is_some() && parsed.terms.len() + parsed.phrases.len() < 2 {
             return Err(SearchError::invalid_query(
                 "near search requires at least two positive terms or phrases",
+            ));
+        }
+        if parsed.match_any && parsed.terms.len() + parsed.phrases.len() < 2 {
+            return Err(SearchError::invalid_query(
+                "OR requires at least two positive search terms",
             ));
         }
         Ok(parsed)
@@ -100,6 +118,8 @@ impl ParsedQuery {
 
         let positive_expression = if let Some(distance) = self.near.filter(|_| positive.len() > 1) {
             format!("NEAR({}, {distance})", positive.join(" "))
+        } else if self.match_any {
+            format!("({})", positive.join(" OR "))
         } else {
             positive.join(" AND ")
         };
@@ -144,6 +164,10 @@ impl ParsedQuery {
             })
             .collect()
     }
+}
+
+fn is_any_operator(token: &Token) -> bool {
+    !token.quoted && token.text == "OR"
 }
 
 pub(crate) fn validate_date(value: &str) -> Result<(), SearchError> {
