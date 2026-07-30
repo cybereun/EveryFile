@@ -5,10 +5,15 @@ use tauri::AppHandle;
 use tauri::State;
 use tauri_plugin_dialog::DialogExt;
 
-use crate::application::source_open::{open_indexed_source, SourceOpenError};
-use crate::domain::models::{FolderRecord, SearchRequest, SearchResponse};
+use crate::application::source_open::{
+    open_indexed_location, open_indexed_source, read_indexed_pdf, SourceOpenError,
+};
+use crate::domain::models::{
+    BookmarkRecord, FolderRecord, PreviewDocument, SearchRequest, SearchResponse, TagRecord,
+};
 use crate::folders::repository::{FolderError, FolderRepository};
 use crate::indexing::{IndexStatus, IndexingError, JobId};
+use crate::library::repository::{LibraryError, LibraryRepository};
 use crate::search::{SearchError, SearchRepository};
 use crate::{settings::AppSettings, state::AppState};
 
@@ -176,6 +181,127 @@ pub fn open_source_file(
     open_indexed_source(&state.database, &document_id).map_err(CommandError::from)
 }
 
+#[tauri::command]
+pub fn open_source_location(
+    document_id: String,
+    state: State<'_, AppState>,
+) -> Result<(), CommandError> {
+    open_indexed_location(&state.database, &document_id).map_err(CommandError::from)
+}
+
+#[tauri::command]
+pub fn get_preview(
+    document_id: String,
+    state: State<'_, AppState>,
+) -> Result<PreviewDocument, CommandError> {
+    LibraryRepository::new(state.database.clone())
+        .get_preview(&document_id)
+        .map_err(CommandError::from)
+}
+
+#[tauri::command]
+pub fn get_pdf_bytes(
+    document_id: String,
+    state: State<'_, AppState>,
+) -> Result<tauri::ipc::Response, CommandError> {
+    read_indexed_pdf(&state.database, &document_id)
+        .map(tauri::ipc::Response::new)
+        .map_err(CommandError::from)
+}
+
+#[tauri::command]
+pub fn set_bookmark(
+    document_id: String,
+    note: String,
+    state: State<'_, AppState>,
+) -> Result<BookmarkRecord, CommandError> {
+    LibraryRepository::new(state.database.clone())
+        .set_bookmark(&document_id, &note)
+        .map_err(CommandError::from)
+}
+
+#[tauri::command]
+pub fn remove_bookmark(
+    document_id: String,
+    state: State<'_, AppState>,
+) -> Result<(), CommandError> {
+    LibraryRepository::new(state.database.clone())
+        .remove_bookmark(&document_id)
+        .map_err(CommandError::from)
+}
+
+#[tauri::command]
+pub fn create_tag(
+    name: String,
+    color: String,
+    state: State<'_, AppState>,
+) -> Result<TagRecord, CommandError> {
+    LibraryRepository::new(state.database.clone())
+        .create_tag(&name, &color)
+        .map_err(CommandError::from)
+}
+
+#[tauri::command]
+pub fn set_document_tags(
+    document_id: String,
+    tag_ids: Vec<String>,
+    state: State<'_, AppState>,
+) -> Result<Vec<TagRecord>, CommandError> {
+    LibraryRepository::new(state.database.clone())
+        .set_document_tags(&document_id, &tag_ids)
+        .map_err(CommandError::from)
+}
+
+#[tauri::command]
+pub async fn save_markdown(
+    app: AppHandle,
+    document_id: String,
+    state: State<'_, AppState>,
+) -> Result<bool, CommandError> {
+    let (file_name, markdown) = LibraryRepository::new(state.database.clone())
+        .markdown(&document_id)
+        .map_err(CommandError::from)?;
+    let suggested_name = markdown_file_name(&file_name);
+    let selected = tauri::async_runtime::spawn_blocking(move || {
+        app.dialog()
+            .file()
+            .add_filter("Markdown", &["md"])
+            .set_file_name(suggested_name)
+            .blocking_save_file()
+    })
+    .await
+    .map_err(|error| CommandError::new("MARKDOWN_DIALOG_FAILED", error.to_string()))?;
+    let Some(selected) = selected else {
+        return Ok(false);
+    };
+    let path = selected
+        .into_path()
+        .map_err(|error| CommandError::new("MARKDOWN_PATH_INVALID", error.to_string()))?;
+    std::fs::write(path, markdown)
+        .map_err(|error| CommandError::new("MARKDOWN_SAVE_FAILED", error.to_string()))?;
+    Ok(true)
+}
+
+fn markdown_file_name(file_name: &str) -> String {
+    let stem = std::path::Path::new(file_name)
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("document");
+    let safe = stem
+        .chars()
+        .filter(|character| !r#"<>:"/\|?*"#.contains(*character) && !character.is_control())
+        .take(120)
+        .collect::<String>();
+    format!(
+        "{}.md",
+        if safe.trim().is_empty() {
+            "document"
+        } else {
+            &safe
+        }
+    )
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CommandError {
@@ -212,6 +338,12 @@ impl From<SearchError> for CommandError {
 
 impl From<SourceOpenError> for CommandError {
     fn from(error: SourceOpenError) -> Self {
+        Self::new(error.code(), error.to_string())
+    }
+}
+
+impl From<LibraryError> for CommandError {
+    fn from(error: LibraryError) -> Self {
         Self::new(error.code(), error.to_string())
     }
 }

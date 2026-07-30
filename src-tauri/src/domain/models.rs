@@ -99,10 +99,56 @@ pub struct SearchResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PreviewBlock {
+    #[serde(rename = "type")]
     pub kind: String,
     pub text: String,
     pub level: Option<u8>,
     pub page_number: Option<u32>,
+    pub href: Option<String>,
+    pub list_type: Option<String>,
+    pub children: Vec<PreviewBlock>,
+    pub table: Option<PreviewTable>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PreviewTable {
+    pub rows: u32,
+    pub cols: u32,
+    pub has_header: bool,
+    pub cells: Vec<Vec<PreviewCell>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PreviewCell {
+    pub text: String,
+    pub col_span: u32,
+    pub row_span: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PreviewWarning {
+    pub code: String,
+    pub message: String,
+    pub page: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TagRecord {
+    pub id: String,
+    pub name: String,
+    pub color: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct BookmarkRecord {
+    pub document_id: String,
+    pub note: String,
+    pub created_at: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -114,9 +160,10 @@ pub struct PreviewDocument {
     pub extension: String,
     pub markdown: String,
     pub blocks: Vec<PreviewBlock>,
-    pub warnings: Vec<String>,
+    pub warnings: Vec<PreviewWarning>,
     pub bookmarked: bool,
-    pub tags: Vec<String>,
+    pub bookmark_note: String,
+    pub tags: Vec<TagRecord>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

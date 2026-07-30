@@ -16,6 +16,8 @@ const RECONCILIATION_RUNS_MIGRATION: &str =
     include_str!("../../migrations/0004_reconciliation_runs.sql");
 const PARSE_ATTEMPT_OWNERSHIP_MIGRATION: &str =
     include_str!("../../migrations/0005_parse_attempt_ownership.sql");
+const LIBRARY_CONSTRAINTS_MIGRATION: &str =
+    include_str!("../../migrations/0006_library_constraints.sql");
 
 pub struct Database {
     connection: Mutex<Connection>,
@@ -86,6 +88,9 @@ impl Database {
                    ON documents(parse_attempt_token)
                    WHERE parse_attempt_token IS NOT NULL;",
             )
+            .map_err(DatabaseError::Migration)?;
+        transaction
+            .execute_batch(LIBRARY_CONSTRAINTS_MIGRATION)
             .map_err(DatabaseError::Migration)?;
         transaction.commit().map_err(DatabaseError::Migration)
     }

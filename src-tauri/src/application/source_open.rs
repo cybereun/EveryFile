@@ -1,5 +1,4 @@
 use std::path::{Path, PathBuf};
-#[cfg(not(windows))]
 use std::process::Command;
 
 use rusqlite::OptionalExtension;
@@ -118,6 +117,41 @@ pub fn open_indexed_source(database: &Database, document_id: &str) -> Result<(),
     let verified = verify_indexed_source(database, document_id)?;
     let source = verified.current_path()?;
     launch_source(&source)
+}
+
+pub fn open_indexed_location(
+    database: &Database,
+    document_id: &str,
+) -> Result<(), SourceOpenError> {
+    let verified = verify_indexed_source(database, document_id)?;
+    let source = verified.current_path()?;
+    launch_location(&source)
+}
+
+pub fn read_indexed_pdf(
+    database: &Database,
+    document_id: &str,
+) -> Result<Vec<u8>, SourceOpenError> {
+    const MAX_PDF_BYTES: u64 = 128 * 1024 * 1024;
+    let verified = verify_indexed_source(database, document_id)?;
+    let source = verified.current_path()?;
+    if source
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(|extension| !extension.eq_ignore_ascii_case("pdf"))
+        .unwrap_or(true)
+    {
+        return Err(SourceOpenError::NotPdf);
+    }
+    let metadata = std::fs::metadata(&source).map_err(SourceOpenError::Unavailable)?;
+    if metadata.len() > MAX_PDF_BYTES {
+        return Err(SourceOpenError::TooLarge);
+    }
+    let bytes = std::fs::read(&source).map_err(SourceOpenError::Unavailable)?;
+    if !bytes.starts_with(b"%PDF-") {
+        return Err(SourceOpenError::NotPdf);
+    }
+    Ok(bytes)
 }
 
 #[cfg(windows)]
@@ -286,9 +320,32 @@ fn launch_source(source: &Path) -> Result<(), SourceOpenError> {
         .map_err(|error| SourceOpenError::Launch(error.to_string()))
 }
 
+#[cfg(windows)]
+fn launch_location(source: &Path) -> Result<(), SourceOpenError> {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+    Command::new("explorer.exe")
+        .arg(format!("/select,{}", shell_path(source)))
+        .creation_flags(CREATE_NO_WINDOW)
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| SourceOpenError::Launch(error.to_string()))
+}
+
 #[cfg(target_os = "macos")]
 fn launch_source(source: &Path) -> Result<(), SourceOpenError> {
     Command::new("open")
+        .arg(source)
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| SourceOpenError::Launch(error.to_string()))
+}
+
+#[cfg(target_os = "macos")]
+fn launch_location(source: &Path) -> Result<(), SourceOpenError> {
+    Command::new("open")
+        .arg("-R")
         .arg(source)
         .spawn()
         .map(|_| ())
@@ -304,6 +361,16 @@ fn launch_source(source: &Path) -> Result<(), SourceOpenError> {
         .map_err(|error| SourceOpenError::Launch(error.to_string()))
 }
 
+#[cfg(all(not(windows), not(target_os = "macos")))]
+fn launch_location(source: &Path) -> Result<(), SourceOpenError> {
+    let parent = source.parent().ok_or(SourceOpenError::NotFile)?;
+    Command::new("xdg-open")
+        .arg(parent)
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| SourceOpenError::Launch(error.to_string()))
+}
+
 #[derive(Debug, Error)]
 pub enum SourceOpenError {
     #[error("indexed document was not found")]
@@ -314,6 +381,10 @@ pub enum SourceOpenError {
     Unavailable(#[source] std::io::Error),
     #[error("indexed source is not a file")]
     NotFile,
+    #[error("indexed source is not a PDF")]
+    NotPdf,
+    #[error("indexed PDF exceeds the preview size limit")]
+    TooLarge,
     #[error("indexed source resolved outside its registered folder")]
     OutsideRegisteredRoot,
     #[error("redirecting filesystem reparse points are not allowed")]
@@ -333,6 +404,8 @@ impl SourceOpenError {
             Self::DisabledFolder => "SOURCE_FOLDER_DISABLED",
             Self::Unavailable(_) => "SOURCE_UNAVAILABLE",
             Self::NotFile => "SOURCE_NOT_FILE",
+            Self::NotPdf => "SOURCE_NOT_PDF",
+            Self::TooLarge => "SOURCE_PDF_TOO_LARGE",
             Self::OutsideRegisteredRoot => "SOURCE_OUTSIDE_REGISTERED_ROOT",
             Self::RedirectingReparsePoint => "SOURCE_REDIRECTING_REPARSE_POINT",
             Self::Platform(_) => "SOURCE_VERIFICATION_FAILED",

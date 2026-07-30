@@ -63,10 +63,45 @@ export interface SearchResponse {
 }
 
 export interface PreviewBlock {
-  kind: string;
+  type: "paragraph" | "table" | "heading" | "list" | "image" | "separator";
   text: string;
   level: number | null;
   pageNumber: number | null;
+  href?: string | null;
+  listType?: "ordered" | "unordered" | null;
+  children?: PreviewBlock[];
+  table?: PreviewTable | null;
+}
+
+export interface PreviewTable {
+  rows: number;
+  cols: number;
+  hasHeader: boolean;
+  cells: PreviewCell[][];
+}
+
+export interface PreviewCell {
+  text: string;
+  colSpan: number;
+  rowSpan: number;
+}
+
+export interface PreviewWarning {
+  code: string;
+  message: string;
+  page: number | null;
+}
+
+export interface Tag {
+  id: string;
+  name: string;
+  color: string;
+}
+
+export interface Bookmark {
+  documentId: string;
+  note: string;
+  createdAt: string;
 }
 
 export interface PreviewDocument {
@@ -76,9 +111,10 @@ export interface PreviewDocument {
   extension: string;
   markdown: string;
   blocks: PreviewBlock[];
-  warnings: string[];
+  warnings: PreviewWarning[];
   bookmarked: boolean;
-  tags: string[];
+  bookmarkNote: string;
+  tags: Tag[];
 }
 
 export interface IndexStatus {

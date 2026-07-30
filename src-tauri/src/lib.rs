@@ -3,6 +3,7 @@ pub mod domain;
 pub mod folders;
 pub mod indexing;
 pub mod infrastructure;
+pub mod library;
 pub mod parsing;
 pub mod search;
 pub mod settings;
@@ -62,6 +63,14 @@ pub fn run() {
             application::commands::search_documents,
             application::commands::cancel_search,
             application::commands::open_source_file,
+            application::commands::open_source_location,
+            application::commands::get_preview,
+            application::commands::get_pdf_bytes,
+            application::commands::set_bookmark,
+            application::commands::remove_bookmark,
+            application::commands::create_tag,
+            application::commands::set_document_tags,
+            application::commands::save_markdown,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

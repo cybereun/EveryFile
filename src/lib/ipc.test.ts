@@ -7,16 +7,23 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke }));
 import {
   cancelSearch,
   cancelIndexing,
+  createTag,
+  getPdfBytes,
   getIndexStatus,
   getPreview,
   getSettings,
   listFolders,
   openSourceFile,
+  openSourceLocation,
   pauseIndexing,
   resumeIndexing,
+  removeBookmark,
+  saveMarkdown,
   saveSettings,
   searchDocuments,
   startIndexing,
+  setBookmark,
+  setDocumentTags,
 } from "./ipc";
 import type { AppSettings, SearchRequest } from "./types";
 
@@ -58,7 +65,14 @@ describe("IPC wrappers", () => {
     await searchDocuments(request);
     await cancelSearch("search-1");
     await openSourceFile("document-1");
+    await openSourceLocation("document-1");
     await getPreview("document-1");
+    await getPdfBytes("document-1");
+    await setBookmark("document-1", "note");
+    await removeBookmark("document-1");
+    await createTag("Work", "terracotta");
+    await setDocumentTags("document-1", ["tag-1"]);
+    await saveMarkdown("document-1");
     await startIndexing("folder-1");
     await pauseIndexing("job-1");
     await resumeIndexing("job-1");
@@ -72,7 +86,14 @@ describe("IPC wrappers", () => {
       ["search_documents", { request }],
       ["cancel_search", { requestId: "search-1" }],
       ["open_source_file", { documentId: "document-1" }],
+      ["open_source_location", { documentId: "document-1" }],
       ["get_preview", { documentId: "document-1" }],
+      ["get_pdf_bytes", { documentId: "document-1" }],
+      ["set_bookmark", { documentId: "document-1", note: "note" }],
+      ["remove_bookmark", { documentId: "document-1" }],
+      ["create_tag", { name: "Work", color: "terracotta" }],
+      ["set_document_tags", { documentId: "document-1", tagIds: ["tag-1"] }],
+      ["save_markdown", { documentId: "document-1" }],
       ["start_indexing", { folderId: "folder-1" }],
       ["pause_indexing", { jobId: "job-1" }],
       ["resume_indexing", { jobId: "job-1" }],

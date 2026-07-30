@@ -710,28 +710,284 @@ select:focus-visible,
 }
 
 .preview-pane {
+  position: relative;
   display: flex;
   height: 100%;
   min-height: 0;
   flex-direction: column;
-  padding: 1rem;
+  padding: 0;
   border-left: 0;
   background: var(--color-surface);
 }
 
-.preview-card {
+.preview-empty,
+.preview-message,
+.preview-layout-unavailable {
+  display: grid;
+  min-height: 0;
+  flex: 1 1 auto;
+  padding: 1rem;
+  place-content: center;
+  color: var(--color-text-muted);
+  text-align: center;
+}
+
+.preview-title {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.72rem 0.85rem;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.preview-title strong {
+  overflow: hidden;
+  flex: 1 1 auto;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.preview-title span {
+  padding: 0.16rem 0.42rem;
+  border-radius: 4px;
+  background: var(--color-surface-muted);
+  color: var(--color-text-muted);
+  font-size: 0.7rem;
+  font-weight: 700;
+}
+
+.preview-toolbar {
+  position: relative;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.5rem 0.65rem;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.preview-toolbar button,
+.preview-tabs button,
+.document-find button,
+.pdf-controls button,
+.tag-editor button,
+.tag-editor input,
+.tag-editor select,
+.preview-layout-unavailable button {
+  min-height: 2rem;
+  padding: 0.28rem 0.55rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+}
+
+.preview-more {
+  position: relative;
+  margin-left: auto;
+}
+
+.preview-more-menu {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 0.35rem);
+  right: 0;
+  display: grid;
+  width: 12rem;
+  padding: 0.4rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-popover);
+}
+
+.preview-more-menu button {
+  border-color: transparent;
+  text-align: left;
+}
+
+.preview-more-menu button:hover {
+  background: var(--color-surface-muted);
+}
+
+.preview-tabs {
+  display: flex;
+  gap: 0.25rem;
+  padding: 0.45rem 0.65rem 0;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface-muted);
+}
+
+.preview-tabs button {
+  border-bottom-right-radius: 0;
+  border-bottom-left-radius: 0;
+}
+
+.preview-tabs button[aria-selected="true"] {
+  border-color: var(--color-text-muted);
+  background: var(--color-surface);
+  font-weight: 700;
+}
+
+.preview-content {
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+}
+
+.document-text-view {
+  position: relative;
+  height: 100%;
+  overflow: auto;
+}
+
+.document-find {
+  position: sticky;
+  z-index: 3;
+  top: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.45rem;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface);
+  box-shadow: 0 4px 8px rgb(70 55 45 / 7%);
+}
+
+.document-find input {
+  min-width: 0;
+  flex: 1 1 auto;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+}
+
+.document-find span {
+  flex: 0 0 auto;
+  color: var(--color-text-muted);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.document-blocks {
+  padding: 1rem 1.15rem 3rem;
+  line-height: 1.72;
+  overflow-wrap: anywhere;
+}
+
+.document-blocks h1,
+.document-blocks h2,
+.document-blocks h3,
+.document-blocks h4,
+.document-blocks h5,
+.document-blocks h6 {
+  line-height: 1.35;
+}
+
+.document-blocks mark {
+  border-radius: 3px;
+  background: var(--color-highlight);
+  color: inherit;
+}
+
+.document-blocks mark.is-active {
+  outline: 2px solid var(--color-accent);
+}
+
+.document-table-scroll {
+  max-width: 100%;
+  overflow: auto;
+}
+
+.document-blocks table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.document-blocks th,
+.document-blocks td {
+  padding: 0.45rem;
+  border: 1px solid var(--color-border);
+  text-align: left;
+  vertical-align: top;
+}
+
+.document-blocks th {
+  background: var(--color-surface-muted);
+}
+
+.preview-inline-error,
+.preview-message--error {
+  padding: 0.45rem 0.65rem;
+  color: var(--color-accent);
+  font-size: 0.78rem;
+}
+
+.tag-editor {
+  position: absolute;
+  z-index: 30;
+  top: 7.5rem;
+  right: 0.75rem;
+  left: 0.75rem;
+  display: grid;
+  gap: 0.65rem;
+  padding: 0.8rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-popover);
+}
+
+.tag-editor__heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.tag-editor label {
+  display: grid;
+  gap: 0.25rem;
+  color: var(--color-text-muted);
+  font-size: 0.78rem;
+}
+
+.pdf-layout-view {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  flex-direction: column;
+  background: #ded8ce;
+}
+
+.pdf-controls {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  gap: 0.3rem;
+  padding: 0.45rem;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface);
+}
+
+.pdf-controls span {
+  color: var(--color-text-muted);
+  font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.pdf-canvas-wrap {
   min-height: 0;
   flex: 1 1 auto;
   overflow: auto;
-  padding: 1rem;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  background: linear-gradient(150deg, #fffdf8, var(--color-surface));
+  padding: 0.75rem;
+  text-align: center;
 }
 
-.preview-card p {
-  color: var(--color-text);
-  line-height: 1.6;
+.pdf-canvas-wrap canvas {
+  max-width: none;
+  background: white;
+  box-shadow: 0 2px 12px rgb(30 25 20 / 18%);
 }
 
 .app-status {

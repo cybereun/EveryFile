@@ -1,0 +1,149 @@
+use std::sync::Arc;
+
+use everyfile_lib::infrastructure::database::Database;
+use everyfile_lib::infrastructure::secure_key::SecretKey;
+use everyfile_lib::library::repository::{LibraryError, LibraryRepository};
+use rusqlite::params;
+use tempfile::TempDir;
+use zeroize::Zeroizing;
+
+#[test]
+fn bookmark_updates_note_without_duplicating_the_document() {
+    let fixture = Fixture::new();
+    fixture.seed_document("doc-1", "report.pdf");
+
+    fixture.library.set_bookmark("doc-1", "첫 메모").unwrap();
+    fixture.library.set_bookmark("doc-1", "수정 메모").unwrap();
+
+    let bookmarks = fixture.library.list_bookmarks().unwrap();
+    assert_eq!(bookmarks.len(), 1);
+    assert_eq!(bookmarks[0].document_id, "doc-1");
+    assert_eq!(bookmarks[0].note, "수정 메모");
+}
+
+#[test]
+fn tags_are_case_insensitively_unique_and_reject_unapproved_colors() {
+    let fixture = Fixture::new();
+    let tag = fixture.library.create_tag("Work", "terracotta").unwrap();
+    let duplicate = fixture.library.create_tag(" work ", "amber").unwrap();
+
+    assert_eq!(duplicate.id, tag.id);
+    assert_eq!(duplicate.name, "Work");
+    assert!(matches!(
+        fixture.library.create_tag("Private", "#fff"),
+        Err(LibraryError::InvalidTagColor)
+    ));
+}
+
+#[test]
+fn document_tags_are_replaced_atomically_and_cascade_with_documents() {
+    let fixture = Fixture::new();
+    fixture.seed_document("doc-1", "report.pdf");
+    let work = fixture.library.create_tag("Work", "terracotta").unwrap();
+    let review = fixture.library.create_tag("Review", "amber").unwrap();
+
+    fixture
+        .library
+        .set_document_tags("doc-1", &[work.id.clone(), review.id.clone()])
+        .unwrap();
+    let tags = fixture
+        .library
+        .set_document_tags("doc-1", std::slice::from_ref(&review.id))
+        .unwrap();
+    assert_eq!(tags.len(), 1);
+    assert_eq!(tags[0].id, review.id);
+
+    fixture
+        .database
+        .connection()
+        .execute("DELETE FROM documents WHERE id = 'doc-1'", [])
+        .unwrap();
+    let relation_count: i64 = fixture
+        .database
+        .connection()
+        .query_row("SELECT COUNT(*) FROM document_tags", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(relation_count, 0);
+}
+
+#[test]
+fn preview_normalizes_untrusted_parser_blocks_and_warnings() {
+    let fixture = Fixture::new();
+    fixture.seed_document("doc-1", "unsafe.pdf");
+    fixture
+        .database
+        .connection()
+        .execute(
+            "INSERT INTO document_content
+             (document_id, title, body, markdown, blocks_json, warnings_json)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                "doc-1",
+                "<img onerror=alert(1)>",
+                "body",
+                "# title",
+                r#"[{"type":"heading","text":"<script>x</script>","level":99,"href":"javascript:alert(1)"},{"type":"table","table":{"rows":1,"cols":1,"hasHeader":true,"cells":[[{"text":"cell","colSpan":1,"rowSpan":1}]]}}]"#,
+                r#"[{"code":"PARTIAL_PARSE","message":"warning","page":1}]"#,
+            ],
+        )
+        .unwrap();
+
+    let preview = fixture.library.get_preview("doc-1").unwrap();
+
+    assert_eq!(preview.document_id, "doc-1");
+    assert_eq!(preview.blocks[0].kind, "heading");
+    assert_eq!(preview.blocks[0].level, Some(6));
+    assert_eq!(preview.blocks[0].href, None);
+    assert_eq!(
+        preview.blocks[1].table.as_ref().unwrap().cells[0][0].text,
+        "cell"
+    );
+    assert_eq!(preview.warnings[0].code, "PARTIAL_PARSE");
+}
+
+struct Fixture {
+    _temp: TempDir,
+    database: Arc<Database>,
+    library: LibraryRepository,
+}
+
+impl Fixture {
+    fn new() -> Self {
+        let temp = tempfile::tempdir().unwrap();
+        let key = SecretKey::from_bytes(Zeroizing::new([61_u8; 32]));
+        let database = Arc::new(Database::open(&temp.path().join("library.db"), &key).unwrap());
+        database.migrate().unwrap();
+        let library = LibraryRepository::new(Arc::clone(&database));
+        Self {
+            _temp: temp,
+            database,
+            library,
+        }
+    }
+
+    fn seed_document(&self, id: &str, file_name: &str) {
+        let root = self._temp.path().join("documents");
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join(file_name);
+        std::fs::write(&path, b"%PDF-1.7").unwrap();
+        let connection = self.database.connection();
+        connection
+            .execute(
+                "INSERT OR IGNORE INTO folders
+                 (id, canonical_path, display_name, created_at, enabled)
+                 VALUES ('folder-1', ?1, 'Documents', '2026-01-01T00:00:00Z', 1)",
+                [root.to_string_lossy().as_ref()],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO documents
+                 (id, folder_id, canonical_path, file_name, extension, size_bytes,
+                  modified_at, parse_state)
+                 VALUES (?1, 'folder-1', ?2, ?3, 'pdf', 8,
+                         '2026-01-01T00:00:00Z', 'parsed')",
+                params![id, path.to_string_lossy().as_ref(), file_name],
+            )
+            .unwrap();
+    }
+}

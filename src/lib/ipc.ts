@@ -3,9 +3,11 @@ import type {
   AppSettings,
   FolderRecord,
   IndexStatus,
+  Bookmark,
   PreviewDocument,
   SearchRequest,
   SearchResponse,
+  Tag,
 } from "./types";
 
 export const getSettings = () => invoke<AppSettings>("get_settings");
@@ -26,6 +28,27 @@ export const openSourceFile = (documentId: string) =>
 
 export const getPreview = (documentId: string) =>
   invoke<PreviewDocument>("get_preview", { documentId });
+
+export const getPdfBytes = (documentId: string) =>
+  invoke<ArrayBuffer>("get_pdf_bytes", { documentId });
+
+export const openSourceLocation = (documentId: string) =>
+  invoke<void>("open_source_location", { documentId });
+
+export const setBookmark = (documentId: string, note: string) =>
+  invoke<Bookmark>("set_bookmark", { documentId, note });
+
+export const removeBookmark = (documentId: string) =>
+  invoke<void>("remove_bookmark", { documentId });
+
+export const createTag = (name: string, color: string) =>
+  invoke<Tag>("create_tag", { name, color });
+
+export const setDocumentTags = (documentId: string, tagIds: string[]) =>
+  invoke<Tag[]>("set_document_tags", { documentId, tagIds });
+
+export const saveMarkdown = (documentId: string) =>
+  invoke<boolean>("save_markdown", { documentId });
 
 export const startIndexing = (folderId: string) =>
   invoke<string>("start_indexing", { folderId });

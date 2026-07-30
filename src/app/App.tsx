@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ResizablePane } from "../components/ResizablePane";
 import { IndexStatusController } from "../features/folders/IndexStatus";
+import { PreviewPanel } from "../features/preview/PreviewPanel";
 import { SearchWorkspace } from "../features/search/SearchWorkspace";
 import type { FolderRecord } from "../lib/types";
 import "../styles/app.css";
@@ -138,33 +139,6 @@ function FolderPane({ folders }: { folders: FolderRecord[] }) {
         </div>
       )}
     </aside>
-  );
-}
-
-function PreviewPane({ selectedDocumentId }: { selectedDocumentId: string | null }) {
-  return (
-    <section
-      className="preview-pane"
-      aria-label="문서 미리보기 / Document preview"
-    >
-      <div className="pane-heading">
-        <h2>미리보기</h2>
-      </div>
-      <div className="preview-card">
-        {selectedDocumentId ? (
-          <>
-            <strong>선택한 문서</strong>
-            <p>
-              문서 ID: {selectedDocumentId}
-              <br />
-              파싱된 문서 내용은 이 영역에서 안전한 텍스트로 표시됩니다.
-            </p>
-          </>
-        ) : (
-          <p>검색 결과에서 파일을 선택하면 이곳에서 내용을 확인할 수 있습니다.</p>
-        )}
-      </div>
-    </section>
   );
 }
 
@@ -323,7 +297,7 @@ export function App({
           resizeEdge="left"
           width={renderedRightWidth}
         >
-          <PreviewPane selectedDocumentId={workspaceSelectedDocumentId} />
+          <PreviewPanel documentId={workspaceSelectedDocumentId} />
         </ResizablePane>
       </main>
       <footer className="app-status">
