@@ -4,6 +4,7 @@ pub mod folders;
 pub mod indexing;
 pub mod infrastructure;
 pub mod parsing;
+pub mod search;
 pub mod settings;
 pub mod state;
 
@@ -58,6 +59,7 @@ pub fn run() {
             application::commands::resume_indexing,
             application::commands::cancel_indexing,
             application::commands::get_index_status,
+            application::commands::search_documents,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

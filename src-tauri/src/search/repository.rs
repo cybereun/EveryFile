@@ -1,0 +1,433 @@
+use std::sync::Arc;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
+
+use rand::RngExt;
+use rusqlite::types::Value;
+use rusqlite::{params, params_from_iter};
+use serde::Serialize;
+use thiserror::Error;
+
+use crate::domain::models::{SearchHit, SearchMode, SearchRequest, SearchResponse};
+use crate::indexing::ActivityLimiter;
+use crate::infrastructure::database::Database;
+
+use super::query::{validate_date, validate_extension};
+use super::ParsedQuery;
+
+const DEFAULT_PAGE_SIZE: u32 = 100;
+const MAX_PAGE_SIZE: u32 = 200;
+
+#[derive(Clone)]
+pub struct SearchRepository {
+    database: Arc<Database>,
+    limiter: ActivityLimiter,
+}
+
+impl SearchRepository {
+    pub fn new(database: Arc<Database>, limiter: ActivityLimiter) -> Self {
+        Self { database, limiter }
+    }
+
+    pub fn search(&self, request: &SearchRequest) -> Result<SearchResponse, SearchError> {
+        let _foreground = self.limiter.begin_foreground();
+        let started = Instant::now();
+        validate_request(request)?;
+        let parsed = ParsedQuery::parse(&request.query)?;
+        let limit = if request.limit == 0 {
+            DEFAULT_PAGE_SIZE
+        } else {
+            request.limit.min(MAX_PAGE_SIZE)
+        };
+        let query = SearchSql::build(request, &parsed)?;
+        let connection = self.database.connection();
+
+        let total = connection.query_row(
+            &query.count_sql,
+            params_from_iter(query.filter_values.iter()),
+            |row| row.get::<_, i64>(0),
+        )?;
+        let mut hit_values = query.filter_values.clone();
+        hit_values.push(Value::Integer(i64::from(limit)));
+        hit_values.push(Value::Integer(i64::from(request.offset)));
+        let mut statement = connection.prepare(&query.hits_sql)?;
+        let hits = statement
+            .query_map(params_from_iter(hit_values.iter()), |row| {
+                let size_bytes = row.get::<_, i64>(4)?;
+                Ok(SearchHit {
+                    document_id: row.get(0)?,
+                    file_name: row.get(1)?,
+                    path: row.get(2)?,
+                    extension: row.get(3)?,
+                    size_bytes: u64::try_from(size_bytes).unwrap_or_default(),
+                    modified_at: row.get(5)?,
+                    snippet: row.get(6)?,
+                    score: row.get(7)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        let total = u64::try_from(total).unwrap_or_default();
+        let has_more = u64::from(request.offset).saturating_add(hits.len() as u64) < total;
+
+        if !request.private_search && !request.query.trim().is_empty() {
+            let filters_json = serde_json::to_string(&HistoryFilters::from(request, &parsed))?;
+            connection.execute(
+                "INSERT INTO search_history
+                 (id, query, mode, filters_json, result_count, elapsed_ms, searched_at, private)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6,
+                         strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), 0)",
+                params![
+                    random_id(),
+                    request.query,
+                    mode_name(&request.mode),
+                    filters_json,
+                    i64::try_from(total).unwrap_or(i64::MAX),
+                    i64::try_from(elapsed_ms).unwrap_or(i64::MAX),
+                ],
+            )?;
+        }
+
+        Ok(SearchResponse {
+            hits,
+            total,
+            elapsed_ms,
+            applied_filters: query.applied_filters,
+            has_more,
+        })
+    }
+}
+
+struct SearchSql {
+    count_sql: String,
+    hits_sql: String,
+    filter_values: Vec<Value>,
+    applied_filters: Vec<String>,
+}
+
+impl SearchSql {
+    fn build(request: &SearchRequest, parsed: &ParsedQuery) -> Result<Self, SearchError> {
+        let mut conditions = Vec::new();
+        let mut values = Vec::new();
+        let mut applied_filters = Vec::new();
+        let mut fts = false;
+
+        match request.mode {
+            SearchMode::Keyword => {
+                if let Some(expression) = parsed.fts_match_expression(request.include_filename) {
+                    conditions.push("document_fts MATCH ?".to_owned());
+                    values.push(expression.into());
+                    applied_filters.push("query".into());
+                    fts = true;
+                } else {
+                    for expression in parsed.excluded_fts_expressions(request.include_filename) {
+                        conditions.push(
+                            "NOT EXISTS (
+                               SELECT 1 FROM document_fts
+                               WHERE document_fts.document_id = d.id
+                                 AND document_fts MATCH ?
+                             )"
+                            .into(),
+                        );
+                        values.push(expression.into());
+                    }
+                    if !parsed.excluded_terms.is_empty() {
+                        applied_filters.push("query".into());
+                    }
+                }
+                if !request.include_filename {
+                    applied_filters.push("contentOnly".into());
+                }
+            }
+            SearchMode::Filename => {
+                let positive = parsed
+                    .phrases
+                    .iter()
+                    .chain(parsed.terms.iter())
+                    .collect::<Vec<_>>();
+                for value in positive {
+                    conditions.push("LOWER(d.file_name) LIKE LOWER(?) ESCAPE '\\'".into());
+                    values.push(format!("%{}%", escape_like(value)).into());
+                }
+                for value in &parsed.excluded_terms {
+                    conditions.push("LOWER(d.file_name) NOT LIKE LOWER(?) ESCAPE '\\'".into());
+                    values.push(format!("%{}%", escape_like(value)).into());
+                }
+                if !parsed.terms.is_empty()
+                    || !parsed.phrases.is_empty()
+                    || !parsed.excluded_terms.is_empty()
+                {
+                    applied_filters.push("query".into());
+                }
+            }
+        }
+
+        add_list_filter(
+            &mut conditions,
+            &mut values,
+            &mut applied_filters,
+            "d.folder_id",
+            &request.folder_ids,
+            "folder",
+        );
+        add_list_filter(
+            &mut conditions,
+            &mut values,
+            &mut applied_filters,
+            "LOWER(d.extension)",
+            &request
+                .extensions
+                .iter()
+                .map(|extension| validate_extension(extension))
+                .collect::<Result<Vec<_>, _>>()?,
+            "extension",
+        );
+        add_list_filter(
+            &mut conditions,
+            &mut values,
+            &mut applied_filters,
+            "LOWER(d.extension)",
+            &parsed.extensions,
+            "extension",
+        );
+        for path_term in &parsed.path_terms {
+            conditions.push("d.canonical_path LIKE ? ESCAPE '\\'".into());
+            values.push(format!("%{}%", escape_like(path_term)).into());
+        }
+        if !parsed.path_terms.is_empty() {
+            applied_filters.push("path".into());
+        }
+        add_date_filter(
+            &mut conditions,
+            &mut values,
+            &mut applied_filters,
+            request.modified_after.as_deref(),
+            ">=",
+            "after",
+        )?;
+        add_date_filter(
+            &mut conditions,
+            &mut values,
+            &mut applied_filters,
+            parsed.after.as_deref(),
+            ">=",
+            "after",
+        )?;
+        add_date_filter(
+            &mut conditions,
+            &mut values,
+            &mut applied_filters,
+            request.modified_before.as_deref(),
+            "<=",
+            "before",
+        )?;
+        add_date_filter(
+            &mut conditions,
+            &mut values,
+            &mut applied_filters,
+            parsed.before.as_deref(),
+            "<=",
+            "before",
+        )?;
+
+        let from = if fts {
+            "FROM document_fts JOIN documents d ON d.id = document_fts.document_id"
+        } else {
+            "FROM documents d"
+        };
+        let where_clause = if conditions.is_empty() {
+            String::new()
+        } else {
+            format!(" WHERE {}", conditions.join(" AND "))
+        };
+        let score = if fts { "bm25(document_fts)" } else { "0.0" };
+        let snippet = if fts {
+            "snippet(document_fts, 3, '<mark>', '</mark>', '…', 24)"
+        } else {
+            "NULL"
+        };
+        let order = sort_clause(&request.sort, fts)?;
+        let count_sql = format!("SELECT COUNT(*) {from}{where_clause}");
+        let limit_parameter = values.len() + 1;
+        let offset_parameter = values.len() + 2;
+        let hits_sql = format!(
+            "SELECT d.id, d.file_name, d.canonical_path, d.extension, d.size_bytes,
+                    d.modified_at, {snippet}, {score} AS score
+             {from}{where_clause}
+             ORDER BY {order}
+             LIMIT ?{limit_parameter} OFFSET ?{offset_parameter}"
+        );
+        Ok(Self {
+            count_sql,
+            hits_sql,
+            filter_values: values,
+            applied_filters,
+        })
+    }
+}
+
+fn validate_request(request: &SearchRequest) -> Result<(), SearchError> {
+    sort_clause(&request.sort, matches!(request.mode, SearchMode::Keyword))?;
+    if let (Some(after), Some(before)) = (
+        request.modified_after.as_deref(),
+        request.modified_before.as_deref(),
+    ) {
+        validate_date(after)?;
+        validate_date(before)?;
+        if after > before {
+            return Err(SearchError::invalid_request(
+                "modified-after date cannot follow modified-before date",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn add_list_filter(
+    conditions: &mut Vec<String>,
+    values: &mut Vec<Value>,
+    applied_filters: &mut Vec<String>,
+    column: &str,
+    items: &[String],
+    label: &str,
+) {
+    if items.is_empty() {
+        return;
+    }
+    let placeholders = items
+        .iter()
+        .map(|item| {
+            values.push(item.clone().into());
+            format!("?{}", values.len())
+        })
+        .collect::<Vec<_>>();
+    conditions.push(format!("{column} IN ({})", placeholders.join(", ")));
+    if !applied_filters.iter().any(|filter| filter == label) {
+        applied_filters.push(label.to_owned());
+    }
+}
+
+fn add_date_filter(
+    conditions: &mut Vec<String>,
+    values: &mut Vec<Value>,
+    applied_filters: &mut Vec<String>,
+    value: Option<&str>,
+    operator: &str,
+    label: &str,
+) -> Result<(), SearchError> {
+    if let Some(value) = value {
+        validate_date(value)?;
+        values.push(value.to_owned().into());
+        conditions.push(format!(
+            "substr(d.modified_at, 1, 10) {operator} ?{}",
+            values.len()
+        ));
+        if !applied_filters.iter().any(|filter| filter == label) {
+            applied_filters.push(label.to_owned());
+        }
+    }
+    Ok(())
+}
+
+fn sort_clause(sort: &str, has_score: bool) -> Result<&'static str, SearchError> {
+    match sort {
+        "relevance" if has_score => Ok("score ASC, d.modified_at DESC, d.id ASC"),
+        "relevance" => Ok("d.file_name COLLATE NOCASE ASC, d.id ASC"),
+        "newest" => Ok("d.modified_at DESC, d.id ASC"),
+        "oldest" => Ok("d.modified_at ASC, d.id ASC"),
+        "name" => Ok("d.file_name COLLATE NOCASE ASC, d.id ASC"),
+        "size" => Ok("d.size_bytes DESC, d.id ASC"),
+        _ => Err(SearchError::invalid_request("unsupported search sort")),
+    }
+}
+
+fn escape_like(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_")
+}
+
+fn mode_name(mode: &SearchMode) -> &'static str {
+    match mode {
+        SearchMode::Keyword => "keyword",
+        SearchMode::Filename => "filename",
+    }
+}
+
+fn random_id() -> String {
+    let random = rand::rng().random::<[u8; 16]>();
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let suffix = random
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    format!("search-{timestamp:x}-{suffix}")
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HistoryFilters<'a> {
+    folder_ids: &'a [String],
+    extensions: &'a [String],
+    parsed_extensions: &'a [String],
+    path_terms: &'a [String],
+    modified_after: Option<&'a str>,
+    modified_before: Option<&'a str>,
+    include_filename: bool,
+    sort: &'a str,
+}
+
+impl<'a> HistoryFilters<'a> {
+    fn from(request: &'a SearchRequest, parsed: &'a ParsedQuery) -> Self {
+        Self {
+            folder_ids: &request.folder_ids,
+            extensions: &request.extensions,
+            parsed_extensions: &parsed.extensions,
+            path_terms: &parsed.path_terms,
+            modified_after: request
+                .modified_after
+                .as_deref()
+                .or(parsed.after.as_deref()),
+            modified_before: request
+                .modified_before
+                .as_deref()
+                .or(parsed.before.as_deref()),
+            include_filename: request.include_filename,
+            sort: &request.sort,
+        }
+    }
+}
+
+#[derive(Debug, Error)]
+pub enum SearchError {
+    #[error("invalid search query: {0}")]
+    InvalidQuery(String),
+    #[error("invalid search request: {0}")]
+    InvalidRequest(String),
+    #[error("search database operation failed")]
+    Database(#[from] rusqlite::Error),
+    #[error("search history serialization failed")]
+    Serialization(#[from] serde_json::Error),
+}
+
+impl SearchError {
+    pub(crate) fn invalid_query(message: impl Into<String>) -> Self {
+        Self::InvalidQuery(message.into())
+    }
+
+    fn invalid_request(message: impl Into<String>) -> Self {
+        Self::InvalidRequest(message.into())
+    }
+
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::InvalidQuery(_) => "SEARCH_QUERY_INVALID",
+            Self::InvalidRequest(_) => "SEARCH_REQUEST_INVALID",
+            Self::Database(_) => "SEARCH_DATABASE_FAILED",
+            Self::Serialization(_) => "SEARCH_HISTORY_FAILED",
+        }
+    }
+}

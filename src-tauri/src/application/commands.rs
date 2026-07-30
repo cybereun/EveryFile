@@ -5,9 +5,10 @@ use tauri::AppHandle;
 use tauri::State;
 use tauri_plugin_dialog::DialogExt;
 
-use crate::domain::models::FolderRecord;
+use crate::domain::models::{FolderRecord, SearchRequest, SearchResponse};
 use crate::folders::repository::{FolderError, FolderRepository};
 use crate::indexing::{IndexStatus, IndexingError, JobId};
+use crate::search::{SearchError, SearchRepository};
 use crate::{settings::AppSettings, state::AppState};
 
 #[tauri::command]
@@ -142,6 +143,16 @@ pub async fn get_index_status(
         .map_err(CommandError::from)
 }
 
+#[tauri::command]
+pub fn search_documents(
+    request: SearchRequest,
+    state: State<'_, AppState>,
+) -> Result<SearchResponse, CommandError> {
+    SearchRepository::new(state.database.clone(), state.indexing.activity_limiter())
+        .search(&request)
+        .map_err(CommandError::from)
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CommandError {
@@ -166,6 +177,12 @@ impl From<FolderError> for CommandError {
 
 impl From<IndexingError> for CommandError {
     fn from(error: IndexingError) -> Self {
+        Self::new(error.code(), error.to_string())
+    }
+}
+
+impl From<SearchError> for CommandError {
+    fn from(error: SearchError) -> Self {
         Self::new(error.code(), error.to_string())
     }
 }
