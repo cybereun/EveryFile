@@ -52,6 +52,25 @@ function nextRequestId() {
 }
 
 function safePdfError(caught: unknown) {
+  const code =
+    caught && typeof caught === "object" && "code" in caught
+      ? String(caught.code)
+      : "";
+  if (code === "SOURCE_PDF_TOO_LARGE") {
+    return "PDF 파일이 미리보기 크기 제한을 초과했습니다.";
+  }
+  if (code === "PDF_PASSWORD_REQUIRED" || code === "PDF_ENCRYPTED") {
+    return "암호화된 PDF는 원본 레이아웃으로 미리볼 수 없습니다.";
+  }
+  if (code === "SOURCE_NOT_PDF" || code === "PDF_INVALID" || code === "PDF_MALFORMED") {
+    return "손상되었거나 올바르지 않은 PDF입니다.";
+  }
+  if (code === "SOURCE_NOT_FOUND" || code === "SOURCE_UNAVAILABLE") {
+    return "PDF 파일을 읽을 수 없습니다.";
+  }
+  if (code === "PDF_READ_CANCELLED" || code === "SOURCE_PDF_READ_CANCELLED") {
+    return null;
+  }
   const name =
     caught && typeof caught === "object" && "name" in caught
       ? String(caught.name)

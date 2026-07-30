@@ -180,7 +180,9 @@ export function PreviewPanel({
             current?.documentId === ownerDocumentId ? { ...current, tags } : current,
           );
         }}
-        onOpenChange={setTagOpen}
+        onOpenChange={(ownerDocumentId, open) => {
+          if (selectedDocumentId.current === ownerDocumentId) setTagOpen(open);
+        }}
         open={tagOpen}
         saveApi={setTagsApi}
         showTrigger={false}

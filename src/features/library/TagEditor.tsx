@@ -9,7 +9,7 @@ interface TagEditorProps {
   createApi?: typeof createTag;
   saveApi?: typeof setDocumentTags;
   open?: boolean;
-  onOpenChange?: (open: boolean) => void;
+  onOpenChange?: (documentId: string, open: boolean) => void;
   showTrigger?: boolean;
 }
 
@@ -31,7 +31,7 @@ export function TagEditor({
   const isOpen = open ?? internalOpen;
   const setOpen = (next: boolean) => {
     setInternalOpen(next);
-    onOpenChange?.(next);
+    onOpenChange?.(documentId, next);
   };
 
   useEffect(() => {

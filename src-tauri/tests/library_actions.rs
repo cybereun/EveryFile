@@ -127,55 +127,148 @@ fn preview_rejects_stored_json_above_the_strict_input_cap() {
 }
 
 #[test]
-fn preview_uses_one_aggregate_budget_for_nested_blocks_tables_and_markdown() {
+fn preview_uses_one_aggregate_budget_for_every_returned_string() {
     let fixture = Fixture::new();
     fixture.seed_document("doc-budget", "budget.pdf");
-    let large_text = "가".repeat(900_000);
+    let tag = fixture
+        .library
+        .create_tag("중요 문서", "terracotta")
+        .unwrap();
+    fixture
+        .library
+        .set_document_tags("doc-budget", &[tag.id])
+        .unwrap();
+    fixture
+        .library
+        .set_bookmark("doc-budget", &"메".repeat(600_000))
+        .unwrap();
     let blocks = serde_json::json!([
         {
             "type": "paragraph",
-            "text": large_text,
+            "text": "가".repeat(400_000),
+            "href": "https://example.com/document",
+            "listType": "ordered",
             "children": [{
                 "type": "table",
                 "table": {
                     "hasHeader": false,
                     "cells": [[
-                        {"text": "나".repeat(900_000), "colSpan": 1, "rowSpan": 1},
-                        {"text": "다".repeat(900_000), "colSpan": 1, "rowSpan": 1}
+                        {"text": "나".repeat(400_000), "colSpan": 1, "rowSpan": 1}
                     ]]
                 }
             }]
         }
     ]);
+    let warnings = serde_json::json!([{
+        "code": "PARTIAL_PARSE",
+        "message": "경".repeat(300_000),
+        "page": 1
+    }]);
     fixture
         .database
         .connection()
         .execute(
             "INSERT INTO document_content
              (document_id, title, body, markdown, blocks_json, warnings_json)
-             VALUES ('doc-budget', NULL, '', ?1, ?2, '[]')",
-            params!["라".repeat(900_000), blocks.to_string()],
+             VALUES ('doc-budget', NULL, '', ?1, ?2, ?3)",
+            params![
+                "라".repeat(500_000),
+                blocks.to_string(),
+                warnings.to_string()
+            ],
         )
         .unwrap();
 
     let preview = fixture.library.get_preview("doc-budget").unwrap();
-    let returned_chars = preview.markdown.chars().count()
+    assert_eq!(preview.tags.len(), 1);
+    assert_eq!(count_preview_document_chars(&preview), 2_000_000);
+    assert!(!preview.bookmark_note.is_empty());
+    assert!(preview.truncated);
+}
+
+#[test]
+fn preview_does_not_report_truncation_when_the_last_node_exactly_fits() {
+    let fixture = Fixture::new();
+    fixture.seed_document("doc-nodes", "nodes.pdf");
+    let blocks = vec![serde_json::json!({"type": "separator"}); 20_000];
+    fixture
+        .database
+        .connection()
+        .execute(
+            "INSERT INTO document_content
+             (document_id, title, body, markdown, blocks_json, warnings_json)
+             VALUES ('doc-nodes', NULL, '', '', ?1, '[]')",
+            [serde_json::to_string(&blocks).unwrap()],
+        )
+        .unwrap();
+
+    let preview = fixture.library.get_preview("doc-nodes").unwrap();
+
+    assert_eq!(preview.blocks.len(), 20_000);
+    assert!(!preview.truncated);
+}
+
+#[test]
+fn preview_reports_truncation_when_one_node_is_omitted() {
+    let fixture = Fixture::new();
+    fixture.seed_document("doc-nodes-over", "nodes-over.pdf");
+    let blocks = vec![serde_json::json!({"type": "separator"}); 20_001];
+    fixture
+        .database
+        .connection()
+        .execute(
+            "INSERT INTO document_content
+             (document_id, title, body, markdown, blocks_json, warnings_json)
+             VALUES ('doc-nodes-over', NULL, '', '', ?1, '[]')",
+            [serde_json::to_string(&blocks).unwrap()],
+        )
+        .unwrap();
+
+    let preview = fixture.library.get_preview("doc-nodes-over").unwrap();
+
+    assert_eq!(preview.blocks.len(), 20_000);
+    assert!(preview.truncated);
+}
+
+fn count_preview_document_chars(preview: &everyfile_lib::domain::models::PreviewDocument) -> usize {
+    preview.document_id.chars().count()
+        + preview.file_name.chars().count()
+        + preview.path.chars().count()
+        + preview.extension.chars().count()
+        + preview.markdown.chars().count()
         + preview
             .blocks
             .iter()
-            .map(count_preview_chars)
+            .map(count_preview_block_chars)
             .sum::<usize>()
         + preview
             .warnings
             .iter()
             .map(|warning| warning.code.chars().count() + warning.message.chars().count())
-            .sum::<usize>();
-    assert!(returned_chars <= 2_000_000);
-    assert!(preview.truncated);
+            .sum::<usize>()
+        + preview.bookmark_note.chars().count()
+        + preview
+            .tags
+            .iter()
+            .map(|tag| {
+                tag.id.chars().count() + tag.name.chars().count() + tag.color.chars().count()
+            })
+            .sum::<usize>()
 }
 
-fn count_preview_chars(block: &everyfile_lib::domain::models::PreviewBlock) -> usize {
-    block.text.chars().count()
+fn count_preview_block_chars(block: &everyfile_lib::domain::models::PreviewBlock) -> usize {
+    block.kind.chars().count()
+        + block.text.chars().count()
+        + block
+            .href
+            .as_ref()
+            .map(|href| href.chars().count())
+            .unwrap_or_default()
+        + block
+            .list_type
+            .as_ref()
+            .map(|list_type| list_type.chars().count())
+            .unwrap_or_default()
         + block
             .table
             .as_ref()
@@ -191,7 +284,7 @@ fn count_preview_chars(block: &everyfile_lib::domain::models::PreviewBlock) -> u
         + block
             .children
             .iter()
-            .map(count_preview_chars)
+            .map(count_preview_block_chars)
             .sum::<usize>()
 }
 

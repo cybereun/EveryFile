@@ -83,27 +83,34 @@ impl LibraryRepository {
             serde_json::from_str(&row.4).map_err(|_| LibraryError::InvalidPreviewData)?;
         let warnings_value: Value =
             serde_json::from_str(&row.5).map_err(|_| LibraryError::InvalidPreviewData)?;
+        let bookmarked = !row.6.is_empty()
+            || connection.query_row(
+                "SELECT EXISTS(SELECT 1 FROM bookmarks WHERE document_id = ?1)",
+                [document_id],
+                |result| result.get(0),
+            )?;
+        let raw_tags = query_document_tags(&connection, document_id)?;
         let mut budget = PreviewBudget::new();
+        let document_id = budget.take_text(document_id);
+        let file_name = budget.take_text(&row.0);
+        let path = budget.take_text(&row.1);
+        let extension = budget.take_text(&row.2.to_ascii_lowercase());
+        let tags = normalize_tags(raw_tags, &mut budget);
         let markdown = budget.take_text(&row.3);
         let blocks = normalize_blocks(blocks_value, &mut budget)?;
         let warnings = normalize_warnings(warnings_value, &mut budget)?;
-        let tags = query_document_tags(&connection, document_id)?;
+        let bookmark_note = budget.take_text(&row.6);
 
         Ok(PreviewDocument {
-            document_id: document_id.to_owned(),
-            file_name: bounded_text(&row.0),
-            path: row.1,
-            extension: row.2.to_ascii_lowercase(),
+            document_id,
+            file_name,
+            path,
+            extension,
             markdown,
             blocks,
             warnings,
-            bookmarked: !row.6.is_empty()
-                || connection.query_row(
-                    "SELECT EXISTS(SELECT 1 FROM bookmarks WHERE document_id = ?1)",
-                    [document_id],
-                    |result| result.get(0),
-                )?,
-            bookmark_note: bounded_text(&row.6),
+            bookmarked,
+            bookmark_note,
             tags,
             truncated: budget.truncated,
         })
@@ -336,10 +343,6 @@ fn normalize_blocks(
         if let Some(block) = normalize_block(block, 0, budget) {
             blocks.push(block);
         }
-        if budget.exhausted() {
-            budget.truncated = true;
-            break;
-        }
     }
     Ok(blocks)
 }
@@ -364,6 +367,7 @@ fn normalize_block(
     ) {
         return None;
     }
+    let kind = budget.take_complete_text(kind)?;
     let text = budget.take_text(
         object
             .get("text")
@@ -383,12 +387,12 @@ fn normalize_block(
         .get("href")
         .and_then(Value::as_str)
         .and_then(safe_href)
-        .map(|href| budget.take_text(&href));
+        .and_then(|href| budget.take_complete_text(href));
     let list_type = object
         .get("listType")
         .and_then(Value::as_str)
         .filter(|value| matches!(*value, "ordered" | "unordered"))
-        .map(str::to_owned);
+        .and_then(|value| budget.take_complete_text(value));
     let children = object
         .get("children")
         .and_then(Value::as_array)
@@ -398,10 +402,6 @@ fn normalize_block(
                 if let Some(child) = normalize_block(child, depth + 1, budget) {
                     normalized.push(child);
                 }
-                if budget.exhausted() {
-                    budget.truncated = true;
-                    break;
-                }
             }
             normalized
         })
@@ -410,7 +410,7 @@ fn normalize_block(
         .get("table")
         .and_then(|table| normalize_table(table, budget));
     Some(PreviewBlock {
-        kind: kind.to_owned(),
+        kind,
         text,
         level,
         page_number,
@@ -452,14 +452,8 @@ fn normalize_table(value: &Value, budget: &mut PreviewBudget) -> Option<PreviewT
                     .unwrap_or(1)
                     .clamp(1, MAX_TABLE_ROWS as u64) as u32,
             });
-            if budget.exhausted() {
-                break;
-            }
         }
         cells.push(normalized_row);
-        if budget.exhausted() {
-            break;
-        }
     }
     if source_rows.len() > cells.len() {
         budget.truncated = true;
@@ -496,17 +490,17 @@ fn normalize_warnings(
         ) else {
             continue;
         };
+        let Some(code) = budget.take_complete_text(code) else {
+            break;
+        };
         warnings.push(PreviewWarning {
-            code: budget.take_text(code),
+            code,
             message: budget.take_text(message),
             page: warning
                 .get("page")
                 .and_then(Value::as_u64)
                 .and_then(|page| u32::try_from(page).ok()),
         });
-        if budget.exhausted() {
-            break;
-        }
     }
     if warnings.len() < values.len() {
         budget.truncated = true;
@@ -514,7 +508,25 @@ fn normalize_warnings(
     Ok(warnings)
 }
 
-fn safe_href(value: &str) -> Option<String> {
+fn normalize_tags(tags: Vec<TagRecord>, budget: &mut PreviewBudget) -> Vec<TagRecord> {
+    let mut normalized = Vec::new();
+    for tag in tags {
+        if !budget.consume_node() {
+            break;
+        }
+        let (Some(id), Some(name), Some(color)) = (
+            budget.take_complete_text(&tag.id),
+            budget.take_complete_text(&tag.name),
+            budget.take_complete_text(&tag.color),
+        ) else {
+            break;
+        };
+        normalized.push(TagRecord { id, name, color });
+    }
+    normalized
+}
+
+fn safe_href(value: &str) -> Option<&str> {
     let value = value.trim();
     if value.is_empty() || value.chars().any(char::is_control) {
         return None;
@@ -524,7 +536,7 @@ fn safe_href(value: &str) -> Option<String> {
         scheme.to_ascii_lowercase().as_str(),
         "http" | "https" | "mailto"
     )
-    .then(|| bounded_text(value))
+    .then_some(value)
 }
 
 fn bounded_text(value: &str) -> String {
@@ -570,8 +582,15 @@ impl PreviewBudget {
         text
     }
 
-    fn exhausted(&self) -> bool {
-        self.remaining_nodes == 0 || self.remaining_chars == 0
+    fn take_complete_text(&mut self, value: &str) -> Option<String> {
+        let count = value.chars().count();
+        if count > self.remaining_chars {
+            self.truncated = true;
+            None
+        } else {
+            self.remaining_chars -= count;
+            Some(value.to_owned())
+        }
     }
 }
 

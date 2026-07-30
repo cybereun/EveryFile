@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PreviewBlock, PreviewDocument } from "../../lib/types";
 import { DocumentTextView } from "./DocumentTextView";
@@ -298,6 +298,23 @@ describe("secure document preview", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(message);
   });
 
+  it("decodes a structured Tauri PDF size error without exposing backend text", async () => {
+    render(
+      <PdfLayoutView
+        documentId="doc-1"
+        getBytesApi={vi.fn().mockRejectedValue({
+          code: "SOURCE_PDF_TOO_LARGE",
+          message: "indexed PDF exceeds the preview size limit",
+        })}
+        loader={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "PDF 파일이 미리보기 크기 제한을 초과했습니다.",
+    );
+  });
+
   it("rejects a page that exceeds the canvas pixel budget", async () => {
     vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
       setTransform: vi.fn(),
@@ -373,10 +390,14 @@ describe("secure document preview", () => {
       />,
     );
     await screen.findByText("doc-b.pdf");
-    bookmark.resolve({ documentId: "doc-a", note: "", createdAt: "" });
-    saveTags.resolve([{ id: "tag-a", name: "A", color: "terracotta" }]);
-    await Promise.resolve();
+    expect(screen.getByRole("dialog", { name: "태그 편집" })).toBeVisible();
+    await act(async () => {
+      bookmark.resolve({ documentId: "doc-a", note: "", createdAt: "" });
+      saveTags.resolve([{ id: "tag-a", name: "A", color: "terracotta" }]);
+      await saveTags.promise;
+    });
     expect(screen.getByRole("button", { name: "북마크 추가" })).toBeVisible();
     expect(screen.queryByText("A", { selector: ".preview-tag" })).not.toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "태그 편집" })).toBeVisible();
   });
 });
