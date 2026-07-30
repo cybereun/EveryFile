@@ -358,6 +358,43 @@ struct ResetOwnershipRecord {
 }
 
 #[cfg(windows)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+struct ResetStageRecord {
+    nonce: String,
+    staging_name: String,
+    staging_identity: WindowsFileIdentity,
+}
+
+#[cfg(windows)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+struct ResetCommitRecord {
+    request: ResetRequest,
+    staging_name: String,
+    target_identity: WindowsFileIdentity,
+}
+
+#[cfg(windows)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ResetCleanupStep {
+    Deleting,
+    Deleted,
+    Staged,
+    Owner,
+    ParentExited,
+    Request,
+    Committed,
+}
+
+#[cfg(windows)]
+#[cfg_attr(not(test), allow(dead_code))]
+enum ResetEvent {
+    BeforeQuarantineCleanup { attempt: usize },
+    AfterQuarantineDeletion,
+    AfterTargetRename,
+    BeforeStateCleanup(ResetCleanupStep),
+}
+
+#[cfg(windows)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ResetWorkerOutcome {
     Success,
@@ -455,18 +492,25 @@ pub fn run_reset_worker_from_args() -> bool {
             return true;
         };
         let target = local_appdata.join(APP_DATA_DIRECTORY);
-        if wait_for_exact_process_exit(parent_pid, parent_created).is_err() {
-            return true;
-        }
         let Ok(request_path) = reset_request_path(&local_appdata, nonce) else {
+            return true;
+        };
+        let Ok(commit_path) = reset_commit_path(&local_appdata, nonce) else {
+            return true;
+        };
+        let Ok(parent_exited_path) = reset_parent_exited_path(&local_appdata, nonce) else {
             return true;
         };
         let Ok(local_guard) = ResetRootGuard::open(&local_appdata) else {
             return true;
         };
-        let Ok(request) =
-            read_reset_state::<ResetRequest>(&local_guard, &local_appdata, &request_path)
-        else {
+        let Ok(request) = read_authenticated_reset_request(
+            &local_guard,
+            &local_appdata,
+            &request_path,
+            &commit_path,
+            nonce,
+        ) else {
             return true;
         };
         if request
@@ -478,13 +522,32 @@ pub fn run_reset_worker_from_args() -> bool {
         {
             return true;
         }
+        if parent_exited_path.exists() {
+            let Ok(recorded) =
+                read_reset_state::<ResetRequest>(&local_guard, &local_appdata, &parent_exited_path)
+            else {
+                return true;
+            };
+            if recorded != request {
+                return true;
+            }
+        } else {
+            if wait_for_exact_process_exit(parent_pid, parent_created).is_err() {
+                return true;
+            }
+            if create_reset_state(&local_guard, &local_appdata, &parent_exited_path, &request)
+                .is_err()
+            {
+                return true;
+            }
+        }
         if run_owned_reset_transaction(
             &local_appdata,
             &target,
             nonce,
             300,
             Duration::from_millis(100),
-            |_, _| Ok(()),
+            |_| Ok(()),
         ) == ResetWorkerOutcome::Success
         {
             if let Ok(executable) = std::env::current_exe() {
@@ -529,14 +592,25 @@ fn wait_for_exact_process_exit(
     };
     const SYNCHRONIZE_PROCESS: PROCESS_ACCESS_RIGHTS = PROCESS_ACCESS_RIGHTS(0x0010_0000);
 
-    let process = unsafe {
+    let process = match unsafe {
         OpenProcess(
             PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE_PROCESS,
             false,
             process_id,
         )
-    }
-    .map_err(windows_error)?;
+    } {
+        Ok(process) => process,
+        Err(error) => {
+            let error = windows_error(error);
+            if matches!(
+                &error,
+                DiagnosticError::Io(error) if error.raw_os_error() == Some(87)
+            ) {
+                return Ok(());
+            }
+            return Err(error);
+        }
+    };
     let result = (|| {
         let mut created = FILETIME::default();
         let mut exited = FILETIME::default();
@@ -606,11 +680,55 @@ fn reset_cleaned_path(local_appdata: &Path, nonce: &str) -> Result<PathBuf, Diag
 }
 
 #[cfg(windows)]
+fn reset_deleting_path(local_appdata: &Path, nonce: &str) -> Result<PathBuf, DiagnosticError> {
+    if !valid_reset_nonce(nonce) {
+        return Err(DiagnosticError::InvalidResetRequest);
+    }
+    Ok(local_appdata.join(format!(".{APP_DATA_DIRECTORY}-reset-deleting-{nonce}.json")))
+}
+
+#[cfg(windows)]
+fn reset_stage_path(local_appdata: &Path, nonce: &str) -> Result<PathBuf, DiagnosticError> {
+    if !valid_reset_nonce(nonce) {
+        return Err(DiagnosticError::InvalidResetRequest);
+    }
+    Ok(local_appdata.join(format!(".{APP_DATA_DIRECTORY}-reset-staged-{nonce}.json")))
+}
+
+#[cfg(windows)]
+fn reset_parent_exited_path(local_appdata: &Path, nonce: &str) -> Result<PathBuf, DiagnosticError> {
+    if !valid_reset_nonce(nonce) {
+        return Err(DiagnosticError::InvalidResetRequest);
+    }
+    Ok(local_appdata.join(format!(
+        ".{APP_DATA_DIRECTORY}-reset-parent-exited-{nonce}.json"
+    )))
+}
+
+#[cfg(windows)]
+fn reset_commit_path(local_appdata: &Path, nonce: &str) -> Result<PathBuf, DiagnosticError> {
+    if !valid_reset_nonce(nonce) {
+        return Err(DiagnosticError::InvalidResetRequest);
+    }
+    Ok(local_appdata.join(format!(
+        ".{APP_DATA_DIRECTORY}-reset-committed-{nonce}.json"
+    )))
+}
+
+#[cfg(windows)]
 fn reset_quarantine_name(nonce: &str) -> Result<String, DiagnosticError> {
     if !valid_reset_nonce(nonce) {
         return Err(DiagnosticError::InvalidResetRequest);
     }
     Ok(format!(".{APP_DATA_DIRECTORY}-reset-quarantine-{nonce}"))
+}
+
+#[cfg(windows)]
+fn reset_staging_name(nonce: &str) -> Result<String, DiagnosticError> {
+    if !valid_reset_nonce(nonce) {
+        return Err(DiagnosticError::InvalidResetRequest);
+    }
+    Ok(format!(".{APP_DATA_DIRECTORY}-reset-empty-{nonce}"))
 }
 
 #[cfg(windows)]
@@ -693,7 +811,7 @@ fn run_owned_reset_transaction<F>(
     mut before_cleanup: F,
 ) -> ResetWorkerOutcome
 where
-    F: FnMut(usize, &Path) -> Result<(), DiagnosticError>,
+    F: FnMut(ResetEvent) -> Result<(), DiagnosticError>,
 {
     for attempt in 0..max_attempts {
         let result =
@@ -723,14 +841,49 @@ fn owned_reset_attempt<F>(
     before_cleanup: &mut F,
 ) -> Result<(), DiagnosticError>
 where
-    F: FnMut(usize, &Path) -> Result<(), DiagnosticError>,
+    F: FnMut(ResetEvent) -> Result<(), DiagnosticError>,
 {
     let local_guard = ResetRootGuard::open(local_appdata)?;
     let request_path = reset_request_path(local_appdata, nonce)?;
     let owner_path = reset_owner_path(local_appdata, nonce)?;
+    let deleting_path = reset_deleting_path(local_appdata, nonce)?;
     let cleaned_path = reset_cleaned_path(local_appdata, nonce)?;
+    let stage_path = reset_stage_path(local_appdata, nonce)?;
+    let parent_exited_path = reset_parent_exited_path(local_appdata, nonce)?;
+    let commit_path = reset_commit_path(local_appdata, nonce)?;
     let quarantine_name = reset_quarantine_name(nonce)?;
     let quarantine = local_appdata.join(&quarantine_name);
+    let staging_name = reset_staging_name(nonce)?;
+    let staging = local_appdata.join(&staging_name);
+    let request = read_authenticated_reset_request(
+        &local_guard,
+        local_appdata,
+        &request_path,
+        &commit_path,
+        nonce,
+    )?;
+
+    if commit_path.exists() {
+        let commit =
+            read_reset_state::<ResetCommitRecord>(&local_guard, local_appdata, &commit_path)?;
+        validate_commit(&commit, &request, nonce, &staging_name)?;
+        let target_handle = open_verified_empty_directory(target, commit.target_identity)?;
+        drop(target_handle);
+        cleanup_committed_reset_state(
+            &local_guard,
+            [
+                (ResetCleanupStep::Deleting, &deleting_path),
+                (ResetCleanupStep::Deleted, &cleaned_path),
+                (ResetCleanupStep::Staged, &stage_path),
+                (ResetCleanupStep::Owner, &owner_path),
+                (ResetCleanupStep::ParentExited, &parent_exited_path),
+                (ResetCleanupStep::Request, &request_path),
+                (ResetCleanupStep::Committed, &commit_path),
+            ],
+            before_cleanup,
+        )?;
+        return Ok(());
+    }
 
     let owner = if owner_path.exists() {
         let owner =
@@ -768,41 +921,211 @@ where
             return Err(DiagnosticError::InvalidResetRequest);
         }
     } else {
-        let pinned = open_owned_quarantine(&local_guard, target, &quarantine, &owner)?;
-        before_cleanup(attempt, &quarantine)?;
-        remove_pinned_entry(&quarantine, pinned).map_err(classify_reset_error)?;
+        let pinned = if deleting_path.exists() {
+            let deleting = read_reset_state::<ResetOwnershipRecord>(
+                &local_guard,
+                local_appdata,
+                &deleting_path,
+            )?;
+            if deleting != owner {
+                return Err(DiagnosticError::InvalidResetRequest);
+            }
+            if quarantine.exists() {
+                Some(open_owned_quarantine(
+                    &local_guard,
+                    target,
+                    &quarantine,
+                    &owner,
+                )?)
+            } else {
+                match fs::symlink_metadata(target) {
+                    Ok(_) => return Err(DiagnosticError::ResetTargetConflict),
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+                    Err(error) => return Err(classify_reset_io(error)),
+                }
+            }
+        } else {
+            let pinned = open_owned_quarantine(&local_guard, target, &quarantine, &owner)?;
+            create_reset_state(&local_guard, local_appdata, &deleting_path, &owner)?;
+            Some(pinned)
+        };
+        if let Some(pinned) = pinned {
+            before_cleanup(ResetEvent::BeforeQuarantineCleanup { attempt })?;
+            remove_pinned_entry(&quarantine, pinned).map_err(classify_reset_error)?;
+            before_cleanup(ResetEvent::AfterQuarantineDeletion)?;
+        }
         create_reset_state(&local_guard, local_appdata, &cleaned_path, &owner)?;
     }
 
-    match fs::symlink_metadata(target) {
-        Ok(_) => return Err(DiagnosticError::ResetTargetConflict),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-        Err(error) => return Err(classify_reset_io(error)),
-    }
-    local_guard.revalidate()?;
-    let staging = local_appdata.join(format!(".{APP_DATA_DIRECTORY}-reset-empty-{nonce}"));
-    if staging.exists() {
-        return Err(DiagnosticError::InvalidResetRequest);
-    }
-    fs::create_dir(&staging).map_err(classify_reset_io)?;
-    let staged = WindowsFileHandle::open_for_rename(&staging)?;
-    if staged.is_reparse() || !staged.is_directory() {
-        return Err(DiagnosticError::UnsafeResetTarget);
-    }
-    local_guard.revalidate()?;
-    staged.rename_to(target).map_err(classify_reset_error)?;
-    let created = WindowsFileHandle::open_pinned(target)?;
-    if created.identity != staged.identity || created.is_reparse() || !created.is_directory() {
-        return Err(DiagnosticError::ResetTargetConflict);
-    }
-    drop(created);
-    drop(staged);
-    for state_path in [&cleaned_path, &request_path, &owner_path] {
-        match fs::remove_file(state_path) {
-            Ok(()) => {}
+    let stage = if stage_path.exists() {
+        let stage = read_reset_state::<ResetStageRecord>(&local_guard, local_appdata, &stage_path)?;
+        if stage.nonce != nonce || stage.staging_name != staging_name {
+            return Err(DiagnosticError::InvalidResetRequest);
+        }
+        stage
+    } else {
+        match fs::symlink_metadata(target) {
+            Ok(_) => return Err(DiagnosticError::ResetTargetConflict),
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
             Err(error) => return Err(classify_reset_io(error)),
         }
+        local_guard.revalidate()?;
+        if staging.exists() {
+            return Err(DiagnosticError::InvalidResetRequest);
+        }
+        fs::create_dir(&staging).map_err(classify_reset_io)?;
+        let staged = WindowsFileHandle::open_for_rename(&staging)?;
+        verify_empty_directory_handle(&staging, &staged, staged.identity)?;
+        let stage = ResetStageRecord {
+            nonce: nonce.to_owned(),
+            staging_name: staging_name.clone(),
+            staging_identity: staged.identity,
+        };
+        create_reset_state(&local_guard, local_appdata, &stage_path, &stage)?;
+        drop(staged);
+        stage
+    };
+
+    if staging.exists() {
+        match fs::symlink_metadata(target) {
+            Ok(_) => return Err(DiagnosticError::ResetTargetConflict),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(classify_reset_io(error)),
+        }
+        let staged = WindowsFileHandle::open_for_rename(&staging)?;
+        verify_empty_directory_handle(&staging, &staged, stage.staging_identity)?;
+        local_guard.revalidate()?;
+        staged.rename_to(target).map_err(classify_reset_error)?;
+        before_cleanup(ResetEvent::AfterTargetRename)?;
+        let created = open_verified_empty_directory(target, stage.staging_identity)?;
+        drop(created);
+        drop(staged);
+    } else {
+        let created = open_verified_empty_directory(target, stage.staging_identity)?;
+        drop(created);
+    }
+
+    let commit = ResetCommitRecord {
+        request,
+        staging_name,
+        target_identity: stage.staging_identity,
+    };
+    create_reset_state(&local_guard, local_appdata, &commit_path, &commit)?;
+    let target_handle = open_verified_empty_directory(target, commit.target_identity)?;
+    drop(target_handle);
+    cleanup_committed_reset_state(
+        &local_guard,
+        [
+            (ResetCleanupStep::Deleting, &deleting_path),
+            (ResetCleanupStep::Deleted, &cleaned_path),
+            (ResetCleanupStep::Staged, &stage_path),
+            (ResetCleanupStep::Owner, &owner_path),
+            (ResetCleanupStep::ParentExited, &parent_exited_path),
+            (ResetCleanupStep::Request, &request_path),
+            (ResetCleanupStep::Committed, &commit_path),
+        ],
+        before_cleanup,
+    )?;
+    Ok(())
+}
+
+#[cfg(windows)]
+fn read_authenticated_reset_request(
+    local_guard: &ResetRootGuard,
+    local_appdata: &Path,
+    request_path: &Path,
+    commit_path: &Path,
+    nonce: &str,
+) -> Result<ResetRequest, DiagnosticError> {
+    let request = if request_path.exists() {
+        read_reset_state::<ResetRequest>(local_guard, local_appdata, request_path)?
+    } else if commit_path.exists() {
+        read_reset_state::<ResetCommitRecord>(local_guard, local_appdata, commit_path)?.request
+    } else {
+        return Err(DiagnosticError::InvalidResetRequest);
+    };
+    if request.nonce != nonce {
+        return Err(DiagnosticError::InvalidResetRequest);
+    }
+    Ok(request)
+}
+
+#[cfg(windows)]
+fn validate_commit(
+    commit: &ResetCommitRecord,
+    request: &ResetRequest,
+    nonce: &str,
+    staging_name: &str,
+) -> Result<(), DiagnosticError> {
+    if &commit.request != request
+        || commit.request.nonce != nonce
+        || commit.staging_name != staging_name
+    {
+        return Err(DiagnosticError::InvalidResetRequest);
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn open_verified_empty_directory(
+    path: &Path,
+    expected_identity: WindowsFileIdentity,
+) -> Result<WindowsFileHandle, DiagnosticError> {
+    let pinned = WindowsFileHandle::open_pinned(path)?;
+    verify_empty_directory_handle(path, &pinned, expected_identity)?;
+    Ok(pinned)
+}
+
+#[cfg(windows)]
+fn verify_empty_directory_handle(
+    path: &Path,
+    handle: &WindowsFileHandle,
+    expected_identity: WindowsFileIdentity,
+) -> Result<(), DiagnosticError> {
+    if handle.identity != expected_identity || handle.is_reparse() || !handle.is_directory() {
+        return Err(DiagnosticError::ResetTargetConflict);
+    }
+    let mut entries = fs::read_dir(path).map_err(DiagnosticError::Io)?;
+    if entries
+        .next()
+        .transpose()
+        .map_err(DiagnosticError::Io)?
+        .is_some()
+    {
+        return Err(DiagnosticError::ResetTargetConflict);
+    }
+    let (identity, attributes) = file_information(handle.handle)?;
+    if identity != expected_identity
+        || attributes & 0x0000_0400 != 0
+        || attributes & 0x0000_0010 == 0
+    {
+        return Err(DiagnosticError::ResetTargetConflict);
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn cleanup_committed_reset_state<F, const N: usize>(
+    local_guard: &ResetRootGuard,
+    state_paths: [(ResetCleanupStep, &PathBuf); N],
+    before_cleanup: &mut F,
+) -> Result<(), DiagnosticError>
+where
+    F: FnMut(ResetEvent) -> Result<(), DiagnosticError>,
+{
+    for (step, state_path) in state_paths {
+        let metadata = match fs::symlink_metadata(state_path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(classify_reset_io(error)),
+        };
+        if is_reparse_or_symlink(&metadata) || !metadata.is_file() {
+            return Err(DiagnosticError::InvalidResetRequest);
+        }
+        before_cleanup(ResetEvent::BeforeStateCleanup(step))?;
+        local_guard.revalidate()?;
+        fs::remove_file(state_path).map_err(classify_reset_io)?;
+        local_guard.revalidate()?;
     }
     Ok(())
 }
@@ -1345,24 +1668,20 @@ mod windows_reset_tests {
             },
         )
         .unwrap();
-        let outcome = run_owned_reset_transaction(
-            &local,
-            &app_data,
-            nonce,
-            3,
-            Duration::ZERO,
-            |attempt, _| {
-                if attempt == 0 {
-                    fs::rename(&replacement, &app_data).unwrap();
-                }
-                if attempt < 2 {
-                    return Err(DiagnosticError::ResetLocked(io::Error::from_raw_os_error(
-                        32,
-                    )));
+        let outcome =
+            run_owned_reset_transaction(&local, &app_data, nonce, 3, Duration::ZERO, |event| {
+                if let ResetEvent::BeforeQuarantineCleanup { attempt, .. } = event {
+                    if attempt == 0 {
+                        fs::rename(&replacement, &app_data).unwrap();
+                    }
+                    if attempt < 2 {
+                        return Err(DiagnosticError::ResetLocked(io::Error::from_raw_os_error(
+                            32,
+                        )));
+                    }
                 }
                 Ok(())
-            },
-        );
+            });
 
         assert_eq!(outcome, ResetWorkerOutcome::TargetConflict);
         assert_eq!(fs::read(app_data.join("victim")).unwrap(), b"victim");
@@ -1377,6 +1696,136 @@ mod windows_reset_tests {
         assert!(reset_owner_path(&local, nonce).unwrap().is_file());
         assert!(reset_cleaned_path(&local, nonce).unwrap().is_file());
         assert!(request_path.is_file());
+    }
+
+    #[test]
+    fn worker_resumes_when_quarantine_deletion_precedes_its_receipt() {
+        let temp = tempfile::tempdir().unwrap();
+        let local = temp.path().join("Local");
+        let app_data = local.join(APP_DATA_DIRECTORY);
+        fs::create_dir_all(&app_data).unwrap();
+        fs::write(app_data.join("owned"), b"owned").unwrap();
+
+        let nonce = "1123456789abcdef0123456789abcdef";
+        let local_guard = ResetRootGuard::open(&local).unwrap();
+        let request_path = reset_request_path(&local, nonce).unwrap();
+        create_reset_state(
+            &local_guard,
+            &local,
+            &request_path,
+            &ResetRequest {
+                nonce: nonce.into(),
+                parent_pid: 123,
+                parent_created: 456,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            run_owned_reset_transaction(&local, &app_data, nonce, 1, Duration::ZERO, |event| {
+                if matches!(event, ResetEvent::AfterQuarantineDeletion) {
+                    return Err(DiagnosticError::Io(io::Error::new(
+                        io::ErrorKind::Interrupted,
+                        "injected crash after quarantine deletion",
+                    )));
+                }
+                Ok(())
+            },),
+            ResetWorkerOutcome::Failed
+        );
+        assert!(reset_deleting_path(&local, nonce).unwrap().is_file());
+        assert!(!reset_cleaned_path(&local, nonce).unwrap().exists());
+        assert!(!local.join(reset_quarantine_name(nonce).unwrap()).exists());
+
+        assert_eq!(
+            run_owned_reset_transaction(&local, &app_data, nonce, 1, Duration::ZERO, |_| Ok(()),),
+            ResetWorkerOutcome::Success
+        );
+        assert!(app_data.is_dir());
+        assert_eq!(fs::read_dir(&app_data).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn worker_resumes_after_target_rename_and_partial_state_cleanup() {
+        use std::collections::VecDeque;
+
+        let temp = tempfile::tempdir().unwrap();
+        let local = temp.path().join("Local");
+        let app_data = local.join(APP_DATA_DIRECTORY);
+        let victim = local.join("victim");
+        fs::create_dir_all(&app_data).unwrap();
+        fs::create_dir_all(&victim).unwrap();
+        fs::write(app_data.join("owned"), b"owned").unwrap();
+        fs::write(victim.join("must-survive"), b"victim").unwrap();
+
+        let nonce = "2123456789abcdef0123456789abcdef";
+        let local_guard = ResetRootGuard::open(&local).unwrap();
+        let request_path = reset_request_path(&local, nonce).unwrap();
+        let request = ResetRequest {
+            nonce: nonce.into(),
+            parent_pid: 123,
+            parent_created: 456,
+        };
+        create_reset_state(&local_guard, &local, &request_path, &request).unwrap();
+        create_reset_state(
+            &local_guard,
+            &local,
+            &reset_parent_exited_path(&local, nonce).unwrap(),
+            &request,
+        )
+        .unwrap();
+        let mut fail_after_rename = true;
+        let mut cleanup_faults = VecDeque::from([
+            ResetCleanupStep::Deleting,
+            ResetCleanupStep::Deleted,
+            ResetCleanupStep::Staged,
+            ResetCleanupStep::Owner,
+            ResetCleanupStep::ParentExited,
+            ResetCleanupStep::Request,
+            ResetCleanupStep::Committed,
+        ]);
+        let mut successes = 0;
+        for _ in 0..9 {
+            let outcome =
+                run_owned_reset_transaction(&local, &app_data, nonce, 1, Duration::ZERO, |event| {
+                    let should_fail = match event {
+                        ResetEvent::AfterTargetRename if fail_after_rename => {
+                            fail_after_rename = false;
+                            true
+                        }
+                        ResetEvent::BeforeStateCleanup(step)
+                            if cleanup_faults.front() == Some(&step) =>
+                        {
+                            cleanup_faults.pop_front();
+                            true
+                        }
+                        _ => false,
+                    };
+                    if should_fail {
+                        return Err(DiagnosticError::Io(io::Error::new(
+                            io::ErrorKind::Interrupted,
+                            "injected reset transaction interruption",
+                        )));
+                    }
+                    Ok(())
+                });
+            if outcome == ResetWorkerOutcome::Success {
+                successes += 1;
+            } else {
+                assert_eq!(outcome, ResetWorkerOutcome::Failed);
+            }
+        }
+
+        assert_eq!(successes, 1);
+        assert!(!fail_after_rename);
+        assert!(cleanup_faults.is_empty());
+        assert!(app_data.is_dir());
+        assert_eq!(fs::read_dir(&app_data).unwrap().count(), 0);
+        assert_eq!(fs::read(victim.join("must-survive")).unwrap(), b"victim");
+        assert!(!fs::read_dir(&local).unwrap().any(|entry| entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with(&format!(".{APP_DATA_DIRECTORY}-reset-"))));
     }
 
     #[test]
