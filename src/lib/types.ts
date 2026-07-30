@@ -77,12 +77,21 @@ export interface PreviewDocument {
 
 export interface IndexStatus {
   jobId: string;
-  state: string;
+  state: IndexState;
   totalFiles: number;
   completedFiles: number;
   currentPath: string | null;
   errors: IndexFailure[];
 }
+
+export type IndexState =
+  | "queued"
+  | "discovering"
+  | "parsing"
+  | "paused"
+  | "completed"
+  | "cancelled"
+  | "failed";
 
 export interface IndexFailure {
   code: string;

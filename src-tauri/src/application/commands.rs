@@ -1,5 +1,4 @@
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use serde::Serialize;
 use tauri::AppHandle;
@@ -8,7 +7,7 @@ use tauri_plugin_dialog::DialogExt;
 
 use crate::domain::models::FolderRecord;
 use crate::folders::repository::{FolderError, FolderRepository};
-use crate::indexing::{IndexStatus, IndexWatcher, IndexingError, JobId};
+use crate::indexing::{IndexStatus, IndexingError, JobId};
 use crate::{settings::AppSettings, state::AppState};
 
 #[tauri::command]
@@ -53,18 +52,9 @@ pub async fn register_folder(
         register_selected_folder(selected_path, &state.folders).map_err(CommandError::from)?;
     if let Some(folder) = &registered {
         state
-            .indexing
-            .start(&folder.id)
+            .activate_registered_folder(&folder.id)
             .await
-            .map_err(CommandError::from)?;
-        let watcher = IndexWatcher::start(Arc::clone(&state.indexing), folder.id.clone())
-            .await
-            .map_err(|error| CommandError::new("INDEX_WATCHER_FAILED", error.to_string()))?;
-        state
-            .watchers
-            .lock()
-            .await
-            .insert(folder.id.clone(), watcher);
+            .map_err(|error| CommandError::new("FOLDER_ACTIVATION_FAILED", error.to_string()))?;
     }
     Ok(registered)
 }

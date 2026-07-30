@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { IndexStatusController } from "../features/folders/IndexStatus";
 import { defaultLocale, productTranslations, type Locale } from "./translations";
 
 export function App() {
@@ -19,6 +20,7 @@ export function App() {
       </select>
       <h1>EveryFile</h1>
       <p>{tagline}</p>
+      <IndexStatusController />
     </main>
   );
 }

@@ -1,4 +1,6 @@
-import { useState } from "react";
+import { listen } from "@tauri-apps/api/event";
+import { useEffect, useState } from "react";
+import { cancelIndexing, pauseIndexing, resumeIndexing } from "../../lib/ipc";
 import type { IndexStatus as IndexStatusModel } from "../../lib/types";
 
 interface Props {
@@ -67,5 +69,41 @@ export function IndexStatus({
         </div>
       )}
     </section>
+  );
+}
+
+export function IndexStatusController() {
+  const [status, setStatus] = useState<IndexStatusModel | null>(null);
+
+  useEffect(() => {
+    let disposed = false;
+    let removeListener: (() => void) | undefined;
+    void listen<IndexStatusModel>("index-status://changed", (event) => {
+      setStatus(event.payload);
+    })
+      .then((unlisten) => {
+        if (disposed) {
+          unlisten();
+        } else {
+          removeListener = unlisten;
+        }
+      })
+      .catch(() => {
+        // The desktop bridge is unavailable in browser-only previews.
+      });
+    return () => {
+      disposed = true;
+      removeListener?.();
+    };
+  }, []);
+
+  if (!status) return null;
+  return (
+    <IndexStatus
+      status={status}
+      onPause={(jobId) => void pauseIndexing(jobId)}
+      onResume={(jobId) => void resumeIndexing(jobId)}
+      onCancel={(jobId) => void cancelIndexing(jobId)}
+    />
   );
 }

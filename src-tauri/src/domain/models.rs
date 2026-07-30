@@ -96,15 +96,35 @@ pub struct PreviewDocument {
     pub tags: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct IndexStatus {
     pub job_id: String,
-    pub state: String,
+    pub state: JobState,
     pub total_files: u64,
     pub completed_files: u64,
-    pub current_file_name: Option<String>,
-    pub error_count: u64,
+    pub current_path: Option<String>,
+    pub errors: Vec<IndexFailure>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum JobState {
+    Queued,
+    Discovering,
+    Parsing,
+    Paused,
+    Completed,
+    Cancelled,
+    Failed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct IndexFailure {
+    pub code: String,
+    pub file_name: String,
+    pub message: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

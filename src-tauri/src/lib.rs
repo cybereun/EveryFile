@@ -32,7 +32,9 @@ pub fn run() {
             ));
             let app_handle = app.handle().clone();
             let status_sink = Arc::new(move |status| {
-                let _ = app_handle.emit("index-status://changed", status);
+                app_handle
+                    .emit("index-status://changed", status)
+                    .map_err(|error| error.to_string())
             });
             let indexing = Arc::new(IndexCoordinator::with_parser_and_sink(
                 Arc::clone(&database),
@@ -40,7 +42,9 @@ pub fn run() {
                 200 * 1024 * 1024,
                 Some(status_sink),
             ));
-            app.manage(state::AppState::new(database, indexing));
+            let app_state = state::AppState::new(database, indexing);
+            tauri::async_runtime::block_on(app_state.restore_runtime())?;
+            app.manage(app_state);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

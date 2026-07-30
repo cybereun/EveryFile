@@ -10,6 +10,8 @@ use super::secure_key::SecretKey;
 const INITIAL_MIGRATION: &str = include_str!("../../migrations/0001_initial.sql");
 const RESUMABLE_INDEXING_MIGRATION: &str =
     include_str!("../../migrations/0002_resumable_indexing.sql");
+const INDEX_JOB_RECOVERY_MIGRATION: &str =
+    include_str!("../../migrations/0003_index_job_recovery.sql");
 
 pub struct Database {
     connection: Mutex<Connection>,
@@ -45,6 +47,9 @@ impl Database {
             .map_err(DatabaseError::Migration)?;
         transaction
             .execute_batch(RESUMABLE_INDEXING_MIGRATION)
+            .map_err(DatabaseError::Migration)?;
+        transaction
+            .execute_batch(INDEX_JOB_RECOVERY_MIGRATION)
             .map_err(DatabaseError::Migration)?;
         transaction.commit().map_err(DatabaseError::Migration)
     }

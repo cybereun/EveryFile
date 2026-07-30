@@ -1,8 +1,9 @@
 mod coordinator;
 mod watcher;
 
+pub use crate::domain::models::{IndexFailure, IndexStatus, JobState};
 pub use coordinator::{
-    ActivityLimiter, DocumentParser, ForegroundActivity, IndexCoordinator, IndexFailure,
-    IndexStatus, IndexingError, JobId, JobState,
+    ActivityLimiter, DiscoveryProbe, DocumentParser, ForegroundActivity, IndexCoordinator,
+    IndexingError, JobId,
 };
-pub use watcher::{IndexWatcher, WatchChange};
+pub use watcher::{IndexWatcher, WatchChange, WatcherError};

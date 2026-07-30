@@ -1,24 +1,37 @@
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Condvar, Mutex, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use everyfile_lib::folders::repository::FolderRepository;
 use everyfile_lib::indexing::{
-    DocumentParser, IndexCoordinator, IndexStatus, IndexWatcher, JobId, JobState, WatchChange,
+    DiscoveryProbe, DocumentParser, IndexCoordinator, IndexStatus, IndexWatcher, JobId, JobState,
+    WatchChange,
 };
 use everyfile_lib::infrastructure::database::Database;
 use everyfile_lib::infrastructure::secure_key::SecretKey;
 use everyfile_lib::parsing::{ParseErrorCode, ParsedDocument, ParserError};
+use everyfile_lib::state::AppState;
 use tempfile::TempDir;
 use zeroize::Zeroizing;
 
-#[derive(Default)]
 struct FakeParser {
     counts: Mutex<HashMap<String, usize>>,
     damaged: Mutex<HashSet<String>>,
+    delay: Mutex<Duration>,
+}
+
+impl Default for FakeParser {
+    fn default() -> Self {
+        Self {
+            counts: Mutex::new(HashMap::new()),
+            damaged: Mutex::new(HashSet::new()),
+            delay: Mutex::new(Duration::from_millis(25)),
+        }
+    }
 }
 
 impl FakeParser {
@@ -34,6 +47,10 @@ impl FakeParser {
             .copied()
             .unwrap_or(0)
     }
+
+    fn set_delay(&self, delay: Duration) {
+        *self.delay.lock().unwrap() = delay;
+    }
 }
 
 impl DocumentParser for FakeParser {
@@ -45,7 +62,7 @@ impl DocumentParser for FakeParser {
             .unwrap()
             .entry(file_name.clone())
             .or_default() += 1;
-        thread::sleep(Duration::from_millis(25));
+        thread::sleep(*self.delay.lock().unwrap());
         if self.damaged.lock().unwrap().contains(&file_name) {
             return Err(ParserError::Protocol {
                 code: ParseErrorCode::Damaged,
@@ -120,6 +137,11 @@ impl IndexHarness {
         self
     }
 
+    fn with_delay(self, delay: Duration) -> Self {
+        self.parser.set_delay(delay);
+        self
+    }
+
     fn write(&self, name: &str, body: &str) {
         let path = self.root.join(name);
         if let Some(parent) = path.parent() {
@@ -179,6 +201,18 @@ impl IndexHarness {
         *self.coordinator.write().unwrap() = replacement;
     }
 
+    async fn crash_and_recover(&self, job: &str) {
+        let old = self.coordinator.read().unwrap().clone();
+        old.shutdown_local(job).await;
+        let replacement = Arc::new(IndexCoordinator::with_parser(
+            Arc::clone(&self.database),
+            self.parser.clone(),
+            10 * 1024 * 1024,
+        ));
+        replacement.recover().await.unwrap();
+        *self.coordinator.write().unwrap() = replacement;
+    }
+
     async fn resume(&self, job: &str) {
         let coordinator = self.coordinator.read().unwrap().clone();
         coordinator.resume(job).await.unwrap();
@@ -192,6 +226,18 @@ impl IndexHarness {
     async fn status(&self, job: &str) -> IndexStatus {
         let coordinator = self.coordinator.read().unwrap().clone();
         coordinator.status(job).await.unwrap()
+    }
+
+    async fn wait_until_total_files(&self, job: &str, minimum: u64) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let status = self.status(job).await;
+            if status.total_files >= minimum {
+                return;
+            }
+            assert!(Instant::now() < deadline, "timed out at {status:?}");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
     }
 
     fn parse_count(&self, file_name: &str) -> usize {
@@ -273,6 +319,44 @@ impl IndexHarness {
     }
 }
 
+#[derive(Default)]
+struct BlockingDiscoveryProbe {
+    entered: (Mutex<bool>, Condvar),
+    release: (Mutex<bool>, Condvar),
+    max_buffered: AtomicUsize,
+}
+
+impl BlockingDiscoveryProbe {
+    fn wait_until_entered(&self) {
+        let (lock, ready) = &self.entered;
+        let mut entered = lock.lock().unwrap();
+        while !*entered {
+            entered = ready.wait(entered).unwrap();
+        }
+    }
+
+    fn release(&self) {
+        let (lock, ready) = &self.release;
+        *lock.lock().unwrap() = true;
+        ready.notify_all();
+    }
+}
+
+impl DiscoveryProbe for BlockingDiscoveryProbe {
+    fn candidate_persisted(&self, buffered_candidates: usize) {
+        self.max_buffered
+            .fetch_max(buffered_candidates, Ordering::AcqRel);
+        let (entered_lock, entered_ready) = &self.entered;
+        *entered_lock.lock().unwrap() = true;
+        entered_ready.notify_all();
+        let (release_lock, release_ready) = &self.release;
+        let mut released = release_lock.lock().unwrap();
+        while !*released {
+            released = release_ready.wait(released).unwrap();
+        }
+    }
+}
+
 #[tokio::test]
 async fn interrupted_job_resumes_without_reparsing_completed_files() {
     let harness = IndexHarness::new().with_files(["a.txt", "b.txt", "c.txt"]);
@@ -331,6 +415,171 @@ async fn watcher_cannot_parse_a_path_outside_the_registered_folder() {
 }
 
 #[tokio::test]
+async fn watcher_correlates_separate_rename_halves_and_updates_fts_identity() {
+    let harness = IndexHarness::new().with_valid_file("old.txt");
+    harness.finish_initial_index().await;
+    let old = harness.root.join("old.txt");
+    let new = harness.root.join("new.txt");
+    fs::rename(&old, &new).unwrap();
+    let watcher = harness.watcher.lock().unwrap().as_ref().unwrap().clone();
+    watcher
+        .ingest(WatchChange::RenameFrom {
+            path: old,
+            tracker: Some(77),
+        })
+        .await
+        .unwrap();
+    watcher
+        .ingest(WatchChange::RenameTo {
+            path: new,
+            tracker: Some(77),
+        })
+        .await
+        .unwrap();
+    watcher.flush().await.unwrap();
+
+    assert!(harness.document("old.txt").await.is_none());
+    assert!(harness.document("new.txt").await.is_some());
+    assert_eq!(harness.search("new").await.len(), 1);
+}
+
+#[tokio::test]
+async fn watcher_does_not_drop_a_legitimate_write_after_a_completed_batch() {
+    let harness = IndexHarness::new().with_valid_file("later.txt");
+    harness.finish_initial_index().await;
+    harness.emit_repeated_write_events("later.txt", 3).await;
+    assert_eq!(harness.parse_count("later.txt"), 2);
+
+    harness.write("later.txt", "a genuinely later and different body");
+    let watcher = harness.watcher.lock().unwrap().as_ref().unwrap().clone();
+    watcher
+        .ingest(WatchChange::Write(harness.root.join("later.txt")))
+        .await
+        .unwrap();
+    watcher.flush().await.unwrap();
+
+    assert_eq!(harness.parse_count("later.txt"), 3);
+}
+
+#[tokio::test]
+async fn startup_restores_enabled_watchers_and_drop_stops_observation() {
+    let harness = IndexHarness::new().with_valid_file("restored.txt");
+    let job = harness.start().await;
+    assert_eq!(
+        harness.wait_until_finished(&job).await.state,
+        JobState::Completed
+    );
+    let state = AppState::new(
+        Arc::clone(&harness.database),
+        harness.coordinator.read().unwrap().clone(),
+    );
+    state.restore_runtime().await.unwrap();
+    assert_eq!(state.watchers.lock().await.len(), 1);
+
+    harness.write("restored.txt", "observed after restart");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while harness.parse_count("restored.txt") < 2 {
+        assert!(Instant::now() < deadline, "restored watcher did not index");
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+
+    drop(state);
+    harness.write("restored.txt", "must not be observed after shutdown");
+    tokio::time::sleep(Duration::from_millis(750)).await;
+    assert_eq!(harness.parse_count("restored.txt"), 2);
+}
+
+#[tokio::test]
+async fn failed_watcher_activation_rolls_back_folder_registration() {
+    let harness = IndexHarness::new();
+    let state = AppState::new(
+        Arc::clone(&harness.database),
+        harness.coordinator.read().unwrap().clone(),
+    );
+    fs::remove_dir(&harness.root).unwrap();
+
+    assert!(state
+        .activate_registered_folder(&harness.folder_id)
+        .await
+        .is_err());
+    assert!(state.folders.list().unwrap().is_empty());
+    assert!(state.watchers.lock().await.is_empty());
+}
+
+#[tokio::test]
+async fn reconciliation_streams_without_blocking_and_cleans_its_seen_set() {
+    let harness = IndexHarness::new().with_files([
+        "r00.txt", "r01.txt", "r02.txt", "r03.txt", "r04.txt", "r05.txt", "r06.txt", "r07.txt",
+        "r08.txt", "r09.txt", "r10.txt", "r11.txt", "r12.txt", "r13.txt", "r14.txt", "r15.txt",
+        "r16.txt", "r17.txt", "r18.txt", "r19.txt",
+    ]);
+    let job = harness.start().await;
+    assert_eq!(
+        harness.wait_until_finished(&job).await.state,
+        JobState::Completed
+    );
+    for index in 0..5 {
+        fs::remove_file(harness.root.join(format!("r{index:02}.txt"))).unwrap();
+    }
+    harness.write("r10.txt", "changed during reconciliation");
+    harness.write("added.txt", "added");
+
+    let coordinator = harness.coordinator.read().unwrap().clone();
+    let folder_id = harness.folder_id.clone();
+    let reconciliation = tokio::spawn(async move { coordinator.reconcile(&folder_id).await });
+    tokio::time::timeout(Duration::from_millis(100), tokio::task::yield_now())
+        .await
+        .expect("reconciliation blocked the async runtime");
+    reconciliation.await.unwrap().unwrap();
+
+    assert!(harness.document("r00.txt").await.is_none());
+    assert!(harness.document("r10.txt").await.is_some());
+    assert!(harness.document("added.txt").await.is_some());
+    let seen: i64 = harness
+        .database
+        .connection()
+        .query_row("SELECT COUNT(*) FROM reconciliation_seen", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(seen, 0);
+}
+
+#[tokio::test]
+async fn watcher_overflow_records_a_typed_diagnostic_and_reconciles() {
+    let harness = IndexHarness::new().with_valid_file("overflow.txt");
+    harness.finish_initial_index().await;
+    harness.write("overflow.txt", "changed after overflow");
+    let watcher = harness.watcher.lock().unwrap().as_ref().unwrap().clone();
+    let mut overflowed = false;
+    for _ in 0..2_000 {
+        if watcher
+            .ingest_nowait(WatchChange::Write(harness.root.join("overflow.txt")))
+            .is_err()
+        {
+            overflowed = true;
+        }
+    }
+    assert!(
+        overflowed,
+        "test did not saturate the bounded watcher channel"
+    );
+    watcher.flush().await.unwrap();
+
+    let diagnostics: i64 = harness
+        .database
+        .connection()
+        .query_row(
+            "SELECT COUNT(*) FROM index_job_errors WHERE code = 'WATCHER_OVERFLOW'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(diagnostics >= 1);
+    assert_eq!(harness.parse_count("overflow.txt"), 2);
+}
+
+#[tokio::test]
 async fn foreground_activity_yields_background_parsing_between_files() {
     let harness = IndexHarness::new().with_files(["a.txt", "b.txt", "c.txt"]);
     let coordinator = harness.coordinator.read().unwrap().clone();
@@ -341,6 +590,143 @@ async fn foreground_activity_yields_background_parsing_between_files() {
     assert_eq!(harness.status(&job).await.completed_files, 0);
 
     drop(foreground);
+    assert_eq!(
+        harness.wait_until_finished(&job).await.state,
+        JobState::Completed
+    );
+}
+
+#[tokio::test]
+async fn crashed_active_job_is_recovered_without_reparsing_committed_files() {
+    let harness = IndexHarness::new()
+        .with_files(["a.txt", "b.txt", "c.txt"])
+        .with_delay(Duration::from_millis(40));
+    let job = harness.start().await;
+    harness.wait_until_completed_files(&job, 1).await;
+
+    harness.crash_and_recover(&job).await;
+
+    let status = harness.wait_until_finished(&job).await;
+    assert_eq!(status.completed_files, 3);
+    assert_eq!(harness.parse_count("a.txt"), 1);
+}
+
+#[tokio::test]
+async fn pause_resume_and_cancel_are_quiescent_and_single_owner() {
+    let harness = IndexHarness::new().with_delay(Duration::from_millis(35));
+    let job = harness.start_with_many_files(40).await;
+    harness.wait_until_total_files(&job, 33).await;
+    let coordinator = harness.coordinator.read().unwrap().clone();
+
+    tokio::time::timeout(Duration::from_secs(3), coordinator.pause(&job))
+        .await
+        .unwrap()
+        .unwrap();
+    let paused_progress = harness.status(&job).await.completed_files;
+    tokio::time::sleep(Duration::from_millis(120)).await;
+    assert_eq!(harness.status(&job).await.completed_files, paused_progress);
+
+    let left = {
+        let coordinator = Arc::clone(&coordinator);
+        let job = job.clone();
+        tokio::spawn(async move { coordinator.resume(&job).await })
+    };
+    let right = {
+        let coordinator = Arc::clone(&coordinator);
+        let job = job.clone();
+        tokio::spawn(async move { coordinator.resume(&job).await })
+    };
+    let results = [left.await.unwrap(), right.await.unwrap()];
+    assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+
+    tokio::time::timeout(Duration::from_secs(3), coordinator.cancel(&job))
+        .await
+        .unwrap()
+        .unwrap();
+    let cancelled_progress = harness.status(&job).await.completed_files;
+    tokio::time::sleep(Duration::from_millis(120)).await;
+    assert_eq!(
+        harness.status(&job).await.completed_files,
+        cancelled_progress
+    );
+    assert_eq!(harness.status(&job).await.state, JobState::Cancelled);
+    for index in 0..40 {
+        assert!(harness.parse_count(&format!("bulk-{index:03}.txt")) <= 1);
+    }
+}
+
+#[tokio::test]
+async fn failed_document_and_progress_roll_back_together() {
+    let harness = IndexHarness::new().with_damaged_file("broken.pdf");
+    harness
+        .database
+        .connection()
+        .execute_batch(
+            "CREATE TRIGGER abort_index_error
+             BEFORE INSERT ON index_job_errors
+             BEGIN
+               SELECT RAISE(ABORT, 'injected crash boundary');
+             END;",
+        )
+        .unwrap();
+
+    let job = harness.start().await;
+    let status = harness.wait_until_finished(&job).await;
+    let connection = harness.database.connection();
+    let parse_state: String = connection
+        .query_row(
+            "SELECT parse_state FROM documents WHERE file_name = 'broken.pdf'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let completed_file_count: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM index_job_files
+             WHERE job_id = ?1 AND state = 'completed'",
+            [&job],
+            |row| row.get(0),
+        )
+        .unwrap();
+
+    assert_eq!(status.state, JobState::Failed);
+    assert_eq!(status.completed_files, 0);
+    assert!(status.errors.is_empty());
+    assert_eq!(parse_state, "parsing");
+    assert_eq!(completed_file_count, 0);
+}
+
+#[tokio::test]
+async fn start_returns_before_incremental_discovery_finishes_and_stays_bounded() {
+    let harness = IndexHarness::new().with_files(["a.txt", "b.txt", "c.txt"]);
+    let probe = Arc::new(BlockingDiscoveryProbe::default());
+    let coordinator = Arc::new(IndexCoordinator::with_parser_and_discovery_probe(
+        Arc::clone(&harness.database),
+        harness.parser.clone(),
+        10 * 1024 * 1024,
+        probe.clone(),
+    ));
+    *harness.coordinator.write().unwrap() = Arc::clone(&coordinator);
+
+    let job = tokio::time::timeout(
+        Duration::from_millis(100),
+        coordinator.start(&harness.folder_id),
+    )
+    .await
+    .expect("start waited for discovery")
+    .unwrap();
+    tokio::task::spawn_blocking({
+        let probe = Arc::clone(&probe);
+        move || probe.wait_until_entered()
+    })
+    .await
+    .unwrap();
+    let discovering = coordinator.status(&job).await.unwrap();
+    assert_eq!(discovering.state, JobState::Discovering);
+    assert_eq!(discovering.total_files, 1);
+    assert!(probe.max_buffered.load(Ordering::Acquire) <= 16);
+
+    probe.release();
     assert_eq!(
         harness.wait_until_finished(&job).await.state,
         JobState::Completed
