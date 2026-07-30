@@ -587,6 +587,19 @@ async fn reconciliation_waiting_for_database_does_not_block_single_thread_runtim
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn aborted_reconciliation_cleans_run_scoped_scratch_rows() {
     let harness = IndexHarness::new().with_files(["a.txt", "b.txt"]);
+    let stale_path = harness.root.join("must-remain-after-abort.txt");
+    harness
+        .database
+        .connection()
+        .execute(
+            "INSERT INTO documents
+             (id, folder_id, canonical_path, file_name, extension, size_bytes,
+              modified_at, parse_state)
+             VALUES ('stale-doc', ?1, ?2, 'must-remain-after-abort.txt', 'txt',
+                     1, '1', 'indexed')",
+            rusqlite::params![harness.folder_id, stale_path.to_string_lossy()],
+        )
+        .unwrap();
     let probe = Arc::new(BlockingDiscoveryProbe::default());
     let coordinator = Arc::new(IndexCoordinator::with_parser_and_discovery_probe(
         Arc::clone(&harness.database),
@@ -613,6 +626,8 @@ async fn aborted_reconciliation_cleans_run_scoped_scratch_rows() {
 
     reconciliation.abort();
     probe.release();
+    let aborted = reconciliation.await.unwrap_err();
+    assert!(aborted.is_cancelled());
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         let counts: (i64, i64) = harness
@@ -632,6 +647,12 @@ async fn aborted_reconciliation_cleans_run_scoped_scratch_rows() {
         assert!(Instant::now() < deadline, "scratch rows leaked: {counts:?}");
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
+    assert!(harness
+        .document("must-remain-after-abort.txt")
+        .await
+        .is_some());
+    assert!(harness.document("a.txt").await.is_none());
+    assert!(harness.document("b.txt").await.is_none());
 }
 
 #[tokio::test]

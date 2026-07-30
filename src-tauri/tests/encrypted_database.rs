@@ -172,6 +172,44 @@ fn migration_upgrades_an_existing_initial_schema_without_losing_jobs() {
     assert_eq!(indexing_table_count, 2);
 }
 
+#[test]
+fn startup_migration_purges_abandoned_reconciliation_scratch() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("recovery.db");
+    let key = SecretKey::from_bytes(Zeroizing::new([17_u8; 32]));
+    let database = Database::open(&path, &key).unwrap();
+    database.migrate().unwrap();
+    database
+        .connection()
+        .execute_batch(
+            "INSERT INTO folders
+             (id, canonical_path, display_name, created_at, enabled)
+             VALUES ('folder-1', 'C:\\fixture', 'Fixture',
+                     '2026-07-30T00:00:00Z', 1);
+             INSERT INTO reconciliation_runs (id, folder_id, created_at)
+             VALUES ('abandoned-run', 'folder-1', '2026-07-30T00:00:00Z');
+             INSERT INTO reconciliation_seen_v2 (run_id, canonical_path)
+             VALUES ('abandoned-run', 'C:\\fixture\\old.txt');",
+        )
+        .unwrap();
+    drop(database);
+
+    let reopened = Database::open(&path, &key).unwrap();
+    reopened.migrate().unwrap();
+    let counts: (i64, i64) = reopened
+        .connection()
+        .query_row(
+            "SELECT
+               (SELECT COUNT(*) FROM reconciliation_runs),
+               (SELECT COUNT(*) FROM reconciliation_seen_v2)",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+
+    assert_eq!(counts, (0, 0));
+}
+
 #[cfg(windows)]
 #[test]
 fn secure_key_store_persists_only_a_dpapi_protected_blob() {

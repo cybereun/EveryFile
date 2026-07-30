@@ -3,7 +3,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TrySendError};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, SystemTime};
@@ -115,6 +115,28 @@ impl DiscoveryStream {
     pub fn warnings(&self) -> &[DiscoveryWarning] {
         &self.warnings
     }
+
+    pub(crate) fn next_with_timeout(&mut self, timeout: Duration) -> DiscoveryPoll {
+        loop {
+            match self.receiver.recv_timeout(timeout) {
+                Ok(DiscoveryMessage::Candidate(candidate)) => {
+                    return DiscoveryPoll::Candidate(candidate);
+                }
+                Ok(DiscoveryMessage::Warning(warning)) => self.warnings.push(warning),
+                Err(RecvTimeoutError::Timeout) => return DiscoveryPoll::Pending,
+                Err(RecvTimeoutError::Disconnected) => {
+                    self.join_finished_worker();
+                    return DiscoveryPoll::Finished;
+                }
+            }
+        }
+    }
+}
+
+pub(crate) enum DiscoveryPoll {
+    Candidate(FileCandidate),
+    Pending,
+    Finished,
 }
 
 impl Iterator for DiscoveryStream {

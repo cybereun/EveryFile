@@ -56,6 +56,9 @@ impl Database {
         transaction
             .execute_batch(RECONCILIATION_RUNS_MIGRATION)
             .map_err(DatabaseError::Migration)?;
+        transaction
+            .execute("DELETE FROM reconciliation_runs", [])
+            .map_err(DatabaseError::Migration)?;
         transaction.commit().map_err(DatabaseError::Migration)
     }
 
