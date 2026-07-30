@@ -10,8 +10,8 @@ import { createPortal } from "react-dom";
 import type { FolderRecord } from "../../lib/types";
 import {
   parseSearchQuery,
+  queryForTermMode,
   removeQueryClause,
-  serializeSearchQuery,
   withExtensionQuery,
   type SearchFilters as SearchFilterState,
 } from "./searchStore";
@@ -398,19 +398,7 @@ function FilterChips({
   };
 
   const clearOption = () => {
-    const clauses = parsed.clauses
-      .filter((clause) => {
-        if (filters.option === "any") return clause.kind !== "or";
-        if (filters.option === "near") return clause.kind !== "near";
-        if (filters.option === "exclude") return clause.kind !== "exclude";
-        return true;
-      })
-      .map((clause) =>
-        filters.option === "exact" && clause.kind === "phrase"
-          ? { ...clause, kind: "term" as const, raw: clause.value }
-          : clause,
-      );
-    onQueryChange(serializeSearchQuery({ ...parsed, clauses }));
+    onQueryChange(queryForTermMode(query, "all"));
     onFiltersChange({ option: "all" });
   };
 

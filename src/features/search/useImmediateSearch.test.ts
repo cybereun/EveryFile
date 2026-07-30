@@ -175,4 +175,62 @@ describe("useImmediateSearch", () => {
       }),
     );
   });
+
+  it("makes a newly selected exact, near, or exclude mode authoritative over typed OR", async () => {
+    const search = vi.fn(async (request: SearchRequest) =>
+      response(request.requestId, "result.hwp"),
+    );
+    const cancel = vi.fn().mockResolvedValue(false);
+    const { result } = renderHook(() =>
+      useImmediateSearch({
+        search,
+        cancel,
+        debounceMs: 0,
+      }),
+    );
+
+    for (const option of ["exact", "near", "exclude"] as const) {
+      act(() => result.current.setQuery("alpha OR beta"));
+      await waitFor(() => expect(result.current.filters.option).toBe("any"));
+      search.mockClear();
+
+      act(() => result.current.patchFilters({ option }));
+
+      await waitFor(() =>
+        expect(search).toHaveBeenLastCalledWith(
+          expect.objectContaining({
+            query: "alpha beta",
+            termMode: option,
+          }),
+        ),
+      );
+      expect(result.current.query).toBe("alpha beta");
+      expect(result.current.filters.option).toBe(option);
+    }
+  });
+
+  it("captures decoded quoted extensions in the DTO without rewriting the visible query", async () => {
+    const search = vi.fn(async (request: SearchRequest) =>
+      response(request.requestId, "result.hwp"),
+    );
+    const cancel = vi.fn().mockResolvedValue(false);
+    const { result } = renderHook(() =>
+      useImmediateSearch({
+        search,
+        cancel,
+        debounceMs: 0,
+      }),
+    );
+
+    act(() => result.current.setQuery(String.raw`alpha ext:"pdf"`));
+
+    await waitFor(() =>
+      expect(search).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          query: String.raw`alpha ext:"pdf"`,
+          extensions: ["pdf"],
+        }),
+      ),
+    );
+  });
 });

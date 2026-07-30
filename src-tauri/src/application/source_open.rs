@@ -21,6 +21,9 @@ impl VerifiedSource {
     pub fn current_path(&self) -> Result<PathBuf, SourceOpenError> {
         #[cfg(windows)]
         {
+            for lock in &self._locks {
+                lock.ensure_non_redirecting()?;
+            }
             let root = self
                 ._locks
                 .first()
@@ -122,6 +125,32 @@ struct WindowsPathLock(windows::Win32::Foundation::HANDLE);
 
 #[cfg(windows)]
 impl WindowsPathLock {
+    fn ensure_non_redirecting(&self) -> Result<(), SourceOpenError> {
+        use windows::Win32::Storage::FileSystem::{
+            FileAttributeTagInfo, GetFileInformationByHandleEx, FILE_ATTRIBUTE_REPARSE_POINT,
+            FILE_ATTRIBUTE_TAG_INFO,
+        };
+
+        let mut tag = FILE_ATTRIBUTE_TAG_INFO::default();
+        unsafe {
+            GetFileInformationByHandleEx(
+                self.0,
+                FileAttributeTagInfo,
+                (&mut tag as *mut FILE_ATTRIBUTE_TAG_INFO).cast(),
+                std::mem::size_of::<FILE_ATTRIBUTE_TAG_INFO>() as u32,
+            )
+        }
+        .map_err(|error| SourceOpenError::Platform(error.to_string()))?;
+        if is_redirecting_reparse_tag(
+            tag.FileAttributes,
+            FILE_ATTRIBUTE_REPARSE_POINT.0,
+            tag.ReparseTag,
+        ) {
+            return Err(SourceOpenError::RedirectingReparsePoint);
+        }
+        Ok(())
+    }
+
     fn current_path(&self) -> Result<PathBuf, SourceOpenError> {
         use std::os::windows::ffi::OsStringExt;
         use windows::Win32::Storage::FileSystem::{
@@ -180,10 +209,8 @@ fn lock_windows_component(path: PathBuf) -> Result<WindowsPathLock, SourceOpenEr
     use std::os::windows::ffi::OsStrExt;
     use windows::core::PCWSTR;
     use windows::Win32::Storage::FileSystem::{
-        CreateFileW, FileAttributeTagInfo, GetFileInformationByHandleEx,
-        FILE_ATTRIBUTE_REPARSE_POINT, FILE_ATTRIBUTE_TAG_INFO, FILE_FLAG_BACKUP_SEMANTICS,
-        FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES, FILE_SHARE_READ, FILE_SHARE_WRITE,
-        OPEN_EXISTING,
+        CreateFileW, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
+        FILE_READ_ATTRIBUTES, FILE_READ_DATA, FILE_SHARE_READ, OPEN_EXISTING,
     };
 
     let wide = path
@@ -194,8 +221,8 @@ fn lock_windows_component(path: PathBuf) -> Result<WindowsPathLock, SourceOpenEr
     let handle = unsafe {
         CreateFileW(
             PCWSTR(wide.as_ptr()),
-            FILE_READ_ATTRIBUTES.0,
-            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            FILE_READ_DATA.0 | FILE_READ_ATTRIBUTES.0,
+            FILE_SHARE_READ,
             None,
             OPEN_EXISTING,
             FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
@@ -211,24 +238,7 @@ fn lock_windows_component(path: PathBuf) -> Result<WindowsPathLock, SourceOpenEr
         }
     })?;
     let lock = WindowsPathLock(handle);
-    let mut tag = FILE_ATTRIBUTE_TAG_INFO::default();
-    unsafe {
-        GetFileInformationByHandleEx(
-            handle,
-            FileAttributeTagInfo,
-            (&mut tag as *mut FILE_ATTRIBUTE_TAG_INFO).cast(),
-            std::mem::size_of::<FILE_ATTRIBUTE_TAG_INFO>() as u32,
-        )
-    }
-    .map_err(|error| SourceOpenError::Platform(error.to_string()))?;
-
-    if is_redirecting_reparse_tag(
-        tag.FileAttributes,
-        FILE_ATTRIBUTE_REPARSE_POINT.0,
-        tag.ReparseTag,
-    ) {
-        return Err(SourceOpenError::RedirectingReparsePoint);
-    }
+    lock.ensure_non_redirecting()?;
     Ok(lock)
 }
 
@@ -270,6 +280,8 @@ fn launch_source(source: &Path) -> Result<(), SourceOpenError> {
         nShow: SW_SHOWNORMAL.0,
         ..Default::default()
     };
+    // The write-exclusive verification handles remain alive through this synchronous
+    // shell handoff and are released immediately after ShellExecuteExW returns.
     unsafe { ShellExecuteExW(&mut info) }
         .map_err(|error| SourceOpenError::Launch(error.to_string()))
 }

@@ -10,6 +10,7 @@ import {
   explicitOptionFromQuery,
   hasSearchCriteria,
   parseSearchQuery,
+  queryForTermMode,
   structuredValuesFromQuery,
   type SearchFilters,
 } from "./searchStore";
@@ -79,6 +80,13 @@ export function useImmediateSearch({
   }, []);
 
   const patchFilters = useCallback((patch: Partial<SearchFilters>) => {
+    if (patch.option) {
+      const normalized = queryForTermMode(queryRef.current, patch.option);
+      if (normalized !== queryRef.current) {
+        queryRef.current = normalized;
+        setRawQuery(normalized);
+      }
+    }
     setFilters((current) => {
       const next = { ...current, ...patch };
       if (next.mode === "filename") {

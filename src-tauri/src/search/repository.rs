@@ -378,6 +378,24 @@ impl SearchSql {
 
 fn validate_request(request: &SearchRequest, parsed: &ParsedQuery) -> Result<(), SearchError> {
     sort_clause(&request.sort, matches!(request.mode, SearchMode::Keyword))?;
+    if parsed.match_any && request.term_mode != TermMode::Any {
+        return Err(SearchError::invalid_request(
+            "explicit OR syntax requires the any term mode",
+        ));
+    }
+    if parsed.near.is_some() && request.term_mode != TermMode::Near {
+        return Err(SearchError::invalid_request(
+            "explicit near syntax requires the near term mode",
+        ));
+    }
+    if parsed.positive_groups.is_empty()
+        && !parsed.excluded_terms.is_empty()
+        && request.term_mode != TermMode::Exclude
+    {
+        return Err(SearchError::invalid_request(
+            "an exclusion-only query requires the exclude term mode",
+        ));
+    }
     if matches!(request.mode, SearchMode::Filename) {
         if !request.include_filename {
             return Err(SearchError::invalid_request(

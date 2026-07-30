@@ -141,6 +141,47 @@ fn verified_source_tracks_the_registered_root_identity_if_its_path_is_replaced()
 
 #[cfg(windows)]
 #[test]
+fn verified_source_blocks_write_reparse_handles_until_it_is_dropped() {
+    use windows::core::HRESULT;
+    use windows::Win32::Foundation::{CloseHandle, ERROR_SHARING_VIOLATION};
+
+    let fixture = Fixture::new();
+    let source = fixture.root.join("write-locked.pdf");
+    fs::write(&source, b"fixture").unwrap();
+    fixture.insert("doc-write-lock", &source, &fixture.root);
+
+    let verified = verify_indexed_source(&fixture.database, "doc-write-lock").unwrap();
+    let error = open_write_reparse_handle(&source).unwrap_err();
+    assert_eq!(error.code(), HRESULT::from_win32(ERROR_SHARING_VIOLATION.0));
+
+    drop(verified);
+    let writer = open_write_reparse_handle(&source).unwrap();
+    unsafe { CloseHandle(writer) }.unwrap();
+}
+
+#[cfg(windows)]
+#[test]
+fn verification_fails_closed_while_an_existing_writer_is_open() {
+    use windows::Win32::Foundation::CloseHandle;
+
+    let fixture = Fixture::new();
+    let source = fixture.root.join("existing-writer.pdf");
+    fs::write(&source, b"fixture").unwrap();
+    fixture.insert("doc-existing-writer", &source, &fixture.root);
+    let writer = open_write_reparse_handle(&source).unwrap();
+
+    let error = match verify_indexed_source(&fixture.database, "doc-existing-writer") {
+        Err(error) => error,
+        Ok(_) => panic!("verification unexpectedly allowed an existing writer"),
+    };
+    assert_eq!(error.code(), "SOURCE_VERIFICATION_FAILED");
+
+    unsafe { CloseHandle(writer) }.unwrap();
+    verify_indexed_source(&fixture.database, "doc-existing-writer").unwrap();
+}
+
+#[cfg(windows)]
+#[test]
 fn rejects_name_surrogate_symlinks_when_creation_is_available() {
     use std::os::windows::fs::symlink_file;
 
@@ -162,6 +203,35 @@ fn rejects_name_surrogate_symlinks_when_creation_is_available() {
         verify_indexed_source(&fixture.database, "doc-link"),
         Err(SourceOpenError::RedirectingReparsePoint)
     ));
+}
+
+#[cfg(windows)]
+fn open_write_reparse_handle(
+    path: &std::path::Path,
+) -> windows::core::Result<windows::Win32::Foundation::HANDLE> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows::core::PCWSTR;
+    use windows::Win32::Storage::FileSystem::{
+        CreateFileW, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_DELETE, FILE_SHARE_READ,
+        FILE_SHARE_WRITE, FILE_WRITE_DATA, OPEN_EXISTING,
+    };
+
+    let wide = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    unsafe {
+        CreateFileW(
+            PCWSTR(wide.as_ptr()),
+            FILE_WRITE_DATA.0,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            None,
+            OPEN_EXISTING,
+            FILE_FLAG_OPEN_REPARSE_POINT,
+            None,
+        )
+    }
 }
 
 struct Fixture {

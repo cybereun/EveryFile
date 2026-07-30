@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use everyfile_lib::domain::models::{SearchMode, SearchRequest};
+use everyfile_lib::domain::models::{SearchMode, SearchRequest, TermMode};
 use everyfile_lib::indexing::ActivityLimiter;
 use everyfile_lib::infrastructure::database::Database;
 use everyfile_lib::infrastructure::secure_key::SecretKey;
@@ -70,16 +70,97 @@ fn explicit_or_keeps_and_precedence_in_mixed_groups() {
         "beta gamma",
     );
 
-    let response = fixture
-        .repository
-        .search(&request("alpha OR beta gamma", SearchMode::Keyword))
-        .unwrap();
+    let mut explicit_any = request("alpha OR beta gamma", SearchMode::Keyword);
+    explicit_any.term_mode = TermMode::Any;
+    let response = fixture.repository.search(&explicit_any).unwrap();
     let ids = response
         .hits
         .iter()
         .map(|hit| hit.document_id.as_str())
         .collect::<Vec<_>>();
     assert_eq!(ids, ["doc-alpha", "doc-beta-gamma"]);
+}
+
+#[test]
+fn selected_term_modes_match_normalized_or_queries_and_reject_ambiguous_dtos() {
+    let fixture = Fixture::new();
+    for (id, body) in [
+        ("doc-exact", "alpha beta"),
+        ("doc-alpha", "alpha only"),
+        ("doc-beta", "beta only"),
+        ("doc-gamma", "gamma only"),
+    ] {
+        fixture.insert_document(
+            id,
+            "folder-1",
+            &format!(r"C:\fixture\{id}.txt"),
+            &format!("{id}.txt"),
+            "txt",
+            "2026-01-01T00:00:00Z",
+            1,
+            "",
+            body,
+        );
+    }
+
+    for (term_mode, expected) in [
+        (TermMode::Exact, vec!["doc-exact"]),
+        (TermMode::Near, vec!["doc-exact"]),
+        (TermMode::Exclude, vec!["doc-gamma"]),
+    ] {
+        let mut normalized = request("alpha beta", SearchMode::Keyword);
+        normalized.term_mode = term_mode;
+        let response = fixture.repository.search(&normalized).unwrap();
+        assert_eq!(
+            response
+                .hits
+                .iter()
+                .map(|hit| hit.document_id.as_str())
+                .collect::<Vec<_>>(),
+            expected
+        );
+
+        let mut ambiguous = request("alpha OR beta", SearchMode::Keyword);
+        ambiguous.term_mode = term_mode;
+        assert!(matches!(
+            fixture.repository.search(&ambiguous),
+            Err(everyfile_lib::search::SearchError::InvalidRequest(_))
+        ));
+    }
+}
+
+#[test]
+fn quoted_extension_syntax_matches_the_duplicate_dto_filter() {
+    let fixture = Fixture::new();
+    fixture.insert_document(
+        "doc-txt",
+        "folder-1",
+        r"C:\fixture\alpha.txt",
+        "alpha.txt",
+        "txt",
+        "2026-01-01T00:00:00Z",
+        1,
+        "",
+        "alpha",
+    );
+    fixture.insert_document(
+        "doc-pdf",
+        "folder-1",
+        r"C:\fixture\alpha.pdf",
+        "alpha.pdf",
+        "pdf",
+        "2026-01-01T00:00:00Z",
+        1,
+        "",
+        "alpha",
+    );
+    let mut request = request(r#"alpha ext:"txt""#, SearchMode::Keyword);
+    request.extensions = vec!["txt".into()];
+
+    let response = fixture.repository.search(&request).unwrap();
+
+    assert_eq!(response.total, 1);
+    assert_eq!(response.hits[0].document_id, "doc-txt");
 }
 
 #[test]
@@ -247,11 +328,13 @@ fn any_term_search_and_confidence_sort_are_supported_in_both_modes() {
     );
 
     let mut keyword = request("alpha OR beta", SearchMode::Keyword);
+    keyword.term_mode = TermMode::Any;
     keyword.sort = "confidence".into();
     let keyword_results = fixture.repository.search(&keyword).unwrap();
     assert_eq!(keyword_results.total, 2);
 
-    let filename = request("alpha OR beta", SearchMode::Filename);
+    let mut filename = request("alpha OR beta", SearchMode::Filename);
+    filename.term_mode = TermMode::Any;
     let filename_results = fixture.repository.search(&filename).unwrap();
     assert_eq!(filename_results.total, 2);
 }
@@ -295,7 +378,11 @@ fn hostile_queries_are_bound_and_do_not_modify_the_database() {
         ("'; DROP TABLE documents; --", SearchMode::Keyword),
         ("%' OR 1=1 --", SearchMode::Filename),
     ] {
-        let response = fixture.repository.search(&request(query, mode)).unwrap();
+        let mut hostile = request(query, mode);
+        if query.contains(" OR ") {
+            hostile.term_mode = TermMode::Any;
+        }
+        let response = fixture.repository.search(&hostile).unwrap();
         assert_eq!(response.total, 0);
     }
 
@@ -377,10 +464,9 @@ fn keyword_search_honors_near_content_only_and_exclusion_only_queries() {
         "pending",
     );
 
-    let near = fixture
-        .repository
-        .search(&request("alpha beta ~1", SearchMode::Keyword))
-        .unwrap();
+    let mut near_request = request("alpha beta ~1", SearchMode::Keyword);
+    near_request.term_mode = TermMode::Near;
+    let near = fixture.repository.search(&near_request).unwrap();
     assert_eq!(near.total, 1);
     assert_eq!(near.hits[0].document_id, "doc-near");
 
@@ -393,10 +479,9 @@ fn keyword_search_honors_near_content_only_and_exclusion_only_queries() {
     content_only.include_filename = false;
     assert_eq!(fixture.repository.search(&content_only).unwrap().total, 0);
 
-    let excluded = fixture
-        .repository
-        .search(&request("-blocked", SearchMode::Keyword))
-        .unwrap();
+    let mut excluded_request = request("-blocked", SearchMode::Keyword);
+    excluded_request.term_mode = TermMode::Exclude;
+    let excluded = fixture.repository.search(&excluded_request).unwrap();
     assert_eq!(excluded.total, 1);
     assert_eq!(excluded.hits[0].document_id, "doc-near");
 }

@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  extensionsFromQuery,
   parseSearchQuery,
+  queryForTermMode,
   removeQueryClause,
   serializeSearchQuery,
   withExtensionQuery,
@@ -43,5 +45,31 @@ describe("search query AST", () => {
   it("preserves explicit OR grouping instead of flattening mixed clauses", () => {
     const parsed = parseSearchQuery("alpha OR beta gamma");
     expect(parsed.positiveGroups).toEqual([["alpha"], ["beta", "gamma"]]);
+  });
+
+  it("normalizes conflicting syntax when the selected term mode takes precedence", () => {
+    const query =
+      String.raw`alpha OR "beta phrase" -draft ~7 path:"C:\My Files" after:2026-01-01 ext:pdf`;
+
+    expect(queryForTermMode(query, "exact")).toBe(
+      String.raw`alpha "beta phrase" draft path:"C:\My Files" after:2026-01-01 ext:pdf`,
+    );
+    expect(queryForTermMode(query, "near")).toBe(
+      String.raw`alpha "beta phrase" draft path:"C:\My Files" after:2026-01-01 ext:pdf`,
+    );
+    expect(queryForTermMode(query, "exclude")).toBe(
+      String.raw`alpha "beta phrase" -draft path:"C:\My Files" after:2026-01-01 ext:pdf`,
+    );
+    expect(queryForTermMode(query, "all")).toBe(
+      String.raw`alpha "beta phrase" draft path:"C:\My Files" after:2026-01-01 ext:pdf`,
+    );
+  });
+
+  it("decodes quoted extension values the same way as the Rust parser", () => {
+    expect(extensionsFromQuery(String.raw`alpha ext:"pdf"`)).toEqual(["pdf"]);
+    expect(extensionsFromQuery(String.raw`ext:"hwp,pdf"`)).toEqual([
+      "hwp",
+      "pdf",
+    ]);
   });
 });

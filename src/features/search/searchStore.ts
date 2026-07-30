@@ -117,7 +117,7 @@ function clauseFromToken(token: RawToken): QueryClause {
     const name = operator[1].toLowerCase();
     const encoded = operator[2];
     if (name === "ext") {
-      const values = encoded
+      const values = decodeQuoted(encoded)
         .split(",")
         .map((value) => value.trim().replace(/^\./, "").toLowerCase())
         .filter(Boolean);
@@ -186,6 +186,20 @@ export function parseSearchQuery(input: string): ParsedSearchQuery {
 
 export function serializeSearchQuery(parsed: ParsedSearchQuery) {
   return parsed.clauses.map((clause) => clause.raw).join(" ");
+}
+
+export function queryForTermMode(query: string, mode: SearchTermMode) {
+  const parsed = parseSearchQuery(query);
+  const clauses = parsed.clauses
+    .filter((clause) => clause.kind !== "or" && clause.kind !== "near")
+    .map((clause) => {
+      if (clause.kind !== "exclude" || mode === "exclude") return clause;
+      return clauseFromToken({
+        raw: clause.raw.slice(1),
+        closed: true,
+      });
+    });
+  return serializeSearchQuery({ ...parsed, clauses });
 }
 
 export function removeQueryClause(
