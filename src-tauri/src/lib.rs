@@ -32,7 +32,9 @@ pub fn run() {
             let database = Arc::new(Database::open(&app_data_dir.join("everyfile.db"), &key)?);
             database.migrate()?;
             let settings_repository = settings::SettingsRepository::new(Arc::clone(&database));
-            let persisted_settings = settings_repository.load()?;
+            let loaded_settings = settings_repository.load_with_migration()?;
+            let normalized_legacy_settings = loaded_settings.normalized_unsupported_flags;
+            let persisted_settings = loaded_settings.settings;
             statistics::StatisticsRepository::new(Arc::clone(&database))
                 .run_due_history_retention(persisted_settings.history_retention_days)?;
             let parser = Arc::new(ParserClient::new(
@@ -66,14 +68,23 @@ pub fn run() {
                 .into_iter()
                 .map(|folder| PathBuf::from(folder.canonical_path))
                 .collect();
-            diagnostics::DiagnosticsLogger::new(&app_data_dir, registered_roots)?.write(
-                &diagnostics::DiagnosticEvent {
+            let diagnostics = diagnostics::DiagnosticsLogger::new(&app_data_dir, registered_roots)?;
+            if normalized_legacy_settings {
+                diagnostics.write(&diagnostics::DiagnosticEvent {
                     level: "info".into(),
-                    code: "APP_STARTED".into(),
-                    message: "EveryFile started; local diagnostic retention completed".into(),
+                    code: "SETTINGS_LEGACY_FLAGS_NORMALIZED".into(),
+                    message:
+                        "Unsupported legacy startup, hidden-start, and tray settings were disabled"
+                            .into(),
                     document_id: None,
-                },
-            )?;
+                })?;
+            }
+            diagnostics.write(&diagnostics::DiagnosticEvent {
+                level: "info".into(),
+                code: "APP_STARTED".into(),
+                message: "EveryFile started; local diagnostic retention completed".into(),
+                document_id: None,
+            })?;
             app.manage(app_state);
             Ok(())
         })

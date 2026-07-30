@@ -270,6 +270,46 @@ fn settings_are_validated_and_persisted_in_the_encrypted_database() {
 }
 
 #[test]
+fn legacy_unsupported_startup_flags_are_normalized_and_persisted_on_load() {
+    let fixture = Fixture::new();
+    let repository = SettingsRepository::new(Arc::clone(&fixture.database));
+    fixture
+        .database
+        .connection()
+        .execute(
+            "INSERT INTO app_settings (id, settings_json, updated_at)
+             VALUES (
+               1,
+               '{\"language\":\"ko\",\"theme\":\"light\",\"historyRetentionDays\":90,
+                 \"minimizeToTray\":true,\"startWithWindows\":true,\"startHidden\":true,
+                 \"maxFileSizeBytes\":209715200,\"resultPageSize\":100}',
+               '2026-07-30T00:00:00Z'
+             )",
+            [],
+        )
+        .unwrap();
+
+    let loaded = repository.load().unwrap();
+
+    assert!(!loaded.minimize_to_tray);
+    assert!(!loaded.start_with_windows);
+    assert!(!loaded.start_hidden);
+    let stored = fixture
+        .database
+        .connection()
+        .query_row(
+            "SELECT settings_json FROM app_settings WHERE id = 1",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .unwrap();
+    let stored: serde_json::Value = serde_json::from_str(&stored).unwrap();
+    assert_eq!(stored["minimizeToTray"], false);
+    assert_eq!(stored["startWithWindows"], false);
+    assert_eq!(stored["startHidden"], false);
+}
+
+#[test]
 fn parse_errors_are_listed_and_retry_only_changes_failed_documents() {
     let fixture = Fixture::new();
     fixture.seed_documents();

@@ -17,6 +17,10 @@ impl SettingsRepository {
     }
 
     pub fn load(&self) -> Result<AppSettings, SettingsError> {
+        Ok(self.load_with_migration()?.settings)
+    }
+
+    pub fn load_with_migration(&self) -> Result<LoadedSettings, SettingsError> {
         let connection = self.database.connection();
         let stored = connection
             .query_row(
@@ -25,18 +29,40 @@ impl SettingsRepository {
                 |row| row.get::<_, String>(0),
             )
             .optional()?;
+        drop(connection);
         match stored {
             Some(json) => {
-                let settings = serde_json::from_str(&json).map_err(SettingsError::Deserialize)?;
+                let mut settings = serde_json::from_str::<AppSettings>(&json)
+                    .map_err(SettingsError::Deserialize)?;
+                let normalized_unsupported_flags = settings.minimize_to_tray
+                    || settings.start_with_windows
+                    || settings.start_hidden;
+                settings.minimize_to_tray = false;
+                settings.start_with_windows = false;
+                settings.start_hidden = false;
                 validate(&settings)?;
-                Ok(settings)
+                if normalized_unsupported_flags {
+                    self.persist(&settings)?;
+                }
+                Ok(LoadedSettings {
+                    settings,
+                    normalized_unsupported_flags,
+                })
             }
-            None => Ok(AppSettings::default()),
+            None => Ok(LoadedSettings {
+                settings: AppSettings::default(),
+                normalized_unsupported_flags: false,
+            }),
         }
     }
 
     pub fn save(&self, settings: &AppSettings) -> Result<AppSettings, SettingsError> {
         validate(settings)?;
+        self.persist(settings)?;
+        Ok(settings.clone())
+    }
+
+    fn persist(&self, settings: &AppSettings) -> Result<(), SettingsError> {
         let json = serde_json::to_string(settings).map_err(SettingsError::Serialize)?;
         self.database.connection().execute(
             "INSERT INTO app_settings (id, settings_json, updated_at)
@@ -46,8 +72,13 @@ impl SettingsRepository {
                updated_at = excluded.updated_at",
             params![json],
         )?;
-        Ok(settings.clone())
+        Ok(())
     }
+}
+
+pub struct LoadedSettings {
+    pub settings: AppSettings,
+    pub normalized_unsupported_flags: bool,
 }
 
 fn validate(settings: &AppSettings) -> Result<(), SettingsError> {

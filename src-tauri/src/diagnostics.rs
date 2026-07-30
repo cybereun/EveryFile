@@ -1,5 +1,5 @@
 use std::fs::{self, OpenOptions};
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -13,6 +13,8 @@ const SECONDS_PER_DAY: u64 = 24 * 60 * 60;
 const LOG_RETENTION_DAYS: u64 = 7;
 const MAX_LOG_FILE_BYTES: u64 = 1024 * 1024;
 const MAX_DAILY_LOG_SEGMENTS: u8 = 3;
+#[cfg(windows)]
+const MAX_RESET_STATE_BYTES: u64 = 1024;
 
 pub struct DiagnosticsLogger {
     app_data_dir: PathBuf,
@@ -340,26 +342,53 @@ fn remove_windows_app_data_contents(
 }
 
 #[cfg(windows)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+struct ResetRequest {
+    nonce: String,
+    parent_pid: u32,
+    parent_created: u64,
+}
+
+#[cfg(windows)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+struct ResetOwnershipRecord {
+    nonce: String,
+    root_identity: WindowsFileIdentity,
+    quarantine_name: String,
+}
+
+#[cfg(windows)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ResetWorkerOutcome {
+    Success,
+    TargetConflict,
+    RetryExhausted,
+    Failed,
+}
+
+#[cfg(windows)]
 pub fn start_reset_worker(app_data_dir: &Path) -> Result<(), DiagnosticError> {
     use std::os::windows::process::CommandExt;
 
     let local_appdata = std::env::var_os("LOCALAPPDATA")
         .map(PathBuf::from)
         .ok_or(DiagnosticError::LocalAppDataUnavailable)?;
-    let app_data_dir = validate_reset_target(&local_appdata, app_data_dir)?;
+    validate_reset_target(&local_appdata, app_data_dir)?;
     let nonce = format!("{:032x}", rand::rng().random::<u128>());
     let parent_pid = std::process::id();
     let parent_created = current_process_creation_identity()?;
-    let request_path = reset_request_path(&app_data_dir, &nonce)?;
-    let mut request_file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&request_path)
-        .map_err(DiagnosticError::Io)?;
-    writeln!(request_file, "{nonce}\n{parent_pid}\n{parent_created}")
-        .map_err(DiagnosticError::Io)?;
-    request_file.sync_all().map_err(DiagnosticError::Io)?;
-    drop(request_file);
+    let local_guard = ResetRootGuard::open(&local_appdata)?;
+    let request_path = reset_request_path(&local_appdata, &nonce)?;
+    create_reset_state(
+        &local_guard,
+        &local_appdata,
+        &request_path,
+        &ResetRequest {
+            nonce: nonce.clone(),
+            parent_pid,
+            parent_created,
+        },
+    )?;
     let executable = std::env::current_exe().map_err(DiagnosticError::Io)?;
     let spawn = Command::new(executable)
         .arg("--everyfile-reset-after-exit")
@@ -426,42 +455,40 @@ pub fn run_reset_worker_from_args() -> bool {
             return true;
         };
         let target = local_appdata.join(APP_DATA_DIRECTORY);
-        let Ok(target) = validate_reset_target(&local_appdata, &target) else {
-            return true;
-        };
         if wait_for_exact_process_exit(parent_pid, parent_created).is_err() {
             return true;
         }
-        let Ok(request_path) = reset_request_path(&target, nonce) else {
+        let Ok(request_path) = reset_request_path(&local_appdata, nonce) else {
             return true;
         };
-        let Ok(metadata) = fs::symlink_metadata(&request_path) else {
+        let Ok(local_guard) = ResetRootGuard::open(&local_appdata) else {
             return true;
         };
-        if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len() > 128 {
-            return true;
-        }
-        let Ok(request) = fs::read_to_string(&request_path) else {
+        let Ok(request) =
+            read_reset_state::<ResetRequest>(&local_guard, &local_appdata, &request_path)
+        else {
             return true;
         };
-        if request != format!("{nonce}\n{parent_pid}\n{parent_created}\n") {
+        if request
+            != (ResetRequest {
+                nonce: nonce.to_owned(),
+                parent_pid,
+                parent_created,
+            })
+        {
             return true;
         }
-        if fs::remove_file(&request_path).is_err() {
-            return true;
-        }
-        for _ in 0..300 {
-            match remove_app_data_contents(&local_appdata, &target) {
-                Ok(()) => {
-                    if let Ok(executable) = std::env::current_exe() {
-                        let _ = Command::new(executable).creation_flags(0x0800_0000).spawn();
-                    }
-                    return true;
-                }
-                Err(DiagnosticError::Io(_)) => {
-                    std::thread::sleep(Duration::from_millis(100));
-                }
-                Err(_) => return true,
+        if run_owned_reset_transaction(
+            &local_appdata,
+            &target,
+            nonce,
+            300,
+            Duration::from_millis(100),
+            |_, _| Ok(()),
+        ) == ResetWorkerOutcome::Success
+        {
+            if let Ok(executable) = std::env::current_exe() {
+                let _ = Command::new(executable).creation_flags(0x0800_0000).spawn();
             }
         }
     }
@@ -539,7 +566,13 @@ fn filetime_identity(value: windows::Win32::Foundation::FILETIME) -> u64 {
 
 #[cfg(windows)]
 fn windows_error(error: windows::core::Error) -> DiagnosticError {
-    DiagnosticError::Io(io::Error::other(error.to_string()))
+    let code = error.code().0 as u32;
+    let os_code = if code & 0xFFFF_0000 == 0x8007_0000 {
+        code & 0x0000_FFFF
+    } else {
+        code
+    };
+    DiagnosticError::Io(io::Error::from_raw_os_error(os_code as i32))
 }
 
 fn valid_reset_nonce(nonce: &str) -> bool {
@@ -549,11 +582,281 @@ fn valid_reset_nonce(nonce: &str) -> bool {
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
-fn reset_request_path(app_data_dir: &Path, nonce: &str) -> Result<PathBuf, DiagnosticError> {
+fn reset_request_path(local_appdata: &Path, nonce: &str) -> Result<PathBuf, DiagnosticError> {
     if !valid_reset_nonce(nonce) {
         return Err(DiagnosticError::InvalidResetRequest);
     }
-    Ok(app_data_dir.join(format!(".reset-request-{nonce}")))
+    Ok(local_appdata.join(format!(".{APP_DATA_DIRECTORY}-reset-request-{nonce}.json")))
+}
+
+#[cfg(windows)]
+fn reset_owner_path(local_appdata: &Path, nonce: &str) -> Result<PathBuf, DiagnosticError> {
+    if !valid_reset_nonce(nonce) {
+        return Err(DiagnosticError::InvalidResetRequest);
+    }
+    Ok(local_appdata.join(format!(".{APP_DATA_DIRECTORY}-reset-owner-{nonce}.json")))
+}
+
+#[cfg(windows)]
+fn reset_cleaned_path(local_appdata: &Path, nonce: &str) -> Result<PathBuf, DiagnosticError> {
+    if !valid_reset_nonce(nonce) {
+        return Err(DiagnosticError::InvalidResetRequest);
+    }
+    Ok(local_appdata.join(format!(".{APP_DATA_DIRECTORY}-reset-cleaned-{nonce}.json")))
+}
+
+#[cfg(windows)]
+fn reset_quarantine_name(nonce: &str) -> Result<String, DiagnosticError> {
+    if !valid_reset_nonce(nonce) {
+        return Err(DiagnosticError::InvalidResetRequest);
+    }
+    Ok(format!(".{APP_DATA_DIRECTORY}-reset-quarantine-{nonce}"))
+}
+
+#[cfg(windows)]
+fn create_reset_state<T: Serialize>(
+    local_guard: &ResetRootGuard,
+    local_appdata: &Path,
+    path: &Path,
+    state: &T,
+) -> Result<(), DiagnosticError> {
+    use std::os::windows::fs::OpenOptionsExt;
+    use windows::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT;
+
+    if path
+        .parent()
+        .is_none_or(|parent| !paths_equal(parent, local_appdata))
+    {
+        return Err(DiagnosticError::InvalidResetRequest);
+    }
+    let bytes = serde_json::to_vec(state).map_err(DiagnosticError::Serialize)?;
+    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > MAX_RESET_STATE_BYTES {
+        return Err(DiagnosticError::InvalidResetRequest);
+    }
+    local_guard.revalidate()?;
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT.0)
+        .open(path)
+        .map_err(DiagnosticError::Io)?;
+    file.write_all(&bytes).map_err(DiagnosticError::Io)?;
+    file.sync_all().map_err(DiagnosticError::Io)?;
+    local_guard.revalidate()
+}
+
+#[cfg(windows)]
+fn read_reset_state<T: serde::de::DeserializeOwned>(
+    local_guard: &ResetRootGuard,
+    local_appdata: &Path,
+    path: &Path,
+) -> Result<T, DiagnosticError> {
+    use std::os::windows::fs::OpenOptionsExt;
+    use windows::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT;
+
+    if path
+        .parent()
+        .is_none_or(|parent| !paths_equal(parent, local_appdata))
+    {
+        return Err(DiagnosticError::InvalidResetRequest);
+    }
+    local_guard.revalidate()?;
+    let metadata = fs::symlink_metadata(path).map_err(DiagnosticError::Io)?;
+    if is_reparse_or_symlink(&metadata)
+        || !metadata.is_file()
+        || metadata.len() > MAX_RESET_STATE_BYTES
+    {
+        return Err(DiagnosticError::InvalidResetRequest);
+    }
+    let mut file = OpenOptions::new()
+        .read(true)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT.0)
+        .open(path)
+        .map_err(DiagnosticError::Io)?;
+    let opened = file.metadata().map_err(DiagnosticError::Io)?;
+    if is_reparse_or_symlink(&opened) || !opened.is_file() || opened.len() > MAX_RESET_STATE_BYTES {
+        return Err(DiagnosticError::InvalidResetRequest);
+    }
+    let mut bytes = Vec::with_capacity(usize::try_from(opened.len()).unwrap_or_default());
+    file.read_to_end(&mut bytes).map_err(DiagnosticError::Io)?;
+    local_guard.revalidate()?;
+    serde_json::from_slice(&bytes).map_err(|_| DiagnosticError::InvalidResetRequest)
+}
+
+#[cfg(windows)]
+fn run_owned_reset_transaction<F>(
+    local_appdata: &Path,
+    target: &Path,
+    nonce: &str,
+    max_attempts: usize,
+    retry_delay: Duration,
+    mut before_cleanup: F,
+) -> ResetWorkerOutcome
+where
+    F: FnMut(usize, &Path) -> Result<(), DiagnosticError>,
+{
+    for attempt in 0..max_attempts {
+        let result =
+            owned_reset_attempt(local_appdata, target, nonce, attempt, &mut before_cleanup)
+                .map_err(classify_reset_error);
+        match result {
+            Ok(()) => return ResetWorkerOutcome::Success,
+            Err(DiagnosticError::ResetLocked(_)) if attempt + 1 < max_attempts => {
+                std::thread::sleep(retry_delay);
+            }
+            Err(DiagnosticError::ResetLocked(_)) => return ResetWorkerOutcome::RetryExhausted,
+            Err(DiagnosticError::ResetTargetConflict) => {
+                return ResetWorkerOutcome::TargetConflict;
+            }
+            Err(_) => return ResetWorkerOutcome::Failed,
+        }
+    }
+    ResetWorkerOutcome::RetryExhausted
+}
+
+#[cfg(windows)]
+fn owned_reset_attempt<F>(
+    local_appdata: &Path,
+    target: &Path,
+    nonce: &str,
+    attempt: usize,
+    before_cleanup: &mut F,
+) -> Result<(), DiagnosticError>
+where
+    F: FnMut(usize, &Path) -> Result<(), DiagnosticError>,
+{
+    let local_guard = ResetRootGuard::open(local_appdata)?;
+    let request_path = reset_request_path(local_appdata, nonce)?;
+    let owner_path = reset_owner_path(local_appdata, nonce)?;
+    let cleaned_path = reset_cleaned_path(local_appdata, nonce)?;
+    let quarantine_name = reset_quarantine_name(nonce)?;
+    let quarantine = local_appdata.join(&quarantine_name);
+
+    let owner = if owner_path.exists() {
+        let owner =
+            read_reset_state::<ResetOwnershipRecord>(&local_guard, local_appdata, &owner_path)?;
+        if owner.nonce != nonce || owner.quarantine_name != quarantine_name {
+            return Err(DiagnosticError::InvalidResetRequest);
+        }
+        owner
+    } else {
+        let validated = validate_reset_target(local_appdata, target)?;
+        let root = WindowsFileHandle::open_for_rename(&validated)?;
+        if root.is_reparse() || quarantine.exists() {
+            return Err(DiagnosticError::ResetTargetConflict);
+        }
+        let owner = ResetOwnershipRecord {
+            nonce: nonce.to_owned(),
+            root_identity: root.identity,
+            quarantine_name: quarantine_name.clone(),
+        };
+        create_reset_state(&local_guard, local_appdata, &owner_path, &owner)?;
+        local_guard.revalidate()?;
+        root.rename_to(&quarantine).map_err(classify_reset_error)?;
+        let pinned = WindowsFileHandle::open_pinned(&quarantine)?;
+        if pinned.identity != owner.root_identity || pinned.is_reparse() {
+            return Err(DiagnosticError::UnsafeResetTarget);
+        }
+        drop(pinned);
+        owner
+    };
+
+    if cleaned_path.exists() {
+        let cleaned =
+            read_reset_state::<ResetOwnershipRecord>(&local_guard, local_appdata, &cleaned_path)?;
+        if cleaned != owner || quarantine.exists() {
+            return Err(DiagnosticError::InvalidResetRequest);
+        }
+    } else {
+        let pinned = open_owned_quarantine(&local_guard, target, &quarantine, &owner)?;
+        before_cleanup(attempt, &quarantine)?;
+        remove_pinned_entry(&quarantine, pinned).map_err(classify_reset_error)?;
+        create_reset_state(&local_guard, local_appdata, &cleaned_path, &owner)?;
+    }
+
+    match fs::symlink_metadata(target) {
+        Ok(_) => return Err(DiagnosticError::ResetTargetConflict),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(classify_reset_io(error)),
+    }
+    local_guard.revalidate()?;
+    let staging = local_appdata.join(format!(".{APP_DATA_DIRECTORY}-reset-empty-{nonce}"));
+    if staging.exists() {
+        return Err(DiagnosticError::InvalidResetRequest);
+    }
+    fs::create_dir(&staging).map_err(classify_reset_io)?;
+    let staged = WindowsFileHandle::open_for_rename(&staging)?;
+    if staged.is_reparse() || !staged.is_directory() {
+        return Err(DiagnosticError::UnsafeResetTarget);
+    }
+    local_guard.revalidate()?;
+    staged.rename_to(target).map_err(classify_reset_error)?;
+    let created = WindowsFileHandle::open_pinned(target)?;
+    if created.identity != staged.identity || created.is_reparse() || !created.is_directory() {
+        return Err(DiagnosticError::ResetTargetConflict);
+    }
+    drop(created);
+    drop(staged);
+    for state_path in [&cleaned_path, &request_path, &owner_path] {
+        match fs::remove_file(state_path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(classify_reset_io(error)),
+        }
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn open_owned_quarantine(
+    local_guard: &ResetRootGuard,
+    target: &Path,
+    quarantine: &Path,
+    owner: &ResetOwnershipRecord,
+) -> Result<WindowsFileHandle, DiagnosticError> {
+    if quarantine.exists() {
+        let pinned = WindowsFileHandle::open_pinned(quarantine)?;
+        if pinned.identity != owner.root_identity || pinned.is_reparse() {
+            return Err(DiagnosticError::UnsafeResetTarget);
+        }
+        return Ok(pinned);
+    }
+    let root = match WindowsFileHandle::open_for_rename(target) {
+        Ok(root) => root,
+        Err(DiagnosticError::Io(error)) if error.kind() == io::ErrorKind::NotFound => {
+            return Err(DiagnosticError::InvalidResetRequest);
+        }
+        Err(error) => return Err(error),
+    };
+    if root.identity != owner.root_identity || root.is_reparse() {
+        return Err(DiagnosticError::ResetTargetConflict);
+    }
+    local_guard.revalidate()?;
+    root.rename_to(quarantine).map_err(classify_reset_error)?;
+    let pinned = WindowsFileHandle::open_pinned(quarantine)?;
+    if pinned.identity != owner.root_identity || pinned.is_reparse() {
+        return Err(DiagnosticError::UnsafeResetTarget);
+    }
+    Ok(pinned)
+}
+
+#[cfg(windows)]
+fn classify_reset_error(error: DiagnosticError) -> DiagnosticError {
+    match error {
+        DiagnosticError::Io(error) => classify_reset_io(error),
+        other => other,
+    }
+}
+
+#[cfg(windows)]
+fn classify_reset_io(error: io::Error) -> DiagnosticError {
+    if matches!(error.raw_os_error(), Some(32) | Some(33)) {
+        DiagnosticError::ResetLocked(error)
+    } else if error.kind() == io::ErrorKind::AlreadyExists {
+        DiagnosticError::ResetTargetConflict
+    } else {
+        DiagnosticError::Io(error)
+    }
 }
 
 #[cfg(not(windows))]
@@ -690,7 +993,7 @@ fn is_reparse_or_symlink(metadata: &fs::Metadata) -> bool {
 }
 
 #[cfg(windows)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 struct WindowsFileIdentity {
     volume: u32,
     index: u64,
@@ -807,6 +1110,10 @@ impl WindowsFileHandle {
 
     fn is_reparse(&self) -> bool {
         self.attributes & 0x0000_0400 != 0
+    }
+
+    fn is_directory(&self) -> bool {
+        self.attributes & 0x0000_0010 != 0
     }
 
     fn rename_to(&self, destination: &Path) -> Result<(), DiagnosticError> {
@@ -952,6 +1259,10 @@ pub enum DiagnosticError {
     ResetConfirmationRequired,
     #[error("application data reset request is invalid")]
     InvalidResetRequest,
+    #[error("application data reset is waiting for a locked file")]
+    ResetLocked(#[source] io::Error),
+    #[error("application data reset target was replaced")]
+    ResetTargetConflict,
 }
 
 impl DiagnosticError {
@@ -966,6 +1277,8 @@ impl DiagnosticError {
             Self::ResetUnsupported => "RESET_UNSUPPORTED",
             Self::ResetConfirmationRequired => "RESET_CONFIRMATION_REQUIRED",
             Self::InvalidResetRequest => "RESET_REQUEST_INVALID",
+            Self::ResetLocked(_) => "RESET_LOCKED",
+            Self::ResetTargetConflict => "RESET_TARGET_CONFLICT",
         }
     }
 }
@@ -1005,6 +1318,65 @@ mod windows_reset_tests {
                 .starts_with(".com.cybereun.everyfile-reset-quarantine-")),
             "the owned root must be quarantined rather than a replacement being traversed: {result:?}"
         );
+    }
+
+    #[test]
+    fn worker_retries_never_adopt_a_swapped_target_or_leave_owned_data_behind() {
+        let temp = tempfile::tempdir().unwrap();
+        let local = temp.path().join("Local");
+        let app_data = local.join(APP_DATA_DIRECTORY);
+        let replacement = local.join("replacement");
+        fs::create_dir_all(&app_data).unwrap();
+        fs::create_dir_all(&replacement).unwrap();
+        fs::write(app_data.join("owned"), b"owned").unwrap();
+        fs::write(replacement.join("victim"), b"victim").unwrap();
+
+        let nonce = "0123456789abcdef0123456789abcdef";
+        let local_guard = ResetRootGuard::open(&local).unwrap();
+        let request_path = reset_request_path(&local, nonce).unwrap();
+        create_reset_state(
+            &local_guard,
+            &local,
+            &request_path,
+            &ResetRequest {
+                nonce: nonce.into(),
+                parent_pid: 123,
+                parent_created: 456,
+            },
+        )
+        .unwrap();
+        let outcome = run_owned_reset_transaction(
+            &local,
+            &app_data,
+            nonce,
+            3,
+            Duration::ZERO,
+            |attempt, _| {
+                if attempt == 0 {
+                    fs::rename(&replacement, &app_data).unwrap();
+                }
+                if attempt < 2 {
+                    return Err(DiagnosticError::ResetLocked(io::Error::from_raw_os_error(
+                        32,
+                    )));
+                }
+                Ok(())
+            },
+        );
+
+        assert_eq!(outcome, ResetWorkerOutcome::TargetConflict);
+        assert_eq!(fs::read(app_data.join("victim")).unwrap(), b"victim");
+        assert!(
+            !fs::read_dir(&local).unwrap().any(|entry| entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".com.cybereun.everyfile-reset-quarantine-")),
+            "the originally owned quarantine must be fully accounted for"
+        );
+        assert!(reset_owner_path(&local, nonce).unwrap().is_file());
+        assert!(reset_cleaned_path(&local, nonce).unwrap().is_file());
+        assert!(request_path.is_file());
     }
 
     #[test]
