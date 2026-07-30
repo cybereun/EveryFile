@@ -130,6 +130,88 @@ impl DocumentParser for GatedParser {
     }
 }
 
+#[derive(Clone, Copy)]
+enum SupersededAttemptOutcome {
+    Success,
+    Failure,
+}
+
+struct TwoAttemptParser {
+    state: Mutex<TwoAttemptParserState>,
+    ready: Condvar,
+    first_outcome: SupersededAttemptOutcome,
+}
+
+struct TwoAttemptParserState {
+    entered: usize,
+    released: [bool; 2],
+}
+
+impl TwoAttemptParser {
+    fn new(first_outcome: SupersededAttemptOutcome) -> Self {
+        Self {
+            state: Mutex::new(TwoAttemptParserState {
+                entered: 0,
+                released: [false; 2],
+            }),
+            ready: Condvar::new(),
+            first_outcome,
+        }
+    }
+
+    fn wait_until_entered(&self, expected: usize) {
+        let state = self.state.lock().unwrap();
+        let (state, timeout) = self
+            .ready
+            .wait_timeout_while(state, Duration::from_secs(2), |state| {
+                state.entered < expected
+            })
+            .unwrap();
+        assert_eq!(state.entered, expected, "parser attempts did not start");
+        assert!(!timeout.timed_out());
+    }
+
+    fn release(&self, attempt: usize) {
+        let mut state = self.state.lock().unwrap();
+        state.released[attempt] = true;
+        self.ready.notify_all();
+    }
+}
+
+impl DocumentParser for TwoAttemptParser {
+    fn parse(&self, _path: &Path, _max_bytes: u64) -> Result<ParsedDocument, ParserError> {
+        let mut state = self.state.lock().unwrap();
+        let attempt = state.entered;
+        assert!(attempt < state.released.len(), "unexpected parser attempt");
+        state.entered += 1;
+        self.ready.notify_all();
+        while !state.released[attempt] {
+            state = self.ready.wait(state).unwrap();
+        }
+        drop(state);
+
+        if attempt == 0 && matches!(self.first_outcome, SupersededAttemptOutcome::Failure) {
+            return Err(ParserError::Protocol {
+                code: ParseErrorCode::Damaged,
+                message: "superseded attempt failed late".into(),
+            });
+        }
+        let body = if attempt == 0 {
+            "stale content from attempt A"
+        } else {
+            "committed content from attempt B"
+        };
+        Ok(ParsedDocument {
+            title: None,
+            markdown: body.into(),
+            plain_text: body.into(),
+            blocks: vec![],
+            metadata: serde_json::json!({}),
+            warnings: vec![],
+        })
+    }
+}
+
 struct IndexHarness {
     _temp: TempDir,
     root: PathBuf,
@@ -506,6 +588,260 @@ impl DiscoveryProbe for BlockingReconciliationProbe {
     }
 }
 
+async fn assert_cancelled_superseded_attempt_is_harmless(first_outcome: SupersededAttemptOutcome) {
+    let harness = IndexHarness::new();
+    harness.write("shared.txt", "previous committed content");
+    let initial_job = harness.start().await;
+    assert_eq!(
+        harness.wait_until_finished(&initial_job).await.state,
+        JobState::Completed
+    );
+    harness.write(
+        "shared.txt",
+        "replacement file body that forces a new identity",
+    );
+
+    let parser = Arc::new(TwoAttemptParser::new(first_outcome));
+    let probe_a = Arc::new(BlockingReconciliationProbe::new(
+        ReconciliationBarrier::CancellationOnly,
+    ));
+    let coordinator_a = Arc::new(IndexCoordinator::with_parser_and_discovery_probe(
+        Arc::clone(&harness.database),
+        Arc::clone(&parser),
+        10 * 1024 * 1024,
+        Arc::clone(&probe_a),
+    ));
+    let coordinator_b = Arc::new(IndexCoordinator::with_parser(
+        Arc::clone(&harness.database),
+        Arc::clone(&parser),
+        10 * 1024 * 1024,
+    ));
+
+    let folder_id = harness.folder_id.clone();
+    let attempt_a = tokio::spawn(async move { coordinator_a.reconcile(&folder_id).await });
+    parser.wait_until_entered(1);
+    let token_a = harness
+        .database
+        .connection()
+        .query_row(
+            "SELECT parse_attempt_token FROM documents
+             WHERE file_name = 'shared.txt'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .ok();
+
+    let folder_id = harness.folder_id.clone();
+    let attempt_b = tokio::spawn(async move { coordinator_b.reconcile(&folder_id).await });
+    parser.wait_until_entered(2);
+    let token_b = harness
+        .database
+        .connection()
+        .query_row(
+            "SELECT parse_attempt_token FROM documents
+             WHERE file_name = 'shared.txt'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .ok();
+
+    attempt_a.abort();
+    probe_a.wait_until_cancelled();
+    parser.release(0);
+    assert!(attempt_a.await.unwrap_err().is_cancelled());
+
+    let while_b_owned: (String, String, String) = harness
+        .database
+        .connection()
+        .query_row(
+            "SELECT documents.parse_state, document_content.body, document_fts.body
+             FROM documents
+             JOIN document_content ON document_content.document_id = documents.id
+             JOIN document_fts ON document_fts.document_id = documents.id
+             WHERE documents.file_name = 'shared.txt'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+
+    parser.release(1);
+    attempt_b.await.unwrap().unwrap();
+
+    assert_eq!(while_b_owned.0, "parsing");
+    assert_eq!(while_b_owned.1, "previous committed content");
+    assert_eq!(while_b_owned.2, "previous committed content");
+    assert!(token_a.is_some());
+    assert!(token_b.is_some());
+    assert_ne!(token_a, token_b);
+
+    let final_state: (String, Option<String>, String, String, i64, i64) = harness
+        .database
+        .connection()
+        .query_row(
+            "SELECT documents.parse_state, documents.parse_attempt_token,
+                    document_content.body, document_fts.body,
+                    (SELECT COUNT(*) FROM document_content
+                     WHERE document_id = documents.id),
+                    (SELECT COUNT(*) FROM document_fts
+                     WHERE document_id = documents.id)
+             FROM documents
+             JOIN document_content ON document_content.document_id = documents.id
+             JOIN document_fts ON document_fts.document_id = documents.id
+             WHERE documents.file_name = 'shared.txt'",
+            [],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                ))
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        final_state,
+        (
+            "parsed".into(),
+            None,
+            "committed content from attempt B".into(),
+            "committed content from attempt B".into(),
+            1,
+            1,
+        )
+    );
+    let owned_or_parsing: i64 = harness
+        .database
+        .connection()
+        .query_row(
+            "SELECT COUNT(*) FROM documents
+             WHERE parse_state = 'parsing' OR parse_attempt_token IS NOT NULL",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(owned_or_parsing, 0);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn cancelled_superseded_success_cannot_restore_over_the_new_attempt_owner() {
+    assert_cancelled_superseded_attempt_is_harmless(SupersededAttemptOutcome::Success).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn cancelled_superseded_failure_cannot_restore_over_the_new_attempt_owner() {
+    assert_cancelled_superseded_attempt_is_harmless(SupersededAttemptOutcome::Failure).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn cancelled_transient_attempt_cannot_delete_the_new_attempt_owner() {
+    let harness = IndexHarness::new().with_valid_file("transient.txt");
+    let parser = Arc::new(TwoAttemptParser::new(SupersededAttemptOutcome::Success));
+    let probe_a = Arc::new(BlockingReconciliationProbe::new(
+        ReconciliationBarrier::CancellationOnly,
+    ));
+    let coordinator_a = Arc::new(IndexCoordinator::with_parser_and_discovery_probe(
+        Arc::clone(&harness.database),
+        Arc::clone(&parser),
+        10 * 1024 * 1024,
+        Arc::clone(&probe_a),
+    ));
+    let coordinator_b = Arc::new(IndexCoordinator::with_parser(
+        Arc::clone(&harness.database),
+        Arc::clone(&parser),
+        10 * 1024 * 1024,
+    ));
+
+    let folder_id = harness.folder_id.clone();
+    let attempt_a = tokio::spawn(async move { coordinator_a.reconcile(&folder_id).await });
+    parser.wait_until_entered(1);
+    let token_a: String = harness
+        .database
+        .connection()
+        .query_row(
+            "SELECT parse_attempt_token FROM documents
+             WHERE file_name = 'transient.txt'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+
+    let folder_id = harness.folder_id.clone();
+    let attempt_b = tokio::spawn(async move { coordinator_b.reconcile(&folder_id).await });
+    parser.wait_until_entered(2);
+    let token_b: String = harness
+        .database
+        .connection()
+        .query_row(
+            "SELECT parse_attempt_token FROM documents
+             WHERE file_name = 'transient.txt'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+
+    attempt_a.abort();
+    probe_a.wait_until_cancelled();
+    parser.release(0);
+    assert!(attempt_a.await.unwrap_err().is_cancelled());
+    let while_b_owned = harness
+        .database
+        .connection()
+        .query_row(
+            "SELECT parse_state, parse_attempt_token FROM documents
+             WHERE file_name = 'transient.txt'",
+            [],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )
+        .ok();
+
+    parser.release(1);
+    attempt_b.await.unwrap().unwrap();
+
+    assert_ne!(token_a, token_b);
+    assert_eq!(while_b_owned, Some(("parsing".into(), token_b)));
+    let final_state: (String, Option<String>, String, String, i64, i64) = harness
+        .database
+        .connection()
+        .query_row(
+            "SELECT documents.parse_state, documents.parse_attempt_token,
+                    document_content.body, document_fts.body,
+                    (SELECT COUNT(*) FROM document_content
+                     WHERE document_id = documents.id),
+                    (SELECT COUNT(*) FROM document_fts
+                     WHERE document_id = documents.id)
+             FROM documents
+             JOIN document_content ON document_content.document_id = documents.id
+             JOIN document_fts ON document_fts.document_id = documents.id
+             WHERE documents.file_name = 'transient.txt'",
+            [],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                ))
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        final_state,
+        (
+            "parsed".into(),
+            None,
+            "committed content from attempt B".into(),
+            "committed content from attempt B".into(),
+            1,
+            1,
+        )
+    );
+}
+
 #[tokio::test]
 async fn interrupted_job_resumes_without_reparsing_completed_files() {
     let harness = IndexHarness::new().with_files(["a.txt", "b.txt", "c.txt"]);
@@ -529,6 +865,17 @@ async fn cancellation_and_file_failures_are_isolated() {
     assert_eq!(status.completed_files, 3);
     assert_eq!(status.errors.len(), 1);
     assert_eq!(status.errors[0].code, "DAMAGED");
+    let failed_state: (String, Option<String>) = harness
+        .database
+        .connection()
+        .query_row(
+            "SELECT parse_state, parse_attempt_token
+             FROM documents WHERE file_name = 'broken.pdf'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(failed_state, ("failed".into(), None));
     assert_eq!(harness.search("a").await.len(), 1);
     assert_eq!(harness.search("c").await.len(), 1);
 

@@ -14,6 +14,8 @@ const INDEX_JOB_RECOVERY_MIGRATION: &str =
     include_str!("../../migrations/0003_index_job_recovery.sql");
 const RECONCILIATION_RUNS_MIGRATION: &str =
     include_str!("../../migrations/0004_reconciliation_runs.sql");
+const PARSE_ATTEMPT_OWNERSHIP_MIGRATION: &str =
+    include_str!("../../migrations/0005_parse_attempt_ownership.sql");
 
 pub struct Database {
     connection: Mutex<Connection>,
@@ -56,8 +58,24 @@ impl Database {
         transaction
             .execute_batch(RECONCILIATION_RUNS_MIGRATION)
             .map_err(DatabaseError::Migration)?;
+        if !documents_have_parse_attempt_token(&transaction).map_err(DatabaseError::Migration)? {
+            transaction
+                .execute_batch(PARSE_ATTEMPT_OWNERSHIP_MIGRATION)
+                .map_err(DatabaseError::Migration)?;
+        }
         transaction
             .execute("DELETE FROM reconciliation_runs", [])
+            .map_err(DatabaseError::Migration)?;
+        transaction
+            .execute(
+                "UPDATE documents
+                 SET parse_state = 'pending',
+                     parse_error_code = NULL,
+                     parse_attempt_token = NULL
+                 WHERE parse_state = 'parsing'
+                    OR parse_attempt_token IS NOT NULL",
+                [],
+            )
             .map_err(DatabaseError::Migration)?;
         transaction.commit().map_err(DatabaseError::Migration)
     }
@@ -65,6 +83,17 @@ impl Database {
     pub fn connection(&self) -> MutexGuard<'_, Connection> {
         self.connection.lock()
     }
+}
+
+fn documents_have_parse_attempt_token(connection: &Connection) -> Result<bool, rusqlite::Error> {
+    let mut statement = connection.prepare("PRAGMA table_info(documents)")?;
+    let mut rows = statement.query([])?;
+    while let Some(row) = rows.next()? {
+        if row.get::<_, String>(1)? == "parse_attempt_token" {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn build_key_pragma(key: &SecretKey) -> Zeroizing<String> {

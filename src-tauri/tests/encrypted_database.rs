@@ -210,6 +210,76 @@ fn startup_migration_purges_abandoned_reconciliation_scratch() {
     assert_eq!(counts, (0, 0));
 }
 
+#[test]
+fn startup_migration_recovers_an_orphan_parse_attempt_without_losing_searchable_content() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("parse-attempt-recovery.db");
+    let key = SecretKey::from_bytes(Zeroizing::new([27_u8; 32]));
+    let database = Database::open(&path, &key).unwrap();
+    database.migrate().unwrap();
+    let has_attempt_token = database
+        .connection()
+        .prepare("PRAGMA table_info(documents)")
+        .unwrap()
+        .query_map([], |row| row.get::<_, String>(1))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap()
+        .iter()
+        .any(|column| column == "parse_attempt_token");
+    assert!(
+        has_attempt_token,
+        "forward migration did not add parse-attempt ownership"
+    );
+    database
+        .connection()
+        .execute_batch(
+            "INSERT INTO folders
+             (id, canonical_path, display_name, created_at, enabled)
+             VALUES ('folder-1', 'C:\\fixture', 'Fixture',
+                     '2026-07-30T00:00:00Z', 1);
+             INSERT INTO documents
+             (id, folder_id, canonical_path, file_name, extension, size_bytes,
+              modified_at, parse_state, parse_attempt_token)
+             VALUES ('document-1', 'folder-1', 'C:\\fixture\\owned.txt',
+                     'owned.txt', 'txt', 9, '1', 'parsing', 'orphan-token');
+             INSERT INTO document_content
+             (document_id, title, body, markdown, blocks_json, warnings_json)
+             VALUES ('document-1', NULL, 'previous searchable content',
+                     'previous searchable content', '[]', '[]');
+             INSERT INTO document_fts (document_id, file_name, title, body)
+             VALUES ('document-1', 'owned.txt', NULL, 'previous searchable content');",
+        )
+        .unwrap();
+    drop(database);
+
+    let reopened = Database::open(&path, &key).unwrap();
+    reopened.migrate().unwrap();
+    let recovered: (String, Option<String>, String, String) = reopened
+        .connection()
+        .query_row(
+            "SELECT documents.parse_state, documents.parse_attempt_token,
+                    document_content.body, document_fts.body
+             FROM documents
+             JOIN document_content ON document_content.document_id = documents.id
+             JOIN document_fts ON document_fts.document_id = documents.id
+             WHERE documents.id = 'document-1'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .unwrap();
+
+    assert_eq!(
+        recovered,
+        (
+            "pending".into(),
+            None,
+            "previous searchable content".into(),
+            "previous searchable content".into(),
+        )
+    );
+}
+
 #[cfg(windows)]
 #[test]
 fn secure_key_store_persists_only_a_dpapi_protected_blob() {

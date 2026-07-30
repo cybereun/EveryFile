@@ -500,14 +500,16 @@ impl IndexCoordinator {
                  WHERE documents.folder_id = ?1
                    AND documents.canonical_path = ?2
                    AND (
-                     (
-                       ?3
-                       AND documents.parse_state = 'metadata_only'
-                     )
-                     OR (
-                       NOT ?3
-                       AND documents.parse_state = 'parsed'
-                       AND EXISTS (
+                      (
+                        ?3
+                        AND documents.parse_state = 'metadata_only'
+                        AND documents.parse_attempt_token IS NULL
+                      )
+                      OR (
+                        NOT ?3
+                        AND documents.parse_state = 'parsed'
+                        AND documents.parse_attempt_token IS NULL
+                        AND EXISTS (
                          SELECT 1 FROM document_content
                          WHERE document_content.document_id = documents.id
                        )
@@ -974,23 +976,42 @@ impl IndexCoordinator {
         let max_bytes = self.max_file_size_bytes;
         let parsed =
             tokio::task::spawn_blocking(move || parser.parse(&parse_path, max_bytes)).await;
-        runtime.finish_parser_operation(
+        let attempt_result = runtime.finish_parser_operation(
             parser_operation,
             || match parsed {
-                Ok(Ok(document)) => self.complete_success(job_id, &candidate, document),
-                Ok(Err(error)) => {
-                    let (code, message) = parser_failure(&error);
-                    self.complete_failure(job_id, &candidate, code, &message)
-                }
-                Err(_) => self.complete_failure(
+                Ok(Ok(document)) => self.complete_success(
                     job_id,
                     &candidate,
+                    &parsing_checkpoint.attempt_token,
+                    document,
+                ),
+                Ok(Err(error)) => {
+                    let (code, message) = parser_failure(&error);
+                    self.complete_parser_failure(
+                        job_id,
+                        &candidate,
+                        &parsing_checkpoint.attempt_token,
+                        code,
+                        &message,
+                    )
+                }
+                Err(_) => self.complete_parser_failure(
+                    job_id,
+                    &candidate,
+                    &parsing_checkpoint.attempt_token,
                     "PARSER_WORKER_STOPPED",
                     "parser worker stopped unexpectedly",
                 ),
             },
-            || self.compensate_cancelled_parse(&candidate, &parsing_checkpoint),
-        )
+            || {
+                self.compensate_cancelled_parse(&candidate, &parsing_checkpoint)
+                    .map(|_| ())
+            },
+        )?;
+        match attempt_result {
+            ParseAttemptMutation::Applied => Ok(()),
+            ParseAttemptMutation::Stale => self.complete_stale_attempt(job_id, &candidate),
+        }
     }
 
     fn validate_immediately_before_parse(
@@ -1113,6 +1134,7 @@ impl IndexCoordinator {
         let mut connection = self.database.connection();
         let transaction = connection.transaction()?;
         let folder_id = folder_id_for_job(&transaction, &candidate.job_id)?;
+        let attempt_token = random_id();
         let previous = transaction
             .query_row(
                 "SELECT id, folder_id, file_name, extension, size_bytes, modified_at,
@@ -1135,7 +1157,18 @@ impl IndexCoordinator {
                 },
             )
             .optional()?;
-        upsert_metadata_transaction(&transaction, &folder_id, candidate, "parsing", None)?;
+        let mutation = upsert_metadata_transaction(
+            &transaction,
+            &folder_id,
+            candidate,
+            "parsing",
+            None,
+            Some(&attempt_token),
+            true,
+        )?;
+        if mutation != ParseAttemptMutation::Applied {
+            return Err(IndexingError::StateChanged);
+        }
         let document_id = match &previous {
             Some((document_id, _)) => document_id.clone(),
             None => transaction.query_row(
@@ -1147,6 +1180,7 @@ impl IndexCoordinator {
         transaction.commit()?;
         Ok(DocumentParsingCheckpoint {
             document_id,
+            attempt_token,
             previous: previous.map(|(_, metadata)| metadata),
         })
     }
@@ -1155,33 +1189,41 @@ impl IndexCoordinator {
         &self,
         candidate: &PersistedCandidate,
         checkpoint: &DocumentParsingCheckpoint,
-    ) -> Result<(), IndexingError> {
+    ) -> Result<ParseAttemptMutation, IndexingError> {
         let mut connection = self.database.connection();
         let transaction = connection.transaction()?;
         let still_owned: bool = transaction.query_row(
             "SELECT EXISTS (
                SELECT 1 FROM documents
                WHERE id = ?1
-                 AND canonical_path = ?2
-                 AND parse_state = 'parsing'
-                 AND size_bytes = ?3
-                 AND modified_at = ?4
+                  AND canonical_path = ?2
+                  AND parse_state = 'parsing'
+                  AND parse_attempt_token = ?3
              )",
             params![
                 checkpoint.document_id,
                 candidate.canonical_path.to_string_lossy(),
-                candidate.size_bytes,
-                candidate.modified_at,
+                checkpoint.attempt_token,
             ],
             |row| row.get(0),
         )?;
         if !still_owned {
             transaction.commit()?;
-            return Ok(());
+            return Ok(ParseAttemptMutation::Stale);
         }
 
         if let Some(previous) = &checkpoint.previous {
-            transaction.execute(
+            let restored_state = if previous.parse_state == "parsing" {
+                "pending"
+            } else {
+                &previous.parse_state
+            };
+            let restored_error = if previous.parse_state == "parsing" {
+                None
+            } else {
+                previous.parse_error_code.as_deref()
+            };
+            let changed = transaction.execute(
                 "UPDATE documents
                  SET folder_id = ?2,
                      file_name = ?3,
@@ -1189,8 +1231,12 @@ impl IndexCoordinator {
                      size_bytes = ?5,
                      modified_at = ?6,
                      parse_state = ?7,
-                     parse_error_code = ?8
-                 WHERE id = ?1",
+                     parse_error_code = ?8,
+                     parse_attempt_token = NULL
+                 WHERE id = ?1
+                   AND canonical_path = ?9
+                   AND parse_state = 'parsing'
+                   AND parse_attempt_token = ?10",
                 params![
                     checkpoint.document_id,
                     previous.folder_id,
@@ -1198,22 +1244,50 @@ impl IndexCoordinator {
                     previous.extension,
                     previous.size_bytes,
                     previous.modified_at,
-                    previous.parse_state,
-                    previous.parse_error_code,
+                    restored_state,
+                    restored_error,
+                    candidate.canonical_path.to_string_lossy(),
+                    checkpoint.attempt_token,
                 ],
             )?;
+            if changed != 1 {
+                return Ok(ParseAttemptMutation::Stale);
+            }
         } else {
             transaction.execute(
-                "DELETE FROM document_fts WHERE document_id = ?1",
-                [&checkpoint.document_id],
+                "DELETE FROM document_fts
+                 WHERE document_id = ?1
+                   AND EXISTS (
+                     SELECT 1 FROM documents
+                     WHERE id = ?1
+                       AND canonical_path = ?2
+                       AND parse_state = 'parsing'
+                       AND parse_attempt_token = ?3
+                   )",
+                params![
+                    checkpoint.document_id,
+                    candidate.canonical_path.to_string_lossy(),
+                    checkpoint.attempt_token,
+                ],
             )?;
-            transaction.execute(
-                "DELETE FROM documents WHERE id = ?1",
-                [&checkpoint.document_id],
+            let changed = transaction.execute(
+                "DELETE FROM documents
+                 WHERE id = ?1
+                   AND canonical_path = ?2
+                   AND parse_state = 'parsing'
+                   AND parse_attempt_token = ?3",
+                params![
+                    checkpoint.document_id,
+                    candidate.canonical_path.to_string_lossy(),
+                    checkpoint.attempt_token,
+                ],
             )?;
+            if changed != 1 {
+                return Ok(ParseAttemptMutation::Stale);
+            }
         }
         transaction.commit()?;
-        Ok(())
+        Ok(ParseAttemptMutation::Applied)
     }
 
     fn complete_metadata_only(
@@ -1225,7 +1299,15 @@ impl IndexCoordinator {
         let transaction = connection.transaction()?;
         ensure_job_parsing(&transaction, job_id)?;
         let folder_id = folder_id_for_job(&transaction, job_id)?;
-        upsert_metadata_transaction(&transaction, &folder_id, candidate, "metadata_only", None)?;
+        upsert_metadata_transaction(
+            &transaction,
+            &folder_id,
+            candidate,
+            "metadata_only",
+            None,
+            None,
+            false,
+        )?;
         advance_file_transaction(&transaction, job_id, candidate)?;
         transaction.commit()?;
         Ok(())
@@ -1235,13 +1317,26 @@ impl IndexCoordinator {
         &self,
         job_id: &str,
         candidate: &PersistedCandidate,
+        attempt_token: &str,
         document: ParsedDocument,
-    ) -> Result<(), IndexingError> {
+    ) -> Result<ParseAttemptMutation, IndexingError> {
         let mut connection = self.database.connection();
         let transaction = connection.transaction()?;
         ensure_job_parsing(&transaction, job_id)?;
-        let document_id = document_id_for_path(&transaction, &candidate.canonical_path)?
-            .ok_or(IndexingError::MissingDocument)?;
+        let document_id = transaction
+            .query_row(
+                "SELECT id FROM documents
+                 WHERE canonical_path = ?1
+                   AND parse_state = 'parsing'
+                   AND parse_attempt_token = ?2",
+                params![candidate.canonical_path.to_string_lossy(), attempt_token],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        let Some(document_id) = document_id else {
+            transaction.commit()?;
+            return Ok(ParseAttemptMutation::Stale);
+        };
         transaction.execute(
             "DELETE FROM document_content WHERE document_id = ?1",
             [&document_id],
@@ -1268,30 +1363,53 @@ impl IndexCoordinator {
              SELECT id, file_name, ?2, ?3 FROM documents WHERE id = ?1",
             params![document_id, document.title, document.plain_text],
         )?;
-        transaction.execute(
+        let changed = transaction.execute(
             "UPDATE documents
              SET parse_state = 'parsed', parse_error_code = NULL,
-                 indexed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-             WHERE id = ?1",
-            [&document_id],
+                 indexed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+                 parse_attempt_token = NULL
+             WHERE id = ?1
+               AND parse_state = 'parsing'
+               AND parse_attempt_token = ?2",
+            params![document_id, attempt_token],
         )?;
+        if changed != 1 {
+            return Ok(ParseAttemptMutation::Stale);
+        }
         advance_file_transaction(&transaction, job_id, candidate)?;
         transaction.commit()?;
-        Ok(())
+        Ok(ParseAttemptMutation::Applied)
     }
 
-    fn complete_failure(
+    fn complete_parser_failure(
         &self,
         job_id: &str,
         candidate: &PersistedCandidate,
+        attempt_token: &str,
         code: &str,
         message: &str,
-    ) -> Result<(), IndexingError> {
+    ) -> Result<ParseAttemptMutation, IndexingError> {
         let mut connection = self.database.connection();
         let transaction = connection.transaction()?;
         ensure_job_parsing(&transaction, job_id)?;
-        let folder_id = folder_id_for_job(&transaction, job_id)?;
-        upsert_metadata_transaction(&transaction, &folder_id, candidate, "failed", Some(code))?;
+        let changed = transaction.execute(
+            "UPDATE documents
+             SET parse_state = 'failed',
+                 parse_error_code = ?3,
+                 parse_attempt_token = NULL
+             WHERE canonical_path = ?1
+               AND parse_state = 'parsing'
+               AND parse_attempt_token = ?2",
+            params![
+                candidate.canonical_path.to_string_lossy(),
+                attempt_token,
+                code
+            ],
+        )?;
+        if changed != 1 {
+            transaction.commit()?;
+            return Ok(ParseAttemptMutation::Stale);
+        }
         transaction.execute(
             "INSERT INTO index_job_errors
              (id, job_id, file_name, code, message, created_at)
@@ -1305,6 +1423,57 @@ impl IndexCoordinator {
                 message
             ],
         )?;
+        advance_file_transaction(&transaction, job_id, candidate)?;
+        transaction.commit()?;
+        Ok(ParseAttemptMutation::Applied)
+    }
+
+    fn complete_failure(
+        &self,
+        job_id: &str,
+        candidate: &PersistedCandidate,
+        code: &str,
+        message: &str,
+    ) -> Result<(), IndexingError> {
+        let mut connection = self.database.connection();
+        let transaction = connection.transaction()?;
+        ensure_job_parsing(&transaction, job_id)?;
+        let folder_id = folder_id_for_job(&transaction, job_id)?;
+        upsert_metadata_transaction(
+            &transaction,
+            &folder_id,
+            candidate,
+            "failed",
+            Some(code),
+            None,
+            false,
+        )?;
+        transaction.execute(
+            "INSERT INTO index_job_errors
+             (id, job_id, file_name, code, message, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5,
+                     strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
+            params![
+                random_id(),
+                job_id,
+                file_name(&candidate.canonical_path),
+                code,
+                message
+            ],
+        )?;
+        advance_file_transaction(&transaction, job_id, candidate)?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    fn complete_stale_attempt(
+        &self,
+        job_id: &str,
+        candidate: &PersistedCandidate,
+    ) -> Result<(), IndexingError> {
+        let mut connection = self.database.connection();
+        let transaction = connection.transaction()?;
+        ensure_job_parsing(&transaction, job_id)?;
         advance_file_transaction(&transaction, job_id, candidate)?;
         transaction.commit()?;
         Ok(())
@@ -1500,6 +1669,7 @@ struct PersistedCandidate {
 
 struct DocumentParsingCheckpoint {
     document_id: String,
+    attempt_token: String,
     previous: Option<DocumentMetadataSnapshot>,
 }
 
@@ -1511,6 +1681,12 @@ struct DocumentMetadataSnapshot {
     modified_at: String,
     parse_state: String,
     parse_error_code: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ParseAttemptMutation {
+    Applied,
+    Stale,
 }
 
 struct ReconciliationMutationState {
@@ -1947,7 +2123,9 @@ fn upsert_metadata_transaction(
     candidate: &PersistedCandidate,
     parse_state: &str,
     error_code: Option<&str>,
-) -> Result<(), IndexingError> {
+    attempt_token: Option<&str>,
+    allow_attempt_takeover: bool,
+) -> Result<ParseAttemptMutation, IndexingError> {
     let canonical_path = candidate.canonical_path.to_string_lossy().into_owned();
     let name = file_name(&candidate.canonical_path);
     let extension = candidate
@@ -1955,11 +2133,11 @@ fn upsert_metadata_transaction(
         .extension()
         .map(|value| value.to_string_lossy().to_ascii_lowercase())
         .unwrap_or_default();
-    connection.execute(
+    let changed = connection.execute(
         "INSERT INTO documents
          (id, folder_id, canonical_path, file_name, extension, size_bytes,
-          modified_at, parse_state, parse_error_code)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+           modified_at, parse_state, parse_error_code, parse_attempt_token)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
          ON CONFLICT(canonical_path) DO UPDATE SET
            folder_id = excluded.folder_id,
            file_name = excluded.file_name,
@@ -1967,7 +2145,9 @@ fn upsert_metadata_transaction(
            size_bytes = excluded.size_bytes,
            modified_at = excluded.modified_at,
            parse_state = excluded.parse_state,
-           parse_error_code = excluded.parse_error_code",
+           parse_error_code = excluded.parse_error_code,
+           parse_attempt_token = excluded.parse_attempt_token
+         WHERE ?11 OR documents.parse_attempt_token IS NULL",
         params![
             random_id(),
             folder_id,
@@ -1978,9 +2158,15 @@ fn upsert_metadata_transaction(
             candidate.modified_at,
             parse_state,
             error_code,
+            attempt_token,
+            allow_attempt_takeover,
         ],
     )?;
-    Ok(())
+    Ok(if changed == 1 {
+        ParseAttemptMutation::Applied
+    } else {
+        ParseAttemptMutation::Stale
+    })
 }
 
 fn ensure_job_parsing(
@@ -2034,19 +2220,6 @@ fn advance_file_transaction(
         [job_id],
     )?;
     Ok(())
-}
-
-fn document_id_for_path(
-    transaction: &rusqlite::Transaction<'_>,
-    path: &Path,
-) -> Result<Option<String>, rusqlite::Error> {
-    transaction
-        .query_row(
-            "SELECT id FROM documents WHERE canonical_path = ?1",
-            [path.to_string_lossy()],
-            |row| row.get(0),
-        )
-        .optional()
 }
 
 fn parser_failure(error: &ParserError) -> (&'static str, String) {
