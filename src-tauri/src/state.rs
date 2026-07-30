@@ -4,6 +4,7 @@ use std::sync::{atomic::AtomicBool, Arc, RwLock};
 use crate::folders::repository::FolderRepository;
 use crate::indexing::{IndexCoordinator, IndexWatcher};
 use crate::infrastructure::database::Database;
+use crate::library::pdf_read::PdfReadRegistry;
 use crate::search::SearchRegistry;
 use crate::settings::AppSettings;
 use thiserror::Error;
@@ -15,6 +16,7 @@ pub struct AppState {
     pub folders: FolderRepository,
     pub indexing: Arc<IndexCoordinator>,
     pub searches: SearchRegistry,
+    pub pdf_reads: PdfReadRegistry,
     pub watchers: tokio::sync::Mutex<HashMap<String, IndexWatcher>>,
 }
 
@@ -28,6 +30,7 @@ impl AppState {
             database,
             indexing,
             searches,
+            pdf_reads: PdfReadRegistry::default(),
             watchers: tokio::sync::Mutex::new(HashMap::new()),
         }
     }

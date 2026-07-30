@@ -2,7 +2,7 @@ use std::fs;
 use std::sync::Arc;
 
 use everyfile_lib::application::source_open::{
-    resolve_indexed_source, verify_indexed_source, SourceOpenError,
+    read_indexed_pdf_cancellable, resolve_indexed_source, verify_indexed_source, SourceOpenError,
 };
 use everyfile_lib::infrastructure::database::Database;
 use everyfile_lib::infrastructure::secure_key::SecretKey;
@@ -49,6 +49,19 @@ fn resolves_paths_with_spaces_commas_and_unicode() {
     let resolved = resolve_indexed_source(&fixture.database, "doc-unicode").unwrap();
 
     assert_eq!(resolved, source.canonicalize().unwrap());
+}
+
+#[test]
+fn cancellable_pdf_read_stops_before_allocating_the_document() {
+    let fixture = Fixture::new();
+    let source = fixture.root.join("cancelled.pdf");
+    fs::write(&source, b"%PDF-1.7\nfixture").unwrap();
+    fixture.insert("doc-cancelled", &source, &fixture.root);
+
+    assert!(matches!(
+        read_indexed_pdf_cancellable(&fixture.database, "doc-cancelled", || true),
+        Err(SourceOpenError::Cancelled)
+    ));
 }
 
 #[test]

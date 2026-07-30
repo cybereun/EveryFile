@@ -4,9 +4,9 @@ import { removeBookmark, setBookmark } from "../../lib/ipc";
 interface BookmarkButtonProps {
   documentId: string;
   bookmarked: boolean;
-  onChange: (bookmarked: boolean) => void;
-  setApi?: typeof setBookmark;
-  removeApi?: typeof removeBookmark;
+  onChange: (documentId: string, bookmarked: boolean) => void;
+  setApi?: (documentId: string, note: string) => Promise<unknown>;
+  removeApi?: (documentId: string) => Promise<unknown>;
 }
 
 export function BookmarkButton({
@@ -26,10 +26,10 @@ export function BookmarkButton({
     try {
       if (bookmarked) {
         await removeApi(documentId);
-        onChange(false);
+        onChange(documentId, false);
       } else {
         await setApi(documentId, "");
-        onChange(true);
+        onChange(documentId, true);
       }
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "북마크를 변경하지 못했습니다.");

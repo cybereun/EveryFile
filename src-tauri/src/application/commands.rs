@@ -6,13 +6,14 @@ use tauri::State;
 use tauri_plugin_dialog::DialogExt;
 
 use crate::application::source_open::{
-    open_indexed_location, open_indexed_source, read_indexed_pdf, SourceOpenError,
+    open_indexed_location, open_indexed_source, read_indexed_pdf_cancellable, SourceOpenError,
 };
 use crate::domain::models::{
     BookmarkRecord, FolderRecord, PreviewDocument, SearchRequest, SearchResponse, TagRecord,
 };
 use crate::folders::repository::{FolderError, FolderRepository};
 use crate::indexing::{IndexStatus, IndexingError, JobId};
+use crate::library::pdf_read::PdfReadError;
 use crate::library::repository::{LibraryError, LibraryRepository};
 use crate::search::{SearchError, SearchRepository};
 use crate::{settings::AppSettings, state::AppState};
@@ -200,13 +201,31 @@ pub fn get_preview(
 }
 
 #[tauri::command]
-pub fn get_pdf_bytes(
+pub async fn get_pdf_bytes(
     document_id: String,
+    request_id: String,
     state: State<'_, AppState>,
 ) -> Result<tauri::ipc::Response, CommandError> {
-    read_indexed_pdf(&state.database, &document_id)
-        .map(tauri::ipc::Response::new)
-        .map_err(CommandError::from)
+    let lease = state
+        .pdf_reads
+        .begin(&request_id)
+        .map_err(CommandError::from)?;
+    let database = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let bytes = read_indexed_pdf_cancellable(&database, &document_id, || lease.is_cancelled())
+            .map_err(CommandError::from)?;
+        lease
+            .finish(bytes)
+            .map(tauri::ipc::Response::new)
+            .map_err(CommandError::from)
+    })
+    .await
+    .map_err(|error| CommandError::new("PDF_READ_WORKER_FAILED", error.to_string()))?
+}
+
+#[tauri::command]
+pub fn cancel_pdf_read(request_id: String, state: State<'_, AppState>) -> bool {
+    state.pdf_reads.cancel(&request_id)
 }
 
 #[tauri::command]
@@ -344,6 +363,12 @@ impl From<SourceOpenError> for CommandError {
 
 impl From<LibraryError> for CommandError {
     fn from(error: LibraryError) -> Self {
+        Self::new(error.code(), error.to_string())
+    }
+}
+
+impl From<PdfReadError> for CommandError {
+    fn from(error: PdfReadError) -> Self {
         Self::new(error.code(), error.to_string())
     }
 }

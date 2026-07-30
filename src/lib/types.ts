@@ -115,6 +115,7 @@ export interface PreviewDocument {
   bookmarked: boolean;
   bookmarkNote: string;
   tags: Tag[];
+  truncated: boolean;
 }
 
 export interface IndexStatus {

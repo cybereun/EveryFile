@@ -2,7 +2,11 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PreviewBlock, PreviewDocument } from "../../lib/types";
 import { DocumentTextView } from "./DocumentTextView";
-import { PdfLayoutView, type PdfDocumentLike } from "./PdfLayoutView";
+import {
+  PdfLayoutView,
+  type PdfDocumentLike,
+  type PdfLoadingTaskLike,
+} from "./PdfLayoutView";
 import { PreviewPanel } from "./PreviewPanel";
 
 function paragraphs(text: string): PreviewBlock[] {
@@ -20,10 +24,29 @@ const preview: PreviewDocument = {
   bookmarked: false,
   bookmarkNote: "",
   tags: [],
+  truncated: false,
 };
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((onResolve, onReject) => {
+    resolve = onResolve;
+    reject = onReject;
+  });
+  return { promise, reject, resolve };
+}
+
+function loadingTask(document: PdfDocumentLike): PdfLoadingTaskLike {
+  return { promise: Promise.resolve(document), destroy: vi.fn() };
+}
+
 describe("secure document preview", () => {
-  afterEach(cleanup);
+  afterEach(() => {
+    cleanup();
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
 
   it("finds and moves between matches in document text", () => {
     render(<DocumentTextView blocks={paragraphs("중간고사 준비 중간고사")} />);
@@ -91,7 +114,7 @@ describe("secure document preview", () => {
     );
 
     await screen.findByText("중간고사.pdf");
-    expect(screen.getByRole("button", { name: "파일 열기" })).toBeVisible();
+    expect(screen.getAllByRole("button", { name: "파일 열기" })[0]).toBeVisible();
     expect(screen.getByRole("button", { name: "찾기" })).toBeVisible();
     expect(screen.getByRole("button", { name: "북마크 추가" })).toBeVisible();
     expect(screen.getByRole("button", { name: "더보기" })).toBeVisible();
@@ -124,7 +147,7 @@ describe("secure document preview", () => {
     expect(
       screen.getByText("이 형식은 문서 텍스트로만 미리볼 수 있습니다."),
     ).toBeVisible();
-    expect(screen.getByRole("button", { name: "파일 열기" })).toBeVisible();
+    expect(screen.getAllByRole("button", { name: "파일 열기" })[0]).toBeVisible();
   });
 
   it("renders one PDF canvas while prefetching only the adjacent page window", async () => {
@@ -151,7 +174,7 @@ describe("secure document preview", () => {
         getBytesApi={vi.fn().mockResolvedValue(
           new Uint8Array([37, 80, 68, 70, 45]).buffer,
         )}
-        loader={vi.fn().mockResolvedValue(pdfDocument)}
+        loader={vi.fn().mockReturnValue(loadingTask(pdfDocument))}
       />,
     );
 
@@ -168,5 +191,192 @@ describe("secure document preview", () => {
     await screen.findByText("2 / 5");
     await waitFor(() => expect(getPage).toHaveBeenCalledWith(3));
     expect(getPage).not.toHaveBeenCalledWith(4);
+  });
+
+  it("recomputes fit width after bounded container resizes", async () => {
+    const observers: ResizeObserverCallback[] = [];
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        constructor(callback: ResizeObserverCallback) {
+          observers.push(callback);
+        }
+        observe() {}
+        disconnect() {}
+        unobserve() {}
+      },
+    );
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
+      setTransform: vi.fn(),
+    } as unknown as CanvasRenderingContext2D);
+    const page = {
+      getViewport: ({ scale }: { scale: number }) => ({
+        width: 600 * scale,
+        height: 800 * scale,
+      }),
+      render: () => ({ promise: Promise.resolve(), cancel: vi.fn() }),
+      cleanup: vi.fn(),
+    };
+    render(
+      <PdfLayoutView
+        documentId="doc-1"
+        getBytesApi={vi.fn().mockResolvedValue(new ArrayBuffer(8))}
+        loader={vi.fn().mockReturnValue(
+          loadingTask({ numPages: 1, getPage: vi.fn().mockResolvedValue(page) }),
+        )}
+      />,
+    );
+    const canvas = await screen.findByLabelText("PDF 1페이지");
+
+    observers[0](
+      [{ contentRect: { width: 400 } } as ResizeObserverEntry],
+      {} as ResizeObserver,
+    );
+    await waitFor(() => expect(canvas).toHaveStyle({ width: "376px" }));
+
+    observers[0](
+      [{ contentRect: { width: 800 } } as ResizeObserverEntry],
+      {} as ResizeObserver,
+    );
+    await waitFor(() => expect(canvas).toHaveStyle({ width: "775px" }));
+  });
+
+  it("cancels superseded PDF reads and never parses their late bytes", async () => {
+    const first = deferred<ArrayBuffer>();
+    const second = deferred<ArrayBuffer>();
+    const getBytes = vi
+      .fn()
+      .mockImplementationOnce(() => first.promise)
+      .mockImplementationOnce(() => second.promise);
+    const cancel = vi.fn().mockResolvedValue(true);
+    const pdfDocument: PdfDocumentLike = {
+      numPages: 1,
+      getPage: vi.fn(),
+    };
+    const loader = vi.fn().mockReturnValue(loadingTask(pdfDocument));
+    const { rerender } = render(
+      <PdfLayoutView
+        cancelReadApi={cancel}
+        documentId="doc-a"
+        getBytesApi={getBytes}
+        loader={loader}
+      />,
+    );
+    await waitFor(() => expect(getBytes).toHaveBeenCalledTimes(1));
+    const firstRequestId = getBytes.mock.calls[0][1];
+
+    rerender(
+      <PdfLayoutView
+        cancelReadApi={cancel}
+        documentId="doc-b"
+        getBytesApi={getBytes}
+        loader={loader}
+      />,
+    );
+    await waitFor(() => expect(cancel).toHaveBeenCalledWith(firstRequestId));
+    first.resolve(new Uint8Array([1]).buffer);
+    second.resolve(new Uint8Array([2]).buffer);
+    await waitFor(() => expect(loader).toHaveBeenCalledTimes(1));
+    expect(new Uint8Array(loader.mock.calls[0][0])).toEqual(new Uint8Array([2]));
+  });
+
+  it.each([
+    ["PasswordException", "암호화된 PDF"],
+    ["InvalidPDFException", "손상되었거나 올바르지 않은 PDF"],
+  ])("shows a safe error for %s", async (name, message) => {
+    const failure = Object.assign(new Error("parser detail"), { name });
+    render(
+      <PdfLayoutView
+        documentId="doc-1"
+        getBytesApi={vi.fn().mockResolvedValue(new ArrayBuffer(8))}
+        loader={vi.fn().mockReturnValue({
+          promise: Promise.reject(failure),
+          destroy: vi.fn(),
+        })}
+      />,
+    );
+    expect(await screen.findByRole("alert")).toHaveTextContent(message);
+  });
+
+  it("rejects a page that exceeds the canvas pixel budget", async () => {
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
+      setTransform: vi.fn(),
+    } as unknown as CanvasRenderingContext2D);
+    const page = {
+      getViewport: ({ scale }: { scale: number }) => ({
+        width: 100_000 * scale,
+        height: 100_000 * scale,
+      }),
+      render: vi.fn(),
+      cleanup: vi.fn(),
+    };
+    render(
+      <PdfLayoutView
+        documentId="doc-1"
+        getBytesApi={vi.fn().mockResolvedValue(new ArrayBuffer(8))}
+        loader={vi.fn().mockReturnValue(
+          loadingTask({ numPages: 1, getPage: vi.fn().mockResolvedValue(page) }),
+        )}
+      />,
+    );
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "PDF 페이지가 안전한 표시 한도를 초과했습니다.",
+    );
+    expect(page.render).not.toHaveBeenCalled();
+  });
+
+  it("does not apply late bookmark or tag completions to a newly selected document", async () => {
+    const bookmark = deferred<{
+      documentId: string;
+      note: string;
+      createdAt: string;
+    }>();
+    const saveTags = deferred<PreviewDocument["tags"]>();
+    const getPreviewApi = vi.fn(async (documentId: string) => ({
+      ...preview,
+      documentId,
+      fileName: `${documentId}.pdf`,
+    }));
+    const { rerender } = render(
+      <PreviewPanel
+        createTagApi={vi.fn().mockResolvedValue({
+          id: "tag-a",
+          name: "A",
+          color: "terracotta",
+        })}
+        documentId="doc-a"
+        getPreviewApi={getPreviewApi}
+        setBookmarkApi={vi.fn(() => bookmark.promise)}
+        setTagsApi={vi.fn(() => saveTags.promise)}
+      />,
+    );
+    await screen.findByText("doc-a.pdf");
+    fireEvent.click(screen.getByRole("button", { name: "북마크 추가" }));
+    fireEvent.click(screen.getByRole("button", { name: "더보기" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "태그 추가" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "새 태그 이름" }), {
+      target: { value: "A" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "태그 만들기" }));
+
+    rerender(
+      <PreviewPanel
+        createTagApi={vi.fn().mockResolvedValue({
+          id: "tag-a",
+          name: "A",
+          color: "terracotta",
+        })}
+        documentId="doc-b"
+        getPreviewApi={getPreviewApi}
+        setBookmarkApi={vi.fn(() => bookmark.promise)}
+        setTagsApi={vi.fn(() => saveTags.promise)}
+      />,
+    );
+    await screen.findByText("doc-b.pdf");
+    bookmark.resolve({ documentId: "doc-a", note: "", createdAt: "" });
+    saveTags.resolve([{ id: "tag-a", name: "A", color: "terracotta" }]);
+    await Promise.resolve();
+    expect(screen.getByRole("button", { name: "북마크 추가" })).toBeVisible();
+    expect(screen.queryByText("A", { selector: ".preview-tag" })).not.toBeInTheDocument();
   });
 });

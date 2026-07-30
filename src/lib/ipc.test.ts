@@ -7,6 +7,7 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke }));
 import {
   cancelSearch,
   cancelIndexing,
+  cancelPdfRead,
   createTag,
   getPdfBytes,
   getIndexStatus,
@@ -67,7 +68,8 @@ describe("IPC wrappers", () => {
     await openSourceFile("document-1");
     await openSourceLocation("document-1");
     await getPreview("document-1");
-    await getPdfBytes("document-1");
+    await getPdfBytes("document-1", "pdf-1");
+    await cancelPdfRead("pdf-1");
     await setBookmark("document-1", "note");
     await removeBookmark("document-1");
     await createTag("Work", "terracotta");
@@ -88,7 +90,8 @@ describe("IPC wrappers", () => {
       ["open_source_file", { documentId: "document-1" }],
       ["open_source_location", { documentId: "document-1" }],
       ["get_preview", { documentId: "document-1" }],
-      ["get_pdf_bytes", { documentId: "document-1" }],
+      ["get_pdf_bytes", { documentId: "document-1", requestId: "pdf-1" }],
+      ["cancel_pdf_read", { requestId: "pdf-1" }],
       ["set_bookmark", { documentId: "document-1", note: "note" }],
       ["remove_bookmark", { documentId: "document-1" }],
       ["create_tag", { name: "Work", color: "terracotta" }],

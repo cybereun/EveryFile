@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { BookmarkButton } from "../library/BookmarkButton";
 import { TagEditor } from "../library/TagEditor";
 import {
@@ -6,6 +6,9 @@ import {
   getPreview,
   openSourceFile,
   openSourceLocation,
+  createTag,
+  setBookmark,
+  setDocumentTags,
   saveMarkdown,
 } from "../../lib/ipc";
 import type { PreviewBlock, PreviewDocument } from "../../lib/types";
@@ -38,6 +41,9 @@ interface PreviewPanelProps {
   pdfBytesApi?: typeof getPdfBytes;
   saveMarkdownApi?: typeof saveMarkdown;
   pdfLoader?: PdfLoader;
+  createTagApi?: typeof createTag;
+  setBookmarkApi?: typeof setBookmark;
+  setTagsApi?: typeof setDocumentTags;
 }
 
 export function PreviewPanel({
@@ -48,6 +54,9 @@ export function PreviewPanel({
   pdfBytesApi = getPdfBytes,
   saveMarkdownApi = saveMarkdown,
   pdfLoader,
+  createTagApi = createTag,
+  setBookmarkApi = setBookmark,
+  setTagsApi = setDocumentTags,
 }: PreviewPanelProps) {
   const [preview, setPreview] = useState<PreviewDocument | null>(null);
   const [tab, setTab] = useState<"text" | "layout">("text");
@@ -55,6 +64,8 @@ export function PreviewPanel({
   const [tagOpen, setTagOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const selectedDocumentId = useRef(documentId);
+  selectedDocumentId.current = documentId;
   const plainText = useMemo(
     () => (preview ? textFromBlocks(preview.blocks) : ""),
     [preview],
@@ -88,17 +99,19 @@ export function PreviewPanel({
     };
   }, [documentId, getPreviewApi]);
 
-  const run = async (action: () => Promise<unknown>) => {
-    setError(null);
+  const run = async (ownerDocumentId: string, action: () => Promise<unknown>) => {
+    if (selectedDocumentId.current === ownerDocumentId) setError(null);
     try {
       await action();
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "작업을 완료하지 못했습니다.");
+      if (selectedDocumentId.current === ownerDocumentId) {
+        setError(caught instanceof Error ? caught.message : "작업을 완료하지 못했습니다.");
+      }
     }
   };
 
-  const copy = (value: string) =>
-    run(async () => {
+  const copy = (ownerDocumentId: string, value: string) =>
+    run(ownerDocumentId, async () => {
       if (!navigator.clipboard?.writeText) {
         throw new Error("클립보드를 사용할 수 없습니다.");
       }
@@ -132,30 +145,54 @@ export function PreviewPanel({
       <PreviewToolbar
         bookmark={
           <BookmarkButton
+            key={preview.documentId}
             bookmarked={preview.bookmarked}
             documentId={preview.documentId}
-            onChange={(bookmarked) => setPreview((current) => current && ({ ...current, bookmarked }))}
+            setApi={setBookmarkApi}
+            onChange={(ownerDocumentId, bookmarked) => {
+              if (selectedDocumentId.current !== ownerDocumentId) return;
+              setPreview((current) =>
+                current?.documentId === ownerDocumentId
+                  ? { ...current, bookmarked }
+                  : current,
+              );
+            }}
           />
         }
         onAddTag={() => setTagOpen(true)}
-        onCopyPath={() => void copy(preview.path)}
-        onCopyText={() => void copy(plainText)}
+        onCopyPath={() => void copy(preview.documentId, preview.path)}
+        onCopyText={() => void copy(preview.documentId, plainText)}
         onFind={() => {
           setTab("text");
           setFindRequest((request) => request + 1);
         }}
-        onOpen={() => void run(() => openApi(preview.documentId))}
-        onOpenLocation={() => void run(() => openLocationApi(preview.documentId))}
-        onSaveMarkdown={() => void run(() => saveMarkdownApi(preview.documentId))}
+        onOpen={() => void run(preview.documentId, () => openApi(preview.documentId))}
+        onOpenLocation={() => void run(preview.documentId, () => openLocationApi(preview.documentId))}
+        onSaveMarkdown={() => void run(preview.documentId, () => saveMarkdownApi(preview.documentId))}
       />
       <TagEditor
+        key={preview.documentId}
+        createApi={createTagApi}
         documentId={preview.documentId}
-        onChange={(tags) => setPreview((current) => current && ({ ...current, tags }))}
+        onChange={(ownerDocumentId, tags) => {
+          if (selectedDocumentId.current !== ownerDocumentId) return;
+          setPreview((current) =>
+            current?.documentId === ownerDocumentId ? { ...current, tags } : current,
+          );
+        }}
         onOpenChange={setTagOpen}
         open={tagOpen}
+        saveApi={setTagsApi}
         showTrigger={false}
         tags={preview.tags}
       />
+      {preview.tags.length > 0 && (
+        <div className="preview-tags" aria-label="문서 태그">
+          {preview.tags.map((tag) => (
+            <span className="preview-tag" key={tag.id}>{tag.name}</span>
+          ))}
+        </div>
+      )}
       <div className="preview-tabs" role="tablist" aria-label="미리보기 형식">
         <button
           aria-selected={tab === "text"}
@@ -170,6 +207,11 @@ export function PreviewPanel({
           type="button"
         >원본 레이아웃</button>
       </div>
+      {preview.truncated && (
+        <div className="preview-limit-notice" role="status">
+          문서가 커서 안전한 미리보기 한도까지만 표시합니다.
+        </div>
+      )}
       {error && <div className="preview-inline-error" role="alert">{error}</div>}
       <div className="preview-content" role="tabpanel">
         {tab === "text" ? (
@@ -183,7 +225,14 @@ export function PreviewPanel({
         ) : (
           <div className="preview-layout-unavailable">
             <p>이 형식은 문서 텍스트로만 미리볼 수 있습니다.</p>
-            <p>위의 파일 열기 버튼으로 원본 문서를 열 수 있습니다.</p>
+            <button
+              onClick={() =>
+                void run(preview.documentId, () => openApi(preview.documentId))
+              }
+              type="button"
+            >
+              파일 열기
+            </button>
           </div>
         )}
       </div>

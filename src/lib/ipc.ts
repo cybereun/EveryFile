@@ -29,8 +29,11 @@ export const openSourceFile = (documentId: string) =>
 export const getPreview = (documentId: string) =>
   invoke<PreviewDocument>("get_preview", { documentId });
 
-export const getPdfBytes = (documentId: string) =>
-  invoke<ArrayBuffer>("get_pdf_bytes", { documentId });
+export const getPdfBytes = (documentId: string, requestId: string) =>
+  invoke<ArrayBuffer>("get_pdf_bytes", { documentId, requestId });
+
+export const cancelPdfRead = (requestId: string) =>
+  invoke<boolean>("cancel_pdf_read", { requestId });
 
 export const openSourceLocation = (documentId: string) =>
   invoke<void>("open_source_location", { documentId });

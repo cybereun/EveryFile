@@ -101,6 +101,100 @@ fn preview_normalizes_untrusted_parser_blocks_and_warnings() {
     assert_eq!(preview.warnings[0].code, "PARTIAL_PARSE");
 }
 
+#[test]
+fn preview_rejects_stored_json_above_the_strict_input_cap() {
+    let fixture = Fixture::new();
+    fixture.seed_document("doc-large", "large.pdf");
+    let oversized = format!(
+        r#"[{{"type":"paragraph","text":"{}"}}]"#,
+        "x".repeat(9 * 1024 * 1024)
+    );
+    fixture
+        .database
+        .connection()
+        .execute(
+            "INSERT INTO document_content
+             (document_id, title, body, markdown, blocks_json, warnings_json)
+             VALUES ('doc-large', NULL, '', '', ?1, '[]')",
+            [oversized],
+        )
+        .unwrap();
+
+    assert!(matches!(
+        fixture.library.get_preview("doc-large"),
+        Err(LibraryError::PreviewTooLarge)
+    ));
+}
+
+#[test]
+fn preview_uses_one_aggregate_budget_for_nested_blocks_tables_and_markdown() {
+    let fixture = Fixture::new();
+    fixture.seed_document("doc-budget", "budget.pdf");
+    let large_text = "가".repeat(900_000);
+    let blocks = serde_json::json!([
+        {
+            "type": "paragraph",
+            "text": large_text,
+            "children": [{
+                "type": "table",
+                "table": {
+                    "hasHeader": false,
+                    "cells": [[
+                        {"text": "나".repeat(900_000), "colSpan": 1, "rowSpan": 1},
+                        {"text": "다".repeat(900_000), "colSpan": 1, "rowSpan": 1}
+                    ]]
+                }
+            }]
+        }
+    ]);
+    fixture
+        .database
+        .connection()
+        .execute(
+            "INSERT INTO document_content
+             (document_id, title, body, markdown, blocks_json, warnings_json)
+             VALUES ('doc-budget', NULL, '', ?1, ?2, '[]')",
+            params!["라".repeat(900_000), blocks.to_string()],
+        )
+        .unwrap();
+
+    let preview = fixture.library.get_preview("doc-budget").unwrap();
+    let returned_chars = preview.markdown.chars().count()
+        + preview
+            .blocks
+            .iter()
+            .map(count_preview_chars)
+            .sum::<usize>()
+        + preview
+            .warnings
+            .iter()
+            .map(|warning| warning.code.chars().count() + warning.message.chars().count())
+            .sum::<usize>();
+    assert!(returned_chars <= 2_000_000);
+    assert!(preview.truncated);
+}
+
+fn count_preview_chars(block: &everyfile_lib::domain::models::PreviewBlock) -> usize {
+    block.text.chars().count()
+        + block
+            .table
+            .as_ref()
+            .map(|table| {
+                table
+                    .cells
+                    .iter()
+                    .flatten()
+                    .map(|cell| cell.text.chars().count())
+                    .sum::<usize>()
+            })
+            .unwrap_or_default()
+        + block
+            .children
+            .iter()
+            .map(count_preview_chars)
+            .sum::<usize>()
+}
+
 struct Fixture {
     _temp: TempDir,
     database: Arc<Database>,

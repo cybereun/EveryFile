@@ -5,7 +5,7 @@ import type { Tag } from "../../lib/types";
 interface TagEditorProps {
   documentId: string;
   tags: Tag[];
-  onChange: (tags: Tag[]) => void;
+  onChange: (documentId: string, tags: Tag[]) => void;
   createApi?: typeof createTag;
   saveApi?: typeof setDocumentTags;
   open?: boolean;
@@ -50,7 +50,7 @@ export function TagEditor({
       const created = await createApi(trimmed, color);
       const ids = [...new Set([...tags.map((tag) => tag.id), created.id])];
       const saved = await saveApi(documentId, ids);
-      onChange(saved);
+      onChange(documentId, saved);
       setOpen(false);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "태그를 추가하지 못했습니다.");

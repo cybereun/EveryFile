@@ -818,6 +818,21 @@ select:focus-visible,
   background: var(--color-surface-muted);
 }
 
+.preview-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  padding: 0.35rem 0.65rem;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.preview-tag {
+  padding: 0.15rem 0.4rem;
+  border-radius: 999px;
+  background: var(--color-surface-muted);
+  font-size: 0.72rem;
+}
+
 .preview-tabs button {
   border-bottom-right-radius: 0;
   border-bottom-left-radius: 0;
@@ -921,6 +936,14 @@ select:focus-visible,
   padding: 0.45rem 0.65rem;
   color: var(--color-accent);
   font-size: 0.78rem;
+}
+
+.preview-limit-notice {
+  padding: 0.4rem 0.65rem;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface-muted);
+  color: var(--color-text-muted);
+  font-size: 0.75rem;
 }
 
 .tag-editor {

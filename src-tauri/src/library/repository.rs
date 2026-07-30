@@ -21,8 +21,10 @@ const APPROVED_COLORS: &[&str] = &[
     "blue",
     "violet",
 ];
-const MAX_BLOCKS: usize = 20_000;
-const MAX_TEXT_CHARS: usize = 2_000_000;
+const MAX_PREVIEW_NODES: usize = 20_000;
+const MAX_PREVIEW_CHARS: usize = 2_000_000;
+const MAX_STORED_FIELD_BYTES: usize = 8 * 1024 * 1024;
+const MAX_STORED_PREVIEW_BYTES: usize = 12 * 1024 * 1024;
 const MAX_TABLE_ROWS: usize = 2_000;
 const MAX_TABLE_COLS: usize = 200;
 
@@ -65,12 +67,26 @@ impl LibraryRepository {
             .optional()?
             .ok_or(LibraryError::DocumentNotFound)?;
 
+        if row.3.len() > MAX_STORED_FIELD_BYTES
+            || row.4.len() > MAX_STORED_FIELD_BYTES
+            || row.5.len() > MAX_STORED_FIELD_BYTES
+            || row
+                .3
+                .len()
+                .saturating_add(row.4.len())
+                .saturating_add(row.5.len())
+                > MAX_STORED_PREVIEW_BYTES
+        {
+            return Err(LibraryError::PreviewTooLarge);
+        }
         let blocks_value: Value =
             serde_json::from_str(&row.4).map_err(|_| LibraryError::InvalidPreviewData)?;
         let warnings_value: Value =
             serde_json::from_str(&row.5).map_err(|_| LibraryError::InvalidPreviewData)?;
-        let blocks = normalize_blocks(blocks_value)?;
-        let warnings = normalize_warnings(warnings_value)?;
+        let mut budget = PreviewBudget::new();
+        let markdown = budget.take_text(&row.3);
+        let blocks = normalize_blocks(blocks_value, &mut budget)?;
+        let warnings = normalize_warnings(warnings_value, &mut budget)?;
         let tags = query_document_tags(&connection, document_id)?;
 
         Ok(PreviewDocument {
@@ -78,7 +94,7 @@ impl LibraryRepository {
             file_name: bounded_text(&row.0),
             path: row.1,
             extension: row.2.to_ascii_lowercase(),
-            markdown: bounded_text(&row.3),
+            markdown,
             blocks,
             warnings,
             bookmarked: !row.6.is_empty()
@@ -89,6 +105,7 @@ impl LibraryRepository {
                 )?,
             bookmark_note: bounded_text(&row.6),
             tags,
+            truncated: budget.truncated,
         })
     }
 
@@ -309,17 +326,34 @@ fn query_document_tags(
     rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
 }
 
-fn normalize_blocks(value: Value) -> Result<Vec<PreviewBlock>, LibraryError> {
+fn normalize_blocks(
+    value: Value,
+    budget: &mut PreviewBudget,
+) -> Result<Vec<PreviewBlock>, LibraryError> {
     let values = value.as_array().ok_or(LibraryError::InvalidPreviewData)?;
-    Ok(values
-        .iter()
-        .take(MAX_BLOCKS)
-        .filter_map(|block| normalize_block(block, 0))
-        .collect())
+    let mut blocks = Vec::new();
+    for block in values {
+        if let Some(block) = normalize_block(block, 0, budget) {
+            blocks.push(block);
+        }
+        if budget.exhausted() {
+            budget.truncated = true;
+            break;
+        }
+    }
+    Ok(blocks)
 }
 
-fn normalize_block(value: &Value, depth: usize) -> Option<PreviewBlock> {
+fn normalize_block(
+    value: &Value,
+    depth: usize,
+    budget: &mut PreviewBudget,
+) -> Option<PreviewBlock> {
     if depth > 16 {
+        budget.truncated = true;
+        return None;
+    }
+    if !budget.consume_node() {
         return None;
     }
     let object = value.as_object()?;
@@ -330,7 +364,7 @@ fn normalize_block(value: &Value, depth: usize) -> Option<PreviewBlock> {
     ) {
         return None;
     }
-    let text = bounded_text(
+    let text = budget.take_text(
         object
             .get("text")
             .and_then(Value::as_str)
@@ -348,7 +382,8 @@ fn normalize_block(value: &Value, depth: usize) -> Option<PreviewBlock> {
     let href = object
         .get("href")
         .and_then(Value::as_str)
-        .and_then(safe_href);
+        .and_then(safe_href)
+        .map(|href| budget.take_text(&href));
     let list_type = object
         .get("listType")
         .and_then(Value::as_str)
@@ -358,14 +393,22 @@ fn normalize_block(value: &Value, depth: usize) -> Option<PreviewBlock> {
         .get("children")
         .and_then(Value::as_array)
         .map(|children| {
-            children
-                .iter()
-                .take(1_000)
-                .filter_map(|child| normalize_block(child, depth + 1))
-                .collect()
+            let mut normalized = Vec::new();
+            for child in children {
+                if let Some(child) = normalize_block(child, depth + 1, budget) {
+                    normalized.push(child);
+                }
+                if budget.exhausted() {
+                    budget.truncated = true;
+                    break;
+                }
+            }
+            normalized
         })
         .unwrap_or_default();
-    let table = object.get("table").and_then(normalize_table);
+    let table = object
+        .get("table")
+        .and_then(|table| normalize_table(table, budget));
     Some(PreviewBlock {
         kind: kind.to_owned(),
         text,
@@ -378,39 +421,49 @@ fn normalize_block(value: &Value, depth: usize) -> Option<PreviewBlock> {
     })
 }
 
-fn normalize_table(value: &Value) -> Option<PreviewTable> {
+fn normalize_table(value: &Value, budget: &mut PreviewBudget) -> Option<PreviewTable> {
     let table = value.as_object()?;
     let source_rows = table.get("cells")?.as_array()?;
-    let cells = source_rows
-        .iter()
-        .take(MAX_TABLE_ROWS)
-        .filter_map(Value::as_array)
-        .map(|row| {
-            row.iter()
-                .take(MAX_TABLE_COLS)
-                .filter_map(|cell| {
-                    let cell = cell.as_object()?;
-                    Some(PreviewCell {
-                        text: bounded_text(
-                            cell.get("text").and_then(Value::as_str).unwrap_or_default(),
-                        ),
-                        col_span: cell
-                            .get("colSpan")
-                            .and_then(Value::as_u64)
-                            .unwrap_or(1)
-                            .clamp(1, MAX_TABLE_COLS as u64)
-                            as u32,
-                        row_span: cell
-                            .get("rowSpan")
-                            .and_then(Value::as_u64)
-                            .unwrap_or(1)
-                            .clamp(1, MAX_TABLE_ROWS as u64)
-                            as u32,
-                    })
-                })
-                .collect::<Vec<_>>()
-        })
-        .collect::<Vec<_>>();
+    let mut cells = Vec::new();
+    for row in source_rows.iter().take(MAX_TABLE_ROWS) {
+        let Some(row) = row.as_array() else { continue };
+        if row.len() > MAX_TABLE_COLS {
+            budget.truncated = true;
+        }
+        let mut normalized_row = Vec::new();
+        for cell in row.iter().take(MAX_TABLE_COLS) {
+            if !budget.consume_node() {
+                break;
+            }
+            let Some(cell) = cell.as_object() else {
+                continue;
+            };
+            normalized_row.push(PreviewCell {
+                text: budget
+                    .take_text(cell.get("text").and_then(Value::as_str).unwrap_or_default()),
+                col_span: cell
+                    .get("colSpan")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(1)
+                    .clamp(1, MAX_TABLE_COLS as u64) as u32,
+                row_span: cell
+                    .get("rowSpan")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(1)
+                    .clamp(1, MAX_TABLE_ROWS as u64) as u32,
+            });
+            if budget.exhausted() {
+                break;
+            }
+        }
+        cells.push(normalized_row);
+        if budget.exhausted() {
+            break;
+        }
+    }
+    if source_rows.len() > cells.len() {
+        budget.truncated = true;
+    }
     let rows = cells.len() as u32;
     let cols = cells.iter().map(Vec::len).max().unwrap_or_default() as u32;
     Some(PreviewTable {
@@ -424,23 +477,41 @@ fn normalize_table(value: &Value) -> Option<PreviewTable> {
     })
 }
 
-fn normalize_warnings(value: Value) -> Result<Vec<PreviewWarning>, LibraryError> {
+fn normalize_warnings(
+    value: Value,
+    budget: &mut PreviewBudget,
+) -> Result<Vec<PreviewWarning>, LibraryError> {
     let values = value.as_array().ok_or(LibraryError::InvalidPreviewData)?;
-    Ok(values
-        .iter()
-        .take(1_000)
-        .filter_map(|warning| {
-            let warning = warning.as_object()?;
-            Some(PreviewWarning {
-                code: bounded_text(warning.get("code")?.as_str()?),
-                message: bounded_text(warning.get("message")?.as_str()?),
-                page: warning
-                    .get("page")
-                    .and_then(Value::as_u64)
-                    .and_then(|page| u32::try_from(page).ok()),
-            })
-        })
-        .collect())
+    let mut warnings = Vec::new();
+    for warning in values {
+        if !budget.consume_node() {
+            break;
+        }
+        let Some(warning) = warning.as_object() else {
+            continue;
+        };
+        let (Some(code), Some(message)) = (
+            warning.get("code").and_then(Value::as_str),
+            warning.get("message").and_then(Value::as_str),
+        ) else {
+            continue;
+        };
+        warnings.push(PreviewWarning {
+            code: budget.take_text(code),
+            message: budget.take_text(message),
+            page: warning
+                .get("page")
+                .and_then(Value::as_u64)
+                .and_then(|page| u32::try_from(page).ok()),
+        });
+        if budget.exhausted() {
+            break;
+        }
+    }
+    if warnings.len() < values.len() {
+        budget.truncated = true;
+    }
+    Ok(warnings)
 }
 
 fn safe_href(value: &str) -> Option<String> {
@@ -457,7 +528,51 @@ fn safe_href(value: &str) -> Option<String> {
 }
 
 fn bounded_text(value: &str) -> String {
-    value.chars().take(MAX_TEXT_CHARS).collect()
+    value.chars().take(MAX_PREVIEW_CHARS).collect()
+}
+
+struct PreviewBudget {
+    remaining_nodes: usize,
+    remaining_chars: usize,
+    truncated: bool,
+}
+
+impl PreviewBudget {
+    fn new() -> Self {
+        Self {
+            remaining_nodes: MAX_PREVIEW_NODES,
+            remaining_chars: MAX_PREVIEW_CHARS,
+            truncated: false,
+        }
+    }
+
+    fn consume_node(&mut self) -> bool {
+        if self.remaining_nodes == 0 {
+            self.truncated = true;
+            false
+        } else {
+            self.remaining_nodes -= 1;
+            true
+        }
+    }
+
+    fn take_text(&mut self, value: &str) -> String {
+        let mut chars = value.chars();
+        let text = chars
+            .by_ref()
+            .take(self.remaining_chars)
+            .collect::<String>();
+        let used = text.chars().count();
+        self.remaining_chars -= used;
+        if chars.next().is_some() {
+            self.truncated = true;
+        }
+        text
+    }
+
+    fn exhausted(&self) -> bool {
+        self.remaining_nodes == 0 || self.remaining_chars == 0
+    }
 }
 
 fn random_id(prefix: &str) -> String {
@@ -478,6 +593,8 @@ pub enum LibraryError {
     TooManyTags,
     #[error("stored preview data is invalid")]
     InvalidPreviewData,
+    #[error("stored preview data exceeds the safe preview limit")]
+    PreviewTooLarge,
     #[error("library database operation failed")]
     Database(#[from] rusqlite::Error),
 }
@@ -491,6 +608,7 @@ impl LibraryError {
             Self::TagNotFound => "TAG_NOT_FOUND",
             Self::TooManyTags => "TOO_MANY_TAGS",
             Self::InvalidPreviewData => "PREVIEW_DATA_INVALID",
+            Self::PreviewTooLarge => "PREVIEW_DATA_TOO_LARGE",
             Self::Database(_) => "LIBRARY_DATABASE_FAILED",
         }
     }

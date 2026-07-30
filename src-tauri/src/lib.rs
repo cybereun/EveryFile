@@ -66,6 +66,7 @@ pub fn run() {
             application::commands::open_source_location,
             application::commands::get_preview,
             application::commands::get_pdf_bytes,
+            application::commands::cancel_pdf_read,
             application::commands::set_bookmark,
             application::commands::remove_bookmark,
             application::commands::create_tag,

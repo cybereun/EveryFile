@@ -164,6 +164,7 @@ pub struct PreviewDocument {
     pub bookmarked: bool,
     pub bookmark_note: String,
     pub tags: Vec<TagRecord>,
+    pub truncated: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
