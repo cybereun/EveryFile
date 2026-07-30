@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ResizablePane } from "../components/ResizablePane";
 import { IndexStatusController } from "../features/folders/IndexStatus";
 import type { FolderRecord } from "../lib/types";
@@ -13,6 +13,9 @@ const LEFT_PANE_MIN = 208;
 const LEFT_PANE_MAX = 420;
 const RIGHT_PANE_MIN = 280;
 const RIGHT_PANE_MAX = 720;
+const CENTER_PANE_MIN = 520;
+const PREVIEW_BREAKPOINT = 1100;
+const COMPACT_HEADER_BREAKPOINT = 560;
 const APP_VERSION = "v0.1.0";
 
 export interface AppProps {
@@ -20,6 +23,9 @@ export interface AppProps {
   indexedDocumentCount?: number;
   queueState?: "idle" | "indexing" | "paused" | "error";
   selectedDocumentId?: string | null;
+  onAddFolder?: () => void;
+  onSettings?: () => void;
+  onStatistics?: () => void;
 }
 
 function readPersistedWidth(key: string, fallback: number, min: number, max: number) {
@@ -60,28 +66,46 @@ function usePersistedWidth(key: string, fallback: number, min: number, max: numb
   return [width, updateWidth] as const;
 }
 
-function useWidePreview() {
-  const query = "(min-width: 1101px)";
-  const [widePreview, setWidePreview] = useState(() =>
-    typeof window.matchMedia === "function" ? window.matchMedia(query).matches : true,
-  );
+function useWorkspaceWidth() {
+  const workspaceRef = useRef<HTMLElement>(null);
+  const [workspaceWidth, setWorkspaceWidth] = useState(() => window.innerWidth);
 
-  useEffect(() => {
-    if (typeof window.matchMedia !== "function") return;
-    const mediaQuery = window.matchMedia(query);
-    const update = (event: MediaQueryListEvent) => setWidePreview(event.matches);
-    setWidePreview(mediaQuery.matches);
-    mediaQuery.addEventListener("change", update);
-    return () => mediaQuery.removeEventListener("change", update);
+  useLayoutEffect(() => {
+    const workspace = workspaceRef.current;
+    if (!workspace) return;
+
+    const updateWidth = (width: number) => {
+      if (Number.isFinite(width) && width > 0) {
+        setWorkspaceWidth(Math.floor(width));
+      }
+    };
+    const measure = () => {
+      const measuredWidth = workspace.getBoundingClientRect().width;
+      updateWidth(measuredWidth || window.innerWidth);
+    };
+
+    measure();
+    if (typeof ResizeObserver === "function") {
+      const observer = new ResizeObserver((entries) => {
+        const entry = entries[0];
+        if (entry) updateWidth(entry.contentRect.width);
+      });
+      observer.observe(workspace);
+      return () => observer.disconnect();
+    }
+
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
   }, []);
 
-  return widePreview;
+  return [workspaceRef, workspaceWidth] as const;
 }
 
 function isTextEntryTarget(target: EventTarget | null) {
   if (!(target instanceof HTMLElement)) return false;
   return (
     target.isContentEditable ||
+    target.closest('[contenteditable]:not([contenteditable="false"])') !== null ||
     ["INPUT", "SELECT", "TEXTAREA"].includes(target.tagName)
   );
 }
@@ -170,6 +194,9 @@ export function App({
   indexedDocumentCount = 0,
   queueState = "idle",
   selectedDocumentId = null,
+  onAddFolder,
+  onSettings,
+  onStatistics,
 }: AppProps) {
   const [locale, setLocale] = useState<Locale>(defaultLocale);
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -186,12 +213,52 @@ export function App({
     RIGHT_PANE_MIN,
     RIGHT_PANE_MAX,
   );
-  const widePreview = useWidePreview();
+  const [workspaceRef, workspaceWidth] = useWorkspaceWidth();
   const { tagline } = productTranslations[locale];
+  const previewRequested = workspaceWidth > PREVIEW_BREAKPOINT;
+  const leftCanFit = workspaceWidth >= LEFT_PANE_MIN + CENTER_PANE_MIN;
+  const previewCanFit =
+    previewRequested &&
+    workspaceWidth >=
+      CENTER_PANE_MIN + RIGHT_PANE_MIN + (sidebarOpen ? LEFT_PANE_MIN : 0);
+  const leftMaximumForLayout = Math.max(
+    LEFT_PANE_MIN,
+    Math.min(
+      LEFT_PANE_MAX,
+      workspaceWidth -
+        CENTER_PANE_MIN -
+        (previewCanFit ? RIGHT_PANE_MIN : 0),
+    ),
+  );
+  const leftPaneVisible = sidebarOpen && leftCanFit;
+  const renderedLeftWidth = leftPaneVisible
+    ? Math.min(leftWidth, leftMaximumForLayout)
+    : leftWidth;
+  const rightMaximumForLayout = Math.max(
+    RIGHT_PANE_MIN,
+    Math.min(
+      RIGHT_PANE_MAX,
+      workspaceWidth -
+        CENTER_PANE_MIN -
+        (leftPaneVisible ? renderedLeftWidth : 0),
+    ),
+  );
+  const previewVisible = previewCanFit;
+  const renderedRightWidth = previewVisible
+    ? Math.min(rightWidth, rightMaximumForLayout)
+    : rightWidth;
+  const compactHeader = workspaceWidth <= COMPACT_HEADER_BREAKPOINT;
 
   useEffect(() => {
     const handleShortcut = (event: KeyboardEvent) => {
-      if (event.ctrlKey && !event.altKey && !event.metaKey && event.key.toLowerCase() === "b") {
+      const textEntry = isTextEntryTarget(event.target);
+      if (
+        event.ctrlKey &&
+        !event.altKey &&
+        !event.metaKey &&
+        event.key.toLowerCase() === "b" &&
+        !textEntry
+      ) {
         event.preventDefault();
         setSidebarOpen((open) => !open);
         return;
@@ -201,7 +268,7 @@ export function App({
         !event.ctrlKey &&
         !event.altKey &&
         !event.metaKey &&
-        !isTextEntryTarget(event.target)
+        !textEntry
       ) {
         event.preventDefault();
         searchInput.current?.focus();
@@ -215,24 +282,28 @@ export function App({
   return (
     <div className="app-shell">
       <Header
+        compact={compactHeader}
         locale={locale}
         tagline={tagline}
+        onAddFolder={onAddFolder}
         onLocaleChange={setLocale}
         onHome={() => {
           setSidebarOpen(true);
           searchInput.current?.focus();
         }}
+        onSettings={onSettings}
+        onStatistics={onStatistics}
       />
-      <main className="workspace">
+      <main ref={workspaceRef} className="workspace">
         <ResizablePane
           className="left-pane-container"
-          hidden={!sidebarOpen}
+          hidden={!leftPaneVisible}
           label="폴더 패널 크기 조절 / Resize folder pane"
-          maxWidth={LEFT_PANE_MAX}
+          maxWidth={leftMaximumForLayout}
           minWidth={LEFT_PANE_MIN}
           onWidthChange={setLeftWidth}
           resizeEdge="right"
-          width={leftWidth}
+          width={renderedLeftWidth}
         >
           <FolderPane folders={folders} />
         </ResizablePane>
@@ -271,13 +342,13 @@ export function App({
 
         <ResizablePane
           className="preview-pane-container"
-          hidden={!widePreview}
+          hidden={!previewVisible}
           label="미리보기 패널 크기 조절 / Resize preview pane"
-          maxWidth={RIGHT_PANE_MAX}
+          maxWidth={rightMaximumForLayout}
           minWidth={RIGHT_PANE_MIN}
           onWidthChange={setRightWidth}
           resizeEdge="left"
-          width={rightWidth}
+          width={renderedRightWidth}
         >
           <PreviewPane selectedDocumentId={selectedDocumentId} />
         </ResizablePane>

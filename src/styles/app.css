@@ -42,6 +42,8 @@ select:focus-visible,
 
 .app-shell {
   display: grid;
+  width: 100%;
+  min-width: 0;
   min-height: 100vh;
   grid-template-rows: auto minmax(0, 1fr) auto;
   background:
@@ -63,7 +65,8 @@ select:focus-visible,
 
 .brand {
   display: flex;
-  min-width: 12rem;
+  min-width: 0;
+  flex: 1 1 auto;
   align-items: baseline;
   gap: 0.7rem;
 }
@@ -78,14 +81,17 @@ select:focus-visible,
 .brand p {
   overflow: hidden;
   margin: 0;
-  color: var(--color-text-muted);
+  color: var(--color-text);
   font-size: 0.75rem;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .header-actions {
+  position: relative;
   display: flex;
+  min-width: 0;
+  flex: 0 0 auto;
   align-items: center;
   gap: 0.35rem;
   margin-left: auto;
@@ -108,7 +114,7 @@ select:focus-visible,
 .language-control select {
   min-height: 2.35rem;
   padding: 0 1.8rem 0 0.65rem;
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--color-text-muted);
   border-radius: var(--radius-sm);
   background: var(--color-surface);
 }
@@ -130,6 +136,16 @@ select:focus-visible,
   background: var(--color-surface-muted);
 }
 
+.icon-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.icon-button:disabled:hover {
+  border-color: transparent;
+  background: transparent;
+}
+
 .icon-button--accent {
   border-color: var(--color-accent);
   background: var(--color-accent);
@@ -146,8 +162,52 @@ select:focus-visible,
   height: 1.25rem;
 }
 
+.app-header--compact {
+  min-width: 0;
+  padding-inline: 0.65rem;
+}
+
+.app-header--compact .brand h1 {
+  overflow: hidden;
+  font-size: 1.15rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.header-overflow {
+  position: relative;
+}
+
+.header-overflow-menu {
+  position: absolute;
+  z-index: 10;
+  top: calc(100% + 0.55rem);
+  right: 0;
+  display: grid;
+  width: min(13.5rem, calc(100vw - 1.3rem));
+  grid-template-columns: repeat(3, auto);
+  align-items: center;
+  justify-content: end;
+  gap: 0.35rem;
+  padding: 0.6rem;
+  border: 1px solid var(--color-text-muted);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-popover);
+}
+
+.language-control--compact {
+  display: block;
+  grid-column: 1 / -1;
+}
+
+.language-control--compact select {
+  width: 100%;
+}
+
 .workspace {
   display: flex;
+  width: 100%;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
@@ -244,7 +304,7 @@ select:focus-visible,
 }
 
 .folder-count {
-  color: var(--color-text-muted);
+  color: var(--color-text);
   font-variant-numeric: tabular-nums;
 }
 
@@ -252,7 +312,7 @@ select:focus-visible,
   padding: 1rem 0.7rem;
   border: 1px dashed var(--color-border);
   border-radius: var(--radius-md);
-  color: var(--color-text-muted);
+  color: var(--color-text);
   font-size: 0.85rem;
   line-height: 1.55;
 }
@@ -285,7 +345,7 @@ select:focus-visible,
   gap: 0.7rem;
   min-height: 3.25rem;
   padding: 0 1rem;
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--color-text-muted);
   border-radius: var(--radius-md);
   background: var(--color-surface);
   box-shadow: 0 8px 20px rgb(70 55 45 / 6%);
@@ -311,9 +371,9 @@ select:focus-visible,
 
 .shortcut-hint {
   padding: 0.16rem 0.42rem;
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--color-text-muted);
   border-radius: 5px;
-  color: var(--color-text-muted);
+  color: var(--color-text);
   font-size: 0.72rem;
 }
 
@@ -323,6 +383,7 @@ select:focus-visible,
   place-content: center;
   padding: 2rem;
   text-align: center;
+  overflow-wrap: anywhere;
 }
 
 .workspace-empty strong {
@@ -336,19 +397,24 @@ select:focus-visible,
 .workspace-empty p {
   max-width: 34rem;
   margin: 0;
-  color: var(--color-text-muted);
+  color: var(--color-text);
   line-height: 1.65;
 }
 
 .preview-pane {
+  display: flex;
   height: 100%;
+  min-height: 0;
+  flex-direction: column;
   padding: 1rem;
   border-left: 0;
   background: var(--color-surface);
 }
 
 .preview-card {
-  min-height: 100%;
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow: auto;
   padding: 1rem;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
@@ -356,7 +422,7 @@ select:focus-visible,
 }
 
 .preview-card p {
-  color: var(--color-text-muted);
+  color: var(--color-text);
   line-height: 1.6;
 }
 
@@ -368,7 +434,7 @@ select:focus-visible,
   padding: 0.3rem 1rem;
   border-top: 1px solid var(--color-border);
   background: var(--color-surface);
-  color: var(--color-text-muted);
+  color: var(--color-text);
   font-size: 0.75rem;
 }
 
@@ -401,25 +467,12 @@ select:focus-visible,
 }
 
 @media (max-width: 1100px) {
-  .preview-pane-container {
-    display: none;
-  }
-
   .center-pane {
     min-width: min(520px, 100%);
   }
 }
 
 @media (max-width: 760px) {
-  .brand p,
-  .language-control {
-    display: none;
-  }
-
-  .left-pane-container {
-    display: none;
-  }
-
   .center-pane {
     min-width: 0;
     padding: 0.8rem;
@@ -435,6 +488,12 @@ select:focus-visible,
 
   .status-summary {
     flex-wrap: wrap;
+  }
+}
+
+@media (max-width: 560px) {
+  .app-header {
+    min-width: 0;
   }
 }
 

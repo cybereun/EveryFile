@@ -1,8 +1,16 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { App } from "./App";
 
 describe("App", () => {
+  beforeEach(() => {
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value: 1440,
+      writable: true,
+    });
+  });
+
   afterEach(() => {
     cleanup();
     window.localStorage.clear();
@@ -72,6 +80,40 @@ describe("App", () => {
     expect(screen.getByRole("searchbox")).toHaveFocus();
   });
 
+  it("does not hijack Ctrl+B or slash in text-entry controls", () => {
+    render(<App />);
+    const controls: HTMLElement[] = [
+      screen.getByRole("searchbox"),
+      screen.getByRole("combobox", { name: "Language" }),
+    ];
+    const textarea = document.createElement("textarea");
+    textarea.setAttribute("aria-label", "Test textarea");
+    document.body.append(textarea);
+    controls.push(textarea);
+    const editor = document.createElement("div");
+    editor.setAttribute("contenteditable", "true");
+    editor.setAttribute("aria-label", "Test editor");
+    editor.tabIndex = 0;
+    document.body.append(editor);
+    controls.push(editor);
+
+    for (const control of controls) {
+      control.focus();
+      fireEvent.keyDown(control, { key: "b", ctrlKey: true });
+      expect(
+        screen.getByRole("complementary", {
+          name: "등록 폴더 / Indexed folders",
+        }),
+      ).toBeVisible();
+
+      fireEvent.keyDown(control, { key: "/" });
+      expect(control).toHaveFocus();
+    }
+
+    textarea.remove();
+    editor.remove();
+  });
+
   it("persists resized pane widths in local settings", () => {
     const { unmount } = render(<App />);
     const leftSeparator = screen.getByRole("separator", {
@@ -91,35 +133,79 @@ describe("App", () => {
   });
 
   it("collapses the preview before removing search at narrow widths", () => {
-    const originalMatchMedia = window.matchMedia;
-    Object.defineProperty(window, "matchMedia", {
-      configurable: true,
-      value: () => ({
-        matches: false,
-        media: "(min-width: 1101px)",
-        onchange: null,
-        addEventListener: () => undefined,
-        removeEventListener: () => undefined,
-        addListener: () => undefined,
-        removeListener: () => undefined,
-        dispatchEvent: () => true,
-      }),
-    });
+    render(<App selectedDocumentId="document-1" />);
+    window.innerWidth = 400;
+    fireEvent(window, new Event("resize"));
 
-    try {
-      render(<App selectedDocumentId="document-1" />);
-      expect(
-        screen.getByRole("region", {
-          name: "문서 미리보기 / Document preview",
-          hidden: true,
-        }),
-      ).not.toBeVisible();
-      expect(screen.getByRole("searchbox")).toBeVisible();
-    } finally {
-      Object.defineProperty(window, "matchMedia", {
-        configurable: true,
-        value: originalMatchMedia,
-      });
-    }
+    expect(
+      screen.getByRole("region", {
+        name: "문서 미리보기 / Document preview",
+        hidden: true,
+      }),
+    ).not.toBeVisible();
+    expect(screen.getByRole("searchbox")).toBeVisible();
+    expect(screen.getByRole("button", { name: "더보기 / More" })).toBeVisible();
+
+    fireEvent.click(screen.getByRole("button", { name: "더보기 / More" }));
+    expect(screen.getByRole("button", { name: "통계 / Statistics" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "폴더 추가 / Add folder" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "설정 / Settings" })).toBeVisible();
+  });
+
+  it("keeps a 520px center by constraining combined persisted pane widths", () => {
+    window.localStorage.setItem("everyfile.ui.left-pane-width", "420");
+    window.localStorage.setItem("everyfile.ui.right-pane-width", "720");
+    render(<App />);
+
+    expect(
+      screen.getByRole("separator", {
+        name: "폴더 패널 크기 조절 / Resize folder pane",
+      }),
+    ).toHaveAttribute("aria-valuenow", "420");
+    expect(
+      screen.getByRole("separator", {
+        name: "미리보기 패널 크기 조절 / Resize preview pane",
+      }),
+    ).toHaveAttribute("aria-valuenow", "500");
+
+    window.innerWidth = 1101;
+    fireEvent(window, new Event("resize"));
+    expect(
+      screen.getByRole("separator", {
+        name: "폴더 패널 크기 조절 / Resize folder pane",
+      }),
+    ).toHaveAttribute("aria-valuenow", "301");
+    expect(
+      screen.getByRole("separator", {
+        name: "미리보기 패널 크기 조절 / Resize preview pane",
+      }),
+    ).toHaveAttribute("aria-valuenow", "280");
+
+    window.innerWidth = 1100;
+    fireEvent(window, new Event("resize"));
+    expect(
+      screen.getByRole("region", {
+        name: "문서 미리보기 / Document preview",
+        hidden: true,
+      }),
+    ).not.toBeVisible();
+    expect(screen.getByRole("searchbox")).toBeVisible();
+  });
+
+  it("falls back from corrupt persisted widths", () => {
+    window.localStorage.setItem("everyfile.ui.left-pane-width", "-1");
+    window.localStorage.setItem("everyfile.ui.right-pane-width", "Infinity");
+    render(<App />);
+
+    expect(
+      screen.getByRole("separator", {
+        name: "폴더 패널 크기 조절 / Resize folder pane",
+      }),
+    ).toHaveAttribute("aria-valuenow", "260");
+    expect(
+      screen.getByRole("separator", {
+        name: "미리보기 패널 크기 조절 / Resize preview pane",
+      }),
+    ).toHaveAttribute("aria-valuenow", "448");
   });
 });
