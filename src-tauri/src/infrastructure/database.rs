@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use parking_lot::{Mutex, MutexGuard};
-use rusqlite::Connection;
+use rusqlite::{Connection, InterruptHandle};
 use thiserror::Error;
 use zeroize::Zeroizing;
 
@@ -19,6 +19,7 @@ const PARSE_ATTEMPT_OWNERSHIP_MIGRATION: &str =
 
 pub struct Database {
     connection: Mutex<Connection>,
+    interrupt: std::sync::Arc<InterruptHandle>,
 }
 
 impl Database {
@@ -38,8 +39,10 @@ impl Database {
             .execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;")
             .map_err(DatabaseError::Configure)?;
 
+        let interrupt = std::sync::Arc::new(connection.get_interrupt_handle());
         Ok(Self {
             connection: Mutex::new(connection),
+            interrupt,
         })
     }
 
@@ -89,6 +92,10 @@ impl Database {
 
     pub fn connection(&self) -> MutexGuard<'_, Connection> {
         self.connection.lock()
+    }
+
+    pub fn interrupt_handle(&self) -> std::sync::Arc<InterruptHandle> {
+        std::sync::Arc::clone(&self.interrupt)
     }
 }
 

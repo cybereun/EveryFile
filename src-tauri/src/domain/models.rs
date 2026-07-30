@@ -10,6 +10,7 @@ pub enum SearchMode {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchRequest {
+    pub request_id: String,
     pub query: String,
     pub mode: SearchMode,
     pub folder_ids: Vec<String>,
@@ -66,6 +67,7 @@ pub struct DocumentRecord {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchResponse {
+    pub request_id: String,
     pub hits: Vec<SearchHit>,
     pub total: u64,
     pub elapsed_ms: u64,

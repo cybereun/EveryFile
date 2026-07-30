@@ -12,7 +12,7 @@ use crate::indexing::ActivityLimiter;
 use crate::infrastructure::database::Database;
 
 use super::query::{validate_date, validate_extension};
-use super::ParsedQuery;
+use super::{ParsedQuery, SearchLease, SearchRegistry};
 
 const DEFAULT_PAGE_SIZE: u32 = 100;
 const MAX_PAGE_SIZE: u32 = 200;
@@ -21,14 +21,41 @@ const MAX_PAGE_SIZE: u32 = 200;
 pub struct SearchRepository {
     database: Arc<Database>,
     limiter: ActivityLimiter,
+    registry: SearchRegistry,
 }
 
 impl SearchRepository {
-    pub fn new(database: Arc<Database>, limiter: ActivityLimiter) -> Self {
-        Self { database, limiter }
+    pub fn new(
+        database: Arc<Database>,
+        limiter: ActivityLimiter,
+        registry: SearchRegistry,
+    ) -> Self {
+        Self {
+            database,
+            limiter,
+            registry,
+        }
     }
 
     pub fn search(&self, request: &SearchRequest) -> Result<SearchResponse, SearchError> {
+        let lease = self.begin_request(&request.request_id)?;
+        self.search_registered(request, lease)
+    }
+
+    pub fn begin_request(&self, request_id: &str) -> Result<SearchLease, SearchError> {
+        self.registry.begin(request_id)
+    }
+
+    pub fn search_registered(
+        &self,
+        request: &SearchRequest,
+        lease: SearchLease,
+    ) -> Result<SearchResponse, SearchError> {
+        if request.request_id != lease.request_id() {
+            return Err(SearchError::invalid_request(
+                "search lease does not belong to this request",
+            ));
+        }
         let _foreground = self.limiter.begin_foreground();
         let started = Instant::now();
         validate_request(request)?;
@@ -40,60 +67,73 @@ impl SearchRepository {
         };
         let query = SearchSql::build(request, &parsed)?;
         let connection = self.database.connection();
+        let execution = lease.begin_execution(&connection)?;
 
-        let total = connection.query_row(
+        let total_result = connection.query_row(
             &query.count_sql,
             params_from_iter(query.filter_values.iter()),
             |row| row.get::<_, i64>(0),
-        )?;
+        );
+        lease.ensure_current()?;
+        let total = total_result?;
         let mut hit_values = query.filter_values.clone();
         hit_values.push(Value::Integer(i64::from(limit)));
         hit_values.push(Value::Integer(i64::from(request.offset)));
-        let mut statement = connection.prepare(&query.hits_sql)?;
-        let hits = statement
-            .query_map(params_from_iter(hit_values.iter()), |row| {
-                let size_bytes = row.get::<_, i64>(4)?;
-                Ok(SearchHit {
-                    document_id: row.get(0)?,
-                    file_name: row.get(1)?,
-                    path: row.get(2)?,
-                    extension: row.get(3)?,
-                    size_bytes: u64::try_from(size_bytes).unwrap_or_default(),
-                    modified_at: row.get(5)?,
-                    snippet: row.get(6)?,
-                    score: row.get(7)?,
-                })
-            })?
-            .collect::<Result<Vec<_>, _>>()?;
+        let statement_result = connection.prepare(&query.hits_sql);
+        lease.ensure_current()?;
+        let mut statement = statement_result?;
+        let rows_result = statement.query_map(params_from_iter(hit_values.iter()), |row| {
+            let size_bytes = row.get::<_, i64>(4)?;
+            Ok(SearchHit {
+                document_id: row.get(0)?,
+                file_name: row.get(1)?,
+                path: row.get(2)?,
+                extension: row.get(3)?,
+                size_bytes: u64::try_from(size_bytes).unwrap_or_default(),
+                modified_at: row.get(5)?,
+                snippet: row.get(6)?,
+                score: row.get(7)?,
+            })
+        });
+        lease.ensure_current()?;
+        let hits_result = rows_result?.collect::<Result<Vec<_>, _>>();
+        lease.ensure_current()?;
+        let hits = hits_result?;
+        drop(statement);
+        drop(execution);
         let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
         let total = u64::try_from(total).unwrap_or_default();
         let has_more = u64::from(request.offset).saturating_add(hits.len() as u64) < total;
 
-        if !request.private_search && !request.query.trim().is_empty() {
-            let filters_json = serde_json::to_string(&HistoryFilters::from(request, &parsed))?;
-            connection.execute(
-                "INSERT INTO search_history
-                 (id, query, mode, filters_json, result_count, elapsed_ms, searched_at, private)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6,
-                         strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), 0)",
-                params![
-                    random_id(),
-                    request.query,
-                    mode_name(&request.mode),
-                    filters_json,
-                    i64::try_from(total).unwrap_or(i64::MAX),
-                    i64::try_from(elapsed_ms).unwrap_or(i64::MAX),
-                ],
-            )?;
-        }
-
-        Ok(SearchResponse {
+        let response = SearchResponse {
+            request_id: request.request_id.clone(),
             hits,
             total,
             elapsed_ms,
             applied_filters: query.applied_filters,
             has_more,
-        })
+        };
+        lease.finish(|| {
+            if !request.private_search && request.offset == 0 && !parsed.is_empty() {
+                let filters_json = serde_json::to_string(&HistoryFilters::from(request, &parsed))?;
+                connection.execute(
+                    "INSERT INTO search_history
+                     (id, query, mode, filters_json, result_count, elapsed_ms, searched_at, private)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6,
+                             strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), 0)",
+                    params![
+                        random_id(),
+                        request.query,
+                        mode_name(&request.mode),
+                        filters_json,
+                        i64::try_from(total).unwrap_or(i64::MAX),
+                        i64::try_from(elapsed_ms).unwrap_or(i64::MAX),
+                    ],
+                )?;
+            }
+            Ok(())
+        })?;
+        Ok(response)
     }
 }
 
@@ -131,6 +171,13 @@ impl SearchSql {
                         values.push(expression.into());
                     }
                     if !parsed.excluded_terms.is_empty() {
+                        conditions.push(
+                            "EXISTS (
+                               SELECT 1 FROM document_fts indexed_fts
+                               WHERE indexed_fts.document_id = d.id
+                             )"
+                            .into(),
+                        );
                         applied_filters.push("query".into());
                     }
                 }
@@ -241,7 +288,7 @@ impl SearchSql {
         };
         let score = if fts { "bm25(document_fts)" } else { "0.0" };
         let snippet = if fts {
-            "snippet(document_fts, 3, '<mark>', '</mark>', '…', 24)"
+            "snippet(document_fts, -1, '<mark>', '</mark>', '…', 24)"
         } else {
             "NULL"
         };
@@ -411,6 +458,8 @@ pub enum SearchError {
     Database(#[from] rusqlite::Error),
     #[error("search history serialization failed")]
     Serialization(#[from] serde_json::Error),
+    #[error("search request was cancelled or superseded")]
+    Cancelled,
 }
 
 impl SearchError {
@@ -418,7 +467,7 @@ impl SearchError {
         Self::InvalidQuery(message.into())
     }
 
-    fn invalid_request(message: impl Into<String>) -> Self {
+    pub(crate) fn invalid_request(message: impl Into<String>) -> Self {
         Self::InvalidRequest(message.into())
     }
 
@@ -428,6 +477,7 @@ impl SearchError {
             Self::InvalidRequest(_) => "SEARCH_REQUEST_INVALID",
             Self::Database(_) => "SEARCH_DATABASE_FAILED",
             Self::Serialization(_) => "SEARCH_HISTORY_FAILED",
+            Self::Cancelled => "SEARCH_CANCELLED",
         }
     }
 }

@@ -1,10 +1,13 @@
+use std::sync::mpsc;
 use std::sync::Arc;
+use std::thread;
+use std::time::Duration;
 
 use everyfile_lib::domain::models::{SearchMode, SearchRequest};
 use everyfile_lib::indexing::ActivityLimiter;
 use everyfile_lib::infrastructure::database::Database;
 use everyfile_lib::infrastructure::secure_key::SecretKey;
-use everyfile_lib::search::{ParsedQuery, SearchRepository};
+use everyfile_lib::search::{ParsedQuery, SearchRegistry, SearchRepository};
 use tempfile::TempDir;
 use zeroize::Zeroizing;
 
@@ -41,6 +44,18 @@ fn parser_handles_empty_escaped_near_korean_and_hostile_inputs() {
 }
 
 #[test]
+fn parser_preserves_quoted_windows_and_unc_path_separators() {
+    let parsed =
+        ParsedQuery::parse(r#"path:"C:\Program Files\EveryFile" path:"\\server\share\교육 자료""#)
+            .unwrap();
+
+    assert_eq!(
+        parsed.path_terms,
+        [r"C:\Program Files\EveryFile", r"\\server\share\교육 자료"]
+    );
+}
+
+#[test]
 fn parser_rejects_invalid_dates_extensions_and_unclosed_quotes() {
     assert!(ParsedQuery::parse("after:2026-02-30").is_err());
     assert!(ParsedQuery::parse("before:2026/01/01").is_err());
@@ -49,6 +64,9 @@ fn parser_rejects_invalid_dates_extensions_and_unclosed_quotes() {
     assert!(ParsedQuery::parse("term ~0").is_err());
     assert!(ParsedQuery::parse("term ~101").is_err());
     assert!(ParsedQuery::parse("after:2026-02-01 before:2026-01-01").is_err());
+    assert!(ParsedQuery::parse("~3").is_err());
+    assert!(ParsedQuery::parse("alpha ~3").is_err());
+    assert!(ParsedQuery::parse("alpha beta ~3 ~4").is_err());
 }
 
 #[test]
@@ -189,6 +207,10 @@ fn records_only_successful_non_private_non_empty_searches() {
         .repository
         .search(&request("", SearchMode::Filename))
         .unwrap();
+    fixture
+        .repository
+        .search(&request("\"\"", SearchMode::Filename))
+        .unwrap();
     assert!(fixture
         .repository
         .search(&request("after:not-a-date", SearchMode::Keyword))
@@ -229,6 +251,15 @@ fn keyword_search_honors_near_content_only_and_exclusion_only_queries() {
         1,
         "lesson",
         "alpha one two three four beta blocked",
+    );
+    fixture.insert_unindexed_document(
+        "doc-pending",
+        "folder-1",
+        r"C:\fixture\pending.txt",
+        "pending.txt",
+        "txt",
+        "2026-01-01T00:00:00Z",
+        "pending",
     );
 
     let near = fixture
@@ -282,10 +313,122 @@ fn paging_reports_total_and_has_more() {
     let last = fixture.repository.search(&first_request).unwrap();
     assert_eq!(last.hits.len(), 1);
     assert!(!last.has_more);
+
+    let history_count: i64 = fixture
+        .database
+        .connection()
+        .query_row("SELECT COUNT(*) FROM search_history", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(history_count, 1);
+}
+
+#[test]
+fn keyword_snippet_uses_the_best_matching_fts_column() {
+    let fixture = Fixture::new();
+    fixture.insert_document(
+        "doc-title",
+        "folder-1",
+        r"C:\fixture\ordinary.txt",
+        "ordinary.txt",
+        "txt",
+        "2026-01-01T00:00:00Z",
+        1,
+        "titleonlyneedle",
+        "ordinary body",
+    );
+    fixture.insert_document(
+        "doc-name",
+        "folder-1",
+        r"C:\fixture\filenameonlyneedle.txt",
+        "filenameonlyneedle.txt",
+        "txt",
+        "2026-01-01T00:00:00Z",
+        1,
+        "ordinary title",
+        "ordinary body",
+    );
+
+    for query in ["titleonlyneedle", "filenameonlyneedle"] {
+        let response = fixture
+            .repository
+            .search(&request(query, SearchMode::Keyword))
+            .unwrap();
+        assert_eq!(response.total, 1);
+        assert!(response.hits[0]
+            .snippet
+            .as_deref()
+            .unwrap()
+            .contains("<mark>"));
+    }
+}
+
+#[test]
+fn superseded_search_cannot_return_or_write_history_ahead_of_the_new_request() {
+    let fixture = Fixture::new();
+    fixture.insert_document(
+        "doc-1",
+        "folder-1",
+        r"C:\fixture\new.txt",
+        "new.txt",
+        "txt",
+        "2026-01-01T00:00:00Z",
+        1,
+        "",
+        "newterm",
+    );
+    let database_gate = fixture.database.connection();
+    let mut old_request = request("oldterm", SearchMode::Keyword);
+    old_request.request_id = "old-request".into();
+    let old_lease = fixture
+        .repository
+        .begin_request(&old_request.request_id)
+        .unwrap();
+    let old_repository = fixture.repository.clone();
+    let (started_tx, started_rx) = mpsc::sync_channel(0);
+    let (finished_tx, finished_rx) = mpsc::sync_channel(0);
+    let old_worker = thread::spawn(move || {
+        started_tx.send(()).unwrap();
+        finished_tx
+            .send(old_repository.search_registered(&old_request, old_lease))
+            .unwrap();
+    });
+
+    started_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+    let mut new_request = request("newterm", SearchMode::Keyword);
+    new_request.request_id = "new-request".into();
+    let new_lease = fixture
+        .repository
+        .begin_request(&new_request.request_id)
+        .unwrap();
+    drop(database_gate);
+
+    let new_response = fixture
+        .repository
+        .search_registered(&new_request, new_lease)
+        .unwrap();
+    let old_result = finished_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+    old_worker.join().unwrap();
+
+    assert_eq!(new_response.request_id, "new-request");
+    assert_eq!(new_response.total, 1);
+    assert!(matches!(
+        old_result,
+        Err(everyfile_lib::search::SearchError::Cancelled)
+    ));
+    let connection = fixture.database.connection();
+    let history = connection
+        .prepare("SELECT query FROM search_history ORDER BY searched_at")
+        .unwrap()
+        .query_map([], |row| row.get::<_, String>(0))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(history, ["newterm"]);
 }
 
 fn request(query: &str, mode: SearchMode) -> SearchRequest {
     SearchRequest {
+        request_id: "search-test".into(),
         query: query.into(),
         mode,
         folder_ids: Vec::new(),
@@ -324,7 +467,9 @@ impl Fixture {
                 )
                 .unwrap();
         }
-        let repository = SearchRepository::new(Arc::clone(&database), ActivityLimiter::default());
+        let registry = SearchRegistry::new(database.interrupt_handle());
+        let repository =
+            SearchRepository::new(Arc::clone(&database), ActivityLimiter::default(), registry);
         Self {
             _temp: temp,
             database,
@@ -368,6 +513,37 @@ impl Fixture {
                 "INSERT INTO document_fts (document_id, file_name, title, body)
                  VALUES (?1, ?2, ?3, ?4)",
                 rusqlite::params![id, file_name, title, body],
+            )
+            .unwrap();
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn insert_unindexed_document(
+        &self,
+        id: &str,
+        folder_id: &str,
+        path: &str,
+        file_name: &str,
+        extension: &str,
+        modified_at: &str,
+        parse_state: &str,
+    ) {
+        self.database
+            .connection()
+            .execute(
+                "INSERT INTO documents
+                 (id, folder_id, canonical_path, file_name, extension, size_bytes,
+                  modified_at, parse_state, indexed_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, 1, ?6, ?7, NULL)",
+                rusqlite::params![
+                    id,
+                    folder_id,
+                    path,
+                    file_name,
+                    extension,
+                    modified_at,
+                    parse_state
+                ],
             )
             .unwrap();
     }

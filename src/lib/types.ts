@@ -1,6 +1,7 @@
 export type SearchMode = "keyword" | "filename";
 
 export interface SearchRequest {
+  requestId: string;
   query: string;
   mode: SearchMode;
   folderIds: string[];
@@ -49,6 +50,7 @@ export interface DocumentRecord {
 }
 
 export interface SearchResponse {
+  requestId: string;
   hits: SearchHit[];
   total: number;
   elapsedMs: number;

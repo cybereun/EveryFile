@@ -5,6 +5,7 @@ const { invoke } = vi.hoisted(() => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
 
 import {
+  cancelSearch,
   cancelIndexing,
   getIndexStatus,
   getPreview,
@@ -35,6 +36,7 @@ describe("IPC wrappers", () => {
       resultPageSize: 100,
     };
     const request: SearchRequest = {
+      requestId: "search-1",
       query: "검색어",
       mode: "keyword",
       folderIds: ["folder-1"],
@@ -52,6 +54,7 @@ describe("IPC wrappers", () => {
     await saveSettings(settings);
     await listFolders();
     await searchDocuments(request);
+    await cancelSearch("search-1");
     await getPreview("document-1");
     await startIndexing("folder-1");
     await pauseIndexing("job-1");
@@ -64,6 +67,7 @@ describe("IPC wrappers", () => {
       ["save_settings", { settings }],
       ["list_folders"],
       ["search_documents", { request }],
+      ["cancel_search", { requestId: "search-1" }],
       ["get_preview", { documentId: "document-1" }],
       ["start_indexing", { folderId: "folder-1" }],
       ["pause_indexing", { jobId: "job-1" }],

@@ -144,13 +144,27 @@ pub async fn get_index_status(
 }
 
 #[tauri::command]
-pub fn search_documents(
+pub async fn search_documents(
     request: SearchRequest,
     state: State<'_, AppState>,
 ) -> Result<SearchResponse, CommandError> {
-    SearchRepository::new(state.database.clone(), state.indexing.activity_limiter())
-        .search(&request)
+    let repository = SearchRepository::new(
+        state.database.clone(),
+        state.indexing.activity_limiter(),
+        state.searches.clone(),
+    );
+    let lease = repository
+        .begin_request(&request.request_id)
+        .map_err(CommandError::from)?;
+    tauri::async_runtime::spawn_blocking(move || repository.search_registered(&request, lease))
+        .await
+        .map_err(|error| CommandError::new("SEARCH_WORKER_FAILED", error.to_string()))?
         .map_err(CommandError::from)
+}
+
+#[tauri::command]
+pub fn cancel_search(request_id: String, state: State<'_, AppState>) -> bool {
+    state.searches.cancel(&request_id)
 }
 
 #[derive(Debug, Serialize)]

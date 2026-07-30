@@ -18,6 +18,9 @@ export const listFolders = () => invoke<FolderRecord[]>("list_folders");
 export const searchDocuments = (request: SearchRequest) =>
   invoke<SearchResponse>("search_documents", { request });
 
+export const cancelSearch = (requestId: string) =>
+  invoke<boolean>("cancel_search", { requestId });
+
 export const getPreview = (documentId: string) =>
   invoke<PreviewDocument>("get_preview", { documentId });
 

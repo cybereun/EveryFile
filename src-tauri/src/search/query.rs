@@ -46,7 +46,11 @@ impl ParsedQuery {
                         "near distance must be between 1 and 100",
                     ));
                 }
-                parsed.near = Some(distance);
+                if parsed.near.replace(distance).is_some() {
+                    return Err(SearchError::invalid_query(
+                        "only one near operator is allowed",
+                    ));
+                }
             } else if let Some(value) = token.text.strip_prefix('-') {
                 if value.is_empty() {
                     parsed.terms.push(token.text);
@@ -63,6 +67,11 @@ impl ParsedQuery {
                     "after date cannot follow before date",
                 ));
             }
+        }
+        if parsed.near.is_some() && parsed.terms.len() + parsed.phrases.len() < 2 {
+            return Err(SearchError::invalid_query(
+                "near search requires at least two positive terms or phrases",
+            ));
         }
         Ok(parsed)
     }
@@ -210,21 +219,31 @@ fn tokenize(input: &str) -> Result<Vec<Token>, SearchError> {
     let mut text = String::new();
     let mut in_quotes = false;
     let mut whole_token_quoted = false;
-    let mut escaped = false;
+    let mut quoted_path = false;
+    let mut quoted_characters = 0_usize;
+    let mut characters = input.chars().peekable();
 
-    for character in input.chars() {
-        if escaped {
-            text.push(character);
-            escaped = false;
-            continue;
-        }
+    while let Some(character) = characters.next() {
         if character == '\\' && in_quotes {
-            escaped = true;
+            match characters.peek().copied() {
+                Some('"') => {
+                    characters.next();
+                    text.push('"');
+                }
+                Some('\\') if !(quoted_path && quoted_characters == 0) => {
+                    characters.next();
+                    text.push('\\');
+                }
+                _ => text.push('\\'),
+            }
+            quoted_characters += 1;
             continue;
         }
         if character == '"' {
             if !in_quotes {
                 whole_token_quoted = text.is_empty();
+                quoted_path = text == "path:";
+                quoted_characters = 0;
             }
             in_quotes = !in_quotes;
             continue;
@@ -239,10 +258,10 @@ fn tokenize(input: &str) -> Result<Vec<Token>, SearchError> {
             }
         } else {
             text.push(character);
+            if in_quotes {
+                quoted_characters += 1;
+            }
         }
-    }
-    if escaped {
-        text.push('\\');
     }
     if in_quotes {
         return Err(SearchError::invalid_query("quoted phrase is not closed"));

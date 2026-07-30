@@ -4,6 +4,7 @@ use everyfile_lib::settings::AppSettings;
 #[test]
 fn search_request_serializes_with_camel_case_keys() {
     let request = SearchRequest {
+        request_id: "search-contract".into(),
         query: "검색어".into(),
         mode: SearchMode::Keyword,
         folder_ids: vec!["folder-1".into()],
@@ -20,6 +21,7 @@ fn search_request_serializes_with_camel_case_keys() {
     let value = serde_json::to_value(request).unwrap();
 
     assert_eq!(value["mode"], "keyword");
+    assert_eq!(value["requestId"], "search-contract");
     assert_eq!(value["folderIds"][0], "folder-1");
     assert_eq!(value["includeFilename"], true);
 }

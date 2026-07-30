@@ -4,6 +4,7 @@ use std::sync::{atomic::AtomicBool, Arc, RwLock};
 use crate::folders::repository::FolderRepository;
 use crate::indexing::{IndexCoordinator, IndexWatcher};
 use crate::infrastructure::database::Database;
+use crate::search::SearchRegistry;
 use crate::settings::AppSettings;
 use thiserror::Error;
 
@@ -13,17 +14,20 @@ pub struct AppState {
     pub database: Arc<Database>,
     pub folders: FolderRepository,
     pub indexing: Arc<IndexCoordinator>,
+    pub searches: SearchRegistry,
     pub watchers: tokio::sync::Mutex<HashMap<String, IndexWatcher>>,
 }
 
 impl AppState {
     pub fn new(database: Arc<Database>, indexing: Arc<IndexCoordinator>) -> Self {
+        let searches = SearchRegistry::new(database.interrupt_handle());
         Self {
             settings: RwLock::new(AppSettings::default()),
             database_ready: AtomicBool::new(true),
             folders: FolderRepository::new(Arc::clone(&database)),
             database,
             indexing,
+            searches,
             watchers: tokio::sync::Mutex::new(HashMap::new()),
         }
     }

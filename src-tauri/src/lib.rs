@@ -60,6 +60,7 @@ pub fn run() {
             application::commands::cancel_indexing,
             application::commands::get_index_status,
             application::commands::search_documents,
+            application::commands::cancel_search,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
