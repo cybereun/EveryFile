@@ -1,0 +1,14 @@
+:root {
+  --color-canvas: #f7f0e4;
+  --color-surface: #fffaf1;
+  --color-surface-muted: #eee1ca;
+  --color-text: #46372d;
+  --color-text-muted: #806f60;
+  --color-border: #d9c4a4;
+  --color-accent: #b95336;
+  --color-accent-hover: #9f432c;
+  --color-highlight: #f4d29a;
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --shadow-popover: 0 12px 28px rgb(70 55 45 / 16%);
+}
