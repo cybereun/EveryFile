@@ -131,6 +131,7 @@ pub struct IndexCoordinator {
 
 struct JobRuntime {
     stop: AtomicBool,
+    ownership: tokio::sync::Mutex<()>,
     gate: tokio::sync::Mutex<()>,
     handle: tokio::sync::Mutex<Option<JoinHandle<()>>>,
 }
@@ -139,6 +140,7 @@ impl JobRuntime {
     fn new() -> Self {
         Self {
             stop: AtomicBool::new(false),
+            ownership: tokio::sync::Mutex::new(()),
             gate: tokio::sync::Mutex::new(()),
             handle: tokio::sync::Mutex::new(None),
         }
@@ -247,18 +249,20 @@ impl IndexCoordinator {
 
     pub async fn pause(&self, job_id: &str) -> Result<(), IndexingError> {
         let runtime = self.runtime(job_id).await;
+        let ownership = runtime.ownership.lock().await;
         let gate = runtime.gate.lock().await;
         self.cas_active_state(job_id, JobState::Paused)?;
         runtime.stop.store(true, Ordering::Release);
         drop(gate);
         self.await_worker(&runtime).await;
+        drop(ownership);
         self.emit_status(job_id);
         Ok(())
     }
 
     pub async fn resume(&self, job_id: &str) -> Result<(), IndexingError> {
         let runtime = self.runtime(job_id).await;
-        let gate = runtime.gate.lock().await;
+        let ownership = runtime.ownership.lock().await;
         self.reap_runtime_handle(&runtime).await;
         let target = if self.discovery_complete(job_id)? {
             JobState::Parsing
@@ -267,19 +271,22 @@ impl IndexCoordinator {
         };
         self.cas_state(job_id, JobState::Paused, target)?;
         runtime.stop.store(false, Ordering::Release);
-        drop(gate);
-        self.spawn_job(job_id.to_owned()).await?;
+        self.install_worker(job_id.to_owned(), &runtime).await?;
+        drop(ownership);
         self.emit_status(job_id);
         Ok(())
     }
 
     pub async fn cancel(&self, job_id: &str) -> Result<(), IndexingError> {
         let runtime = self.runtime(job_id).await;
+        let ownership = runtime.ownership.lock().await;
         let gate = runtime.gate.lock().await;
         self.cas_cancellable_state(job_id)?;
         runtime.stop.store(true, Ordering::Release);
         drop(gate);
         self.await_worker(&runtime).await;
+        Self::remove_runtime_if_same(&self.runtimes, job_id, &runtime).await;
+        drop(ownership);
         self.emit_status(job_id);
         Ok(())
     }
@@ -337,9 +344,23 @@ impl IndexCoordinator {
         )
     }
 
+    async fn remove_runtime_if_same(
+        runtimes: &tokio::sync::Mutex<HashMap<JobId, Arc<JobRuntime>>>,
+        job_id: &str,
+        expected: &Arc<JobRuntime>,
+    ) {
+        let mut runtimes = runtimes.lock().await;
+        if runtimes
+            .get(job_id)
+            .is_some_and(|current| Arc::ptr_eq(current, expected))
+        {
+            runtimes.remove(job_id);
+        }
+    }
+
     async fn await_worker(&self, runtime: &Arc<JobRuntime>) {
-        let mut handle = runtime.handle.lock().await;
-        if let Some(handle) = handle.take() {
+        let handle = runtime.handle.lock().await.take();
+        if let Some(handle) = handle {
             let _ = handle.await;
         }
     }
@@ -378,7 +399,7 @@ impl IndexCoordinator {
             }
             let job_id = random_id();
             self.create_single_candidate_job(&job_id, folder_id, candidate)?;
-            let runtime = self.runtime(&job_id).await;
+            let runtime = Arc::new(JobRuntime::new());
             self.run_job(job_id, runtime).await;
         }
         Ok(())
@@ -569,117 +590,54 @@ impl IndexCoordinator {
     }
 
     pub async fn reconcile(&self, folder_id: &str) -> Result<(), IndexingError> {
-        let folder = self.registered_folder(folder_id)?;
-        let database = Arc::clone(&self.database);
-        let reconcile_folder_id = folder_id.to_owned();
-        tokio::task::spawn_blocking(move || {
-            database.connection().execute(
-                "DELETE FROM reconciliation_seen WHERE folder_id = ?1",
-                [&reconcile_folder_id],
-            )?;
-            Ok::<(), IndexingError>(())
-        })
-        .await
-        .map_err(|_| IndexingError::WorkerStopped)??;
-
-        let (sender, mut receiver) =
-            mpsc::channel::<Result<FileCandidate, IndexingError>>(PIPELINE_CAPACITY);
-        let database = Arc::clone(&self.database);
-        let producer_folder_id = folder_id.to_owned();
-        let producer = tokio::task::spawn_blocking(move || {
-            let stream = match discover(&folder, DiscoveryOptions::default()) {
-                Ok(stream) => stream,
-                Err(error) => {
-                    let _ = sender.blocking_send(Err(error.into()));
-                    return;
-                }
-            };
-            for candidate in stream {
-                let path = candidate.canonical_path.to_string_lossy().into_owned();
-                let inserted = database.connection().execute(
-                    "INSERT OR IGNORE INTO reconciliation_seen
-                     (folder_id, canonical_path) VALUES (?1, ?2)",
-                    params![producer_folder_id, path],
-                );
-                if let Err(error) = inserted {
-                    let _ = sender.blocking_send(Err(error.into()));
-                    return;
-                }
-                if sender.blocking_send(Ok(candidate)).is_err() {
-                    return;
-                }
-            }
-        });
-
-        while let Some(candidate) = receiver.recv().await {
-            match candidate {
-                Ok(candidate) => {
-                    if let Err(error) = self
-                        .index_reconciliation_candidate(folder_id, candidate)
-                        .await
-                    {
-                        drop(receiver);
-                        let _ = producer.await;
-                        return Err(error);
-                    }
-                }
-                Err(error) => {
-                    drop(receiver);
-                    let _ = producer.await;
-                    return Err(error);
-                }
-            }
-        }
-        producer.await.map_err(|_| IndexingError::WorkerStopped)?;
-
-        loop {
-            let missing = {
-                let connection = self.database.connection();
-                connection
-                    .query_row(
-                        "SELECT canonical_path FROM documents
-                         WHERE folder_id = ?1
-                           AND NOT EXISTS (
-                             SELECT 1 FROM reconciliation_seen
-                             WHERE reconciliation_seen.folder_id = documents.folder_id
-                               AND reconciliation_seen.canonical_path = documents.canonical_path
-                           )
-                         ORDER BY canonical_path LIMIT 1",
-                        [folder_id],
-                        |row| row.get::<_, String>(0),
-                    )
-                    .optional()?
-            };
-            let Some(path) = missing else {
-                break;
-            };
-            self.delete_document(folder_id, Path::new(&path))?;
-        }
-        self.database.connection().execute(
-            "DELETE FROM reconciliation_seen WHERE folder_id = ?1",
-            [folder_id],
-        )?;
-        Ok(())
+        let coordinator = self.clone();
+        let folder_id = folder_id.to_owned();
+        let runtime = tokio::runtime::Handle::current();
+        tokio::task::spawn_blocking(move || coordinator.reconcile_blocking(&folder_id, &runtime))
+            .await
+            .map_err(|_| IndexingError::WorkerStopped)?
     }
 
-    async fn index_reconciliation_candidate(
+    fn reconcile_blocking(
         &self,
         folder_id: &str,
-        candidate: FileCandidate,
+        runtime: &tokio::runtime::Handle,
     ) -> Result<(), IndexingError> {
-        if self.candidate_matches_stored_identity(folder_id, &candidate)? {
-            return Ok(());
+        let folder = self.registered_folder(folder_id)?;
+        let scratch = ReconciliationScratch::begin(Arc::clone(&self.database), folder_id)?;
+        let stream = discover(&folder, DiscoveryOptions::default())?;
+        for candidate in stream {
+            scratch.record(&candidate.canonical_path)?;
+            self.discovery_probe.candidate_persisted(1);
+            if self.candidate_matches_stored_identity(folder_id, &candidate)? {
+                continue;
+            }
+            let job_id = random_id();
+            self.create_single_candidate_job(&job_id, folder_id, candidate)?;
+            runtime.block_on(self.run_job(job_id, Arc::new(JobRuntime::new())));
         }
-        let job_id = random_id();
-        self.create_single_candidate_job(&job_id, folder_id, candidate)?;
-        let runtime = self.runtime(&job_id).await;
-        self.run_job(job_id, runtime).await;
+
+        while let Some(path) = scratch.first_missing()? {
+            self.delete_document(folder_id, Path::new(&path))?;
+        }
         Ok(())
     }
 
     async fn spawn_job(&self, job_id: JobId) -> Result<(), IndexingError> {
         let runtime = self.runtime(&job_id).await;
+        let _ownership = runtime.ownership.lock().await;
         self.reap_runtime_handle(&runtime).await;
+        if matches!(self.job_state(&job_id), Ok(JobState::Queued)) {
+            self.cas_state(&job_id, JobState::Queued, JobState::Discovering)?;
+        }
+        self.install_worker(job_id, &runtime).await
+    }
+
+    async fn install_worker(
+        &self,
+        job_id: JobId,
+        runtime: &Arc<JobRuntime>,
+    ) -> Result<(), IndexingError> {
         let mut handle = runtime.handle.lock().await;
         if handle.is_some() {
             return Err(IndexingError::AlreadyRunning(job_id));
@@ -687,9 +645,19 @@ impl IndexCoordinator {
         runtime.stop.store(false, Ordering::Release);
         let coordinator = self.clone();
         let worker_job_id = job_id.clone();
-        let worker_runtime = Arc::clone(&runtime);
+        let worker_runtime = Arc::clone(runtime);
+        let registered_runtime = Arc::clone(runtime);
         *handle = Some(tokio::spawn(async move {
             coordinator.run_job(worker_job_id, worker_runtime).await;
+            if coordinator.job_state(&job_id).is_ok_and(|state| {
+                matches!(
+                    state,
+                    JobState::Completed | JobState::Cancelled | JobState::Failed
+                )
+            }) {
+                Self::remove_runtime_if_same(&coordinator.runtimes, &job_id, &registered_runtime)
+                    .await;
+            }
         }));
         Ok(())
     }
@@ -1182,9 +1150,16 @@ impl IndexCoordinator {
     async fn reap_finished(&self, job_id: &str) {
         let runtime = self.runtimes.lock().await.get(job_id).cloned();
         if let Some(runtime) = runtime {
+            let _ownership = runtime.ownership.lock().await;
             self.reap_runtime_handle(&runtime).await;
-            if runtime.handle.lock().await.is_none() {
-                self.runtimes.lock().await.remove(job_id);
+            let terminal = self.job_state(job_id).is_ok_and(|state| {
+                matches!(
+                    state,
+                    JobState::Completed | JobState::Cancelled | JobState::Failed
+                )
+            });
+            if terminal && runtime.handle.lock().await.is_none() {
+                Self::remove_runtime_if_same(&self.runtimes, job_id, &runtime).await;
             }
         }
     }
@@ -1247,6 +1222,65 @@ struct PersistedCandidate {
     size_bytes: i64,
     modified_at: String,
     metadata_only: bool,
+}
+
+struct ReconciliationScratch {
+    database: Arc<Database>,
+    run_id: String,
+    folder_id: String,
+}
+
+impl ReconciliationScratch {
+    fn begin(database: Arc<Database>, folder_id: &str) -> Result<Self, IndexingError> {
+        let run_id = random_id();
+        database.connection().execute(
+            "INSERT INTO reconciliation_runs (id, folder_id, created_at)
+             VALUES (?1, ?2, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
+            params![run_id, folder_id],
+        )?;
+        Ok(Self {
+            database,
+            run_id,
+            folder_id: folder_id.to_owned(),
+        })
+    }
+
+    fn record(&self, path: &Path) -> Result<(), IndexingError> {
+        self.database.connection().execute(
+            "INSERT OR IGNORE INTO reconciliation_seen_v2 (run_id, canonical_path)
+             VALUES (?1, ?2)",
+            params![self.run_id, path.to_string_lossy()],
+        )?;
+        Ok(())
+    }
+
+    fn first_missing(&self) -> Result<Option<String>, IndexingError> {
+        Ok(self
+            .database
+            .connection()
+            .query_row(
+                "SELECT canonical_path FROM documents
+                 WHERE folder_id = ?1
+                   AND NOT EXISTS (
+                     SELECT 1 FROM reconciliation_seen_v2
+                     WHERE reconciliation_seen_v2.run_id = ?2
+                       AND reconciliation_seen_v2.canonical_path = documents.canonical_path
+                   )
+                 ORDER BY canonical_path LIMIT 1",
+                params![self.folder_id, self.run_id],
+                |row| row.get(0),
+            )
+            .optional()?)
+    }
+}
+
+impl Drop for ReconciliationScratch {
+    fn drop(&mut self) {
+        let _ = self.database.connection().execute(
+            "DELETE FROM reconciliation_runs WHERE id = ?1",
+            [&self.run_id],
+        );
+    }
 }
 
 fn persist_discovered_candidate(
@@ -1425,11 +1459,14 @@ fn advance_file_transaction(
     job_id: &str,
     candidate: &PersistedCandidate,
 ) -> Result<(), rusqlite::Error> {
-    transaction.execute(
+    let changed = transaction.execute(
         "UPDATE index_job_files SET state = 'completed'
          WHERE job_id = ?1 AND canonical_path = ?2 AND state != 'completed'",
         params![job_id, candidate.canonical_path.to_string_lossy()],
     )?;
+    if changed != 1 {
+        return Err(rusqlite::Error::QueryReturnedNoRows);
+    }
     transaction.execute(
         "UPDATE index_jobs
          SET completed_files = (
@@ -1629,9 +1666,37 @@ impl IndexingError {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
     use std::path::{Path, PathBuf};
+    use std::sync::atomic::Ordering;
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
 
-    use super::{trusted_event_identity, EventPathProvider};
+    use super::{
+        advance_file_transaction, trusted_event_identity, DocumentParser, EventPathProvider,
+        IndexCoordinator, JobRuntime, JobState, PersistedCandidate, ReconciliationScratch,
+    };
+    use crate::folders::repository::FolderRepository;
+    use crate::infrastructure::database::Database;
+    use crate::infrastructure::secure_key::SecretKey;
+    use crate::parsing::{ParsedDocument, ParserError};
+    use zeroize::Zeroizing;
+
+    struct TestParser;
+
+    impl DocumentParser for TestParser {
+        fn parse(&self, path: &Path, _max_bytes: u64) -> Result<ParsedDocument, ParserError> {
+            let body = fs::read_to_string(path).unwrap();
+            Ok(ParsedDocument {
+                title: None,
+                markdown: body.clone(),
+                plain_text: body,
+                blocks: vec![],
+                metadata: serde_json::json!({}),
+                warnings: vec![],
+            })
+        }
+    }
 
     struct ParentOnlyProvider {
         expected_parent: PathBuf,
@@ -1655,5 +1720,202 @@ mod tests {
         let identity = trusted_event_identity(&root, &event_path, &provider).unwrap();
 
         assert_eq!(identity, Some(event_path));
+    }
+
+    #[tokio::test]
+    async fn stale_status_reap_cannot_remove_or_orphan_a_resumed_worker() {
+        let runtimes = Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
+        let stale = Arc::new(JobRuntime::new());
+        let replacement = Arc::new(JobRuntime::new());
+        let completed = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let worker_completed = Arc::clone(&completed);
+        *replacement.handle.lock().await = Some(tokio::spawn(async move {
+            worker_completed.fetch_add(1, Ordering::AcqRel);
+        }));
+        runtimes
+            .lock()
+            .await
+            .insert("job".to_owned(), Arc::clone(&replacement));
+
+        IndexCoordinator::remove_runtime_if_same(&runtimes, "job", &stale).await;
+
+        let retained = runtimes.lock().await.get("job").cloned().unwrap();
+        assert!(Arc::ptr_eq(&retained, &replacement));
+        let handle = retained.handle.lock().await.take().unwrap();
+        handle.await.unwrap();
+        assert_eq!(completed.load(Ordering::Acquire), 1);
+    }
+
+    #[test]
+    fn duplicate_file_completion_is_rejected_before_progress_update() {
+        let mut connection = rusqlite::Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE index_jobs (
+                   id TEXT PRIMARY KEY,
+                   completed_files INTEGER NOT NULL,
+                   updated_at TEXT
+                 );
+                 CREATE TABLE index_job_files (
+                   job_id TEXT NOT NULL,
+                   canonical_path TEXT NOT NULL,
+                   state TEXT NOT NULL,
+                   PRIMARY KEY (job_id, canonical_path)
+                 );
+                 INSERT INTO index_jobs (id, completed_files) VALUES ('job', 0);
+                 INSERT INTO index_job_files (job_id, canonical_path, state)
+                 VALUES ('job', 'C:\\docs\\one.txt', 'queued');",
+            )
+            .unwrap();
+        let candidate = PersistedCandidate {
+            job_id: "job".into(),
+            canonical_path: PathBuf::from(r"C:\docs\one.txt"),
+            relative_path: "one.txt".into(),
+            size_bytes: 1,
+            modified_at: "1".into(),
+            metadata_only: false,
+        };
+
+        let transaction = connection.transaction().unwrap();
+        advance_file_transaction(&transaction, "job", &candidate).unwrap();
+        transaction.commit().unwrap();
+        let transaction = connection.transaction().unwrap();
+        assert!(advance_file_transaction(&transaction, "job", &candidate).is_err());
+        transaction.rollback().unwrap();
+
+        let completed: i64 = connection
+            .query_row(
+                "SELECT completed_files FROM index_jobs WHERE id = 'job'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(completed, 1);
+    }
+
+    #[tokio::test]
+    async fn completed_spawned_and_direct_jobs_leave_no_registered_runtime() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("root");
+        fs::create_dir(&root).unwrap();
+        fs::write(root.join("one.txt"), "one").unwrap();
+        let key = SecretKey::from_bytes(Zeroizing::new([33_u8; 32]));
+        let database = Arc::new(Database::open(&temp.path().join("index.db"), &key).unwrap());
+        database.migrate().unwrap();
+        let folder = FolderRepository::new(Arc::clone(&database))
+            .register(&root)
+            .unwrap();
+        let coordinator =
+            IndexCoordinator::with_parser(Arc::clone(&database), Arc::new(TestParser), 1024 * 1024);
+
+        let job_id = coordinator.start(&folder.id).await.unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if coordinator.job_state(&job_id).unwrap() == JobState::Completed {
+                break;
+            }
+            assert!(Instant::now() < deadline);
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        tokio::task::yield_now().await;
+        assert!(coordinator.runtimes.lock().await.is_empty());
+
+        for index in 0..20 {
+            fs::write(
+                root.join("one.txt"),
+                format!("changed body {index} {}", "x".repeat(index)),
+            )
+            .unwrap();
+            coordinator
+                .reindex_discovered_path(&folder.id, &root.join("one.txt"))
+                .await
+                .unwrap();
+            coordinator.reconcile(&folder.id).await.unwrap();
+            assert!(coordinator.runtimes.lock().await.is_empty());
+        }
+    }
+
+    #[test]
+    fn concurrent_reconciliation_runs_keep_independent_seen_sets() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("root");
+        fs::create_dir(&root).unwrap();
+        let key = SecretKey::from_bytes(Zeroizing::new([44_u8; 32]));
+        let database = Arc::new(Database::open(&temp.path().join("index.db"), &key).unwrap());
+        database.migrate().unwrap();
+        let folder = FolderRepository::new(Arc::clone(&database))
+            .register(&root)
+            .unwrap();
+        for index in 1..=100 {
+            database
+                .connection()
+                .execute(
+                    "INSERT INTO documents
+                     (id, folder_id, canonical_path, file_name, extension,
+                      size_bytes, modified_at, parse_state)
+                     VALUES (?1, ?2, ?3, ?4, 'txt', 1, '1', 'indexed')",
+                    rusqlite::params![
+                        format!("doc-{index}"),
+                        folder.id,
+                        format!(r"C:\root\{index:03}.txt"),
+                        format!("{index:03}.txt"),
+                    ],
+                )
+                .unwrap();
+        }
+        let first = ReconciliationScratch::begin(Arc::clone(&database), &folder.id).unwrap();
+        for index in 1..=50 {
+            first
+                .record(Path::new(&format!(r"C:\root\{index:03}.txt")))
+                .unwrap();
+        }
+        let second = ReconciliationScratch::begin(Arc::clone(&database), &folder.id).unwrap();
+        for index in 1..=10 {
+            second
+                .record(Path::new(&format!(r"C:\root\{index:03}.txt")))
+                .unwrap();
+        }
+        for index in 51..=100 {
+            first
+                .record(Path::new(&format!(r"C:\root\{index:03}.txt")))
+                .unwrap();
+        }
+
+        assert_eq!(first.first_missing().unwrap(), None);
+        assert_eq!(
+            second.first_missing().unwrap(),
+            Some(r"C:\root\011.txt".to_owned())
+        );
+    }
+
+    #[test]
+    fn reconciliation_scratch_cleans_up_when_scope_fails() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("root");
+        fs::create_dir(&root).unwrap();
+        let key = SecretKey::from_bytes(Zeroizing::new([45_u8; 32]));
+        let database = Arc::new(Database::open(&temp.path().join("index.db"), &key).unwrap());
+        database.migrate().unwrap();
+        let folder = FolderRepository::new(Arc::clone(&database))
+            .register(&root)
+            .unwrap();
+        {
+            let scratch = ReconciliationScratch::begin(Arc::clone(&database), &folder.id).unwrap();
+            scratch.record(Path::new(r"C:\root\one.txt")).unwrap();
+        }
+
+        let runs: i64 = database
+            .connection()
+            .query_row("SELECT COUNT(*) FROM reconciliation_runs", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        let seen: i64 = database
+            .connection()
+            .query_row("SELECT COUNT(*) FROM reconciliation_seen_v2", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!((runs, seen), (0, 0));
     }
 }

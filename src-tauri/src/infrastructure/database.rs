@@ -12,6 +12,8 @@ const RESUMABLE_INDEXING_MIGRATION: &str =
     include_str!("../../migrations/0002_resumable_indexing.sql");
 const INDEX_JOB_RECOVERY_MIGRATION: &str =
     include_str!("../../migrations/0003_index_job_recovery.sql");
+const RECONCILIATION_RUNS_MIGRATION: &str =
+    include_str!("../../migrations/0004_reconciliation_runs.sql");
 
 pub struct Database {
     connection: Mutex<Connection>,
@@ -50,6 +52,9 @@ impl Database {
             .map_err(DatabaseError::Migration)?;
         transaction
             .execute_batch(INDEX_JOB_RECOVERY_MIGRATION)
+            .map_err(DatabaseError::Migration)?;
+        transaction
+            .execute_batch(RECONCILIATION_RUNS_MIGRATION)
             .map_err(DatabaseError::Migration)?;
         transaction.commit().map_err(DatabaseError::Migration)
     }

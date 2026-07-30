@@ -340,6 +340,15 @@ impl BlockingDiscoveryProbe {
         *lock.lock().unwrap() = true;
         ready.notify_all();
     }
+
+    fn wait_until_entered_for(&self, timeout: Duration) -> bool {
+        let (lock, ready) = &self.entered;
+        let entered = lock.lock().unwrap();
+        let (entered, _) = ready
+            .wait_timeout_while(entered, timeout, |entered| !*entered)
+            .unwrap();
+        *entered
+    }
 }
 
 impl DiscoveryProbe for BlockingDiscoveryProbe {
@@ -543,6 +552,86 @@ async fn reconciliation_streams_without_blocking_and_cleans_its_seen_set() {
         })
         .unwrap();
     assert_eq!(seen, 0);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn reconciliation_waiting_for_database_does_not_block_single_thread_runtime() {
+    let harness = IndexHarness::new().with_valid_file("sentinel.txt");
+    let job = harness.start().await;
+    assert_eq!(
+        harness.wait_until_finished(&job).await.state,
+        JobState::Completed
+    );
+    let database = Arc::clone(&harness.database);
+    let (locked_sender, locked_receiver) = std::sync::mpsc::channel();
+    let holder = std::thread::spawn(move || {
+        let _guard = database.connection();
+        locked_sender.send(()).unwrap();
+        std::thread::sleep(Duration::from_millis(250));
+    });
+    locked_receiver.recv().unwrap();
+
+    let coordinator = harness.coordinator.read().unwrap().clone();
+    let folder_id = harness.folder_id.clone();
+    let started = Instant::now();
+    let reconciliation = tokio::spawn(async move { coordinator.reconcile(&folder_id).await });
+    tokio::time::sleep(Duration::from_millis(25)).await;
+    assert!(
+        started.elapsed() < Duration::from_millis(100),
+        "database mutex wait blocked the single-thread runtime"
+    );
+    holder.join().unwrap();
+    reconciliation.await.unwrap().unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn aborted_reconciliation_cleans_run_scoped_scratch_rows() {
+    let harness = IndexHarness::new().with_files(["a.txt", "b.txt"]);
+    let probe = Arc::new(BlockingDiscoveryProbe::default());
+    let coordinator = Arc::new(IndexCoordinator::with_parser_and_discovery_probe(
+        Arc::clone(&harness.database),
+        Arc::clone(&harness.parser),
+        10 * 1024 * 1024,
+        Arc::clone(&probe),
+    ));
+    *harness.coordinator.write().unwrap() = Arc::clone(&coordinator);
+    let folder_id = harness.folder_id.clone();
+    let reconciliation = tokio::spawn(async move { coordinator.reconcile(&folder_id).await });
+    if !probe.wait_until_entered_for(Duration::from_secs(2)) {
+        reconciliation.abort();
+        probe.release();
+        panic!("reconciliation never reached its persisted scratch row");
+    }
+    let runs: i64 = harness
+        .database
+        .connection()
+        .query_row("SELECT COUNT(*) FROM reconciliation_runs", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(runs, 1);
+
+    reconciliation.abort();
+    probe.release();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let counts: (i64, i64) = harness
+            .database
+            .connection()
+            .query_row(
+                "SELECT
+                   (SELECT COUNT(*) FROM reconciliation_runs),
+                   (SELECT COUNT(*) FROM reconciliation_seen_v2)",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        if counts == (0, 0) {
+            break;
+        }
+        assert!(Instant::now() < deadline, "scratch rows leaked: {counts:?}");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
 }
 
 #[tokio::test]
