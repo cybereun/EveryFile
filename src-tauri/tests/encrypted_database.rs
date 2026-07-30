@@ -280,6 +280,71 @@ fn startup_migration_recovers_an_orphan_parse_attempt_without_losing_searchable_
     );
 }
 
+#[test]
+fn repeated_migrate_repairs_a_missing_parse_attempt_unique_index() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("parse-attempt-index-repair.db");
+    let key = SecretKey::from_bytes(Zeroizing::new([28_u8; 32]));
+    let database = Database::open(&path, &key).unwrap();
+    database.migrate().unwrap();
+    database
+        .connection()
+        .execute("DROP INDEX documents_parse_attempt_token_unique", [])
+        .unwrap();
+
+    database.migrate().unwrap();
+
+    let repaired = database
+        .connection()
+        .prepare("PRAGMA index_list(documents)")
+        .unwrap()
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(1)?,
+                row.get::<_, bool>(2)?,
+                row.get::<_, bool>(4)?,
+            ))
+        })
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap()
+        .into_iter()
+        .any(|(name, unique, partial)| {
+            name == "documents_parse_attempt_token_unique" && unique && partial
+        });
+    assert!(
+        repaired,
+        "repeated migration did not repair the unique index"
+    );
+
+    let connection = database.connection();
+    connection
+        .execute_batch(
+            "INSERT INTO folders
+             (id, canonical_path, display_name, created_at, enabled)
+             VALUES ('folder-1', 'C:\\fixture', 'Fixture',
+                     '2026-07-30T00:00:00Z', 1);
+             INSERT INTO documents
+             (id, folder_id, canonical_path, file_name, extension, size_bytes,
+              modified_at, parse_state, parse_attempt_token)
+             VALUES ('document-1', 'folder-1', 'C:\\fixture\\one.txt',
+                     'one.txt', 'txt', 1, '1', 'pending', 'duplicate-token');",
+        )
+        .unwrap();
+    let duplicate = connection.execute(
+        "INSERT INTO documents
+         (id, folder_id, canonical_path, file_name, extension, size_bytes,
+          modified_at, parse_state, parse_attempt_token)
+         VALUES ('document-2', 'folder-1', 'C:\\fixture\\two.txt',
+                 'two.txt', 'txt', 1, '1', 'pending', 'duplicate-token')",
+        [],
+    );
+    assert!(
+        duplicate.is_err(),
+        "duplicate non-null attempt tokens were accepted"
+    );
+}
+
 #[cfg(windows)]
 #[test]
 fn secure_key_store_persists_only_a_dpapi_protected_blob() {

@@ -17,6 +17,7 @@ use crate::infrastructure::database::Database;
 use crate::parsing::{ParseErrorCode, ParsedDocument, ParserClient, ParserError};
 
 const PIPELINE_CAPACITY: usize = 16;
+const MAX_PARSE_ATTEMPT_TOKEN_CLAIMS: usize = 4;
 
 pub type JobId = String;
 
@@ -51,6 +52,10 @@ pub trait DocumentParser: Send + Sync + 'static {
     fn parse(&self, path: &Path, max_bytes: u64) -> Result<ParsedDocument, ParserError>;
 }
 
+pub trait ParseAttemptTokenGenerator: Send + Sync + 'static {
+    fn generate(&self) -> String;
+}
+
 pub trait DiscoveryProbe: Send + Sync + 'static {
     fn candidate_persisted(&self, buffered_candidates: usize);
 
@@ -64,9 +69,16 @@ pub trait DiscoveryProbe: Send + Sync + 'static {
 }
 
 struct NoopDiscoveryProbe;
+struct SecureParseAttemptTokenGenerator;
 
 impl DiscoveryProbe for NoopDiscoveryProbe {
     fn candidate_persisted(&self, _buffered_candidates: usize) {}
+}
+
+impl ParseAttemptTokenGenerator for SecureParseAttemptTokenGenerator {
+    fn generate(&self) -> String {
+        random_id()
+    }
 }
 
 impl DocumentParser for ParserClient {
@@ -135,6 +147,7 @@ pub struct IndexCoordinator {
     runtimes: Arc<tokio::sync::Mutex<HashMap<JobId, Arc<JobRuntime>>>>,
     status_sink: Option<Arc<StatusSink>>,
     discovery_probe: Arc<dyn DiscoveryProbe>,
+    attempt_tokens: Arc<dyn ParseAttemptTokenGenerator>,
 }
 
 struct JobRuntime {
@@ -239,6 +252,7 @@ impl IndexCoordinator {
             max_file_size_bytes,
             Arc::new(NoopDiscoveryProbe),
             None,
+            Arc::new(SecureParseAttemptTokenGenerator),
         )
     }
 
@@ -257,6 +271,7 @@ impl IndexCoordinator {
             max_file_size_bytes,
             Arc::new(NoopDiscoveryProbe),
             status_sink,
+            Arc::new(SecureParseAttemptTokenGenerator),
         )
     }
 
@@ -276,6 +291,27 @@ impl IndexCoordinator {
             max_file_size_bytes,
             discovery_probe,
             None,
+            Arc::new(SecureParseAttemptTokenGenerator),
+        )
+    }
+
+    pub fn with_parser_and_token_generator<P, T>(
+        database: Arc<Database>,
+        parser: Arc<P>,
+        max_file_size_bytes: u64,
+        attempt_tokens: Arc<T>,
+    ) -> Self
+    where
+        P: DocumentParser,
+        T: ParseAttemptTokenGenerator,
+    {
+        Self::with_parser_probe_and_sink(
+            database,
+            parser,
+            max_file_size_bytes,
+            Arc::new(NoopDiscoveryProbe),
+            None,
+            attempt_tokens,
         )
     }
 
@@ -285,6 +321,7 @@ impl IndexCoordinator {
         max_file_size_bytes: u64,
         discovery_probe: Arc<dyn DiscoveryProbe>,
         status_sink: Option<Arc<StatusSink>>,
+        attempt_tokens: Arc<dyn ParseAttemptTokenGenerator>,
     ) -> Self
     where
         P: DocumentParser,
@@ -297,6 +334,7 @@ impl IndexCoordinator {
             runtimes: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             status_sink,
             discovery_probe,
+            attempt_tokens,
         }
     }
 
@@ -551,7 +589,12 @@ impl IndexCoordinator {
             })?;
         let new_size = i64::try_from(metadata.len()).unwrap_or(i64::MAX);
         let new_modified = modified_at_string(metadata.modified().ok());
-        let Some(old) = self.stored_path_for_event(folder_id, from)? else {
+        let root = self.registered_root(folder_id)?;
+        let Some(trusted_from) = trusted_event_identity(&root, from, &OsEventPathProvider)? else {
+            self.reindex_discovered_path(folder_id, &trusted_to).await?;
+            return Ok(());
+        };
+        let Some(old) = self.stored_path_for_event(folder_id, &trusted_from)? else {
             self.reindex_discovered_path(folder_id, &trusted_to).await?;
             return Ok(());
         };
@@ -565,20 +608,26 @@ impl IndexCoordinator {
             .map(|value| value.to_string_lossy().to_ascii_lowercase())
             .unwrap_or_default();
 
-        let matched = {
+        let (matched, invalidated_active_attempt) = {
             let mut connection = self.database.connection();
             let transaction = connection.transaction()?;
-            let identity: Option<(String, i64, String)> = transaction
+            let identity: Option<(String, i64, String, bool)> = transaction
                 .query_row(
-                    "SELECT id, size_bytes, modified_at FROM documents
+                    "SELECT id, size_bytes, modified_at,
+                            parse_state = 'parsing' OR parse_attempt_token IS NOT NULL
+                     FROM documents
                      WHERE folder_id = ?1 AND canonical_path = ?2",
                     params![folder_id, old],
-                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
                 )
                 .optional()?;
-            let matched = identity.as_ref().is_some_and(|(_, size, modified)| {
+            let matched = identity.as_ref().is_some_and(|(_, size, modified, _)| {
                 (*size, modified.as_str()) == (new_size, new_modified.as_str())
             });
+            let invalidated_active_attempt = matched
+                && identity
+                    .as_ref()
+                    .is_some_and(|(_, _, _, active_attempt)| *active_attempt);
             if matched {
                 let document_id = &identity.as_ref().expect("matched identity").0;
                 transaction.execute(
@@ -596,7 +645,22 @@ impl IndexCoordinator {
                 )?;
                 transaction.execute(
                     "UPDATE documents
-                     SET canonical_path = ?3, file_name = ?4, extension = ?5
+                     SET canonical_path = ?3,
+                         file_name = ?4,
+                         extension = ?5,
+                         parse_state = CASE
+                           WHEN parse_state = 'parsing'
+                             OR parse_attempt_token IS NOT NULL
+                           THEN 'pending'
+                           ELSE parse_state
+                         END,
+                         parse_error_code = CASE
+                           WHEN parse_state = 'parsing'
+                             OR parse_attempt_token IS NOT NULL
+                           THEN NULL
+                           ELSE parse_error_code
+                         END,
+                         parse_attempt_token = NULL
                      WHERE folder_id = ?1 AND canonical_path = ?2",
                     params![folder_id, old, new, new_name, new_extension],
                 )?;
@@ -606,10 +670,12 @@ impl IndexCoordinator {
                 )?;
             }
             transaction.commit()?;
-            matched
+            (matched, invalidated_active_attempt)
         };
         if !matched {
             self.delete_document(folder_id, from)?;
+            self.reindex_discovered_path(folder_id, &trusted_to).await?;
+        } else if invalidated_active_attempt {
             self.reindex_discovered_path(folder_id, &trusted_to).await?;
         }
         Ok(())
@@ -1134,7 +1200,6 @@ impl IndexCoordinator {
         let mut connection = self.database.connection();
         let transaction = connection.transaction()?;
         let folder_id = folder_id_for_job(&transaction, &candidate.job_id)?;
-        let attempt_token = random_id();
         let previous = transaction
             .query_row(
                 "SELECT id, folder_id, file_name, extension, size_bytes, modified_at,
@@ -1157,15 +1222,32 @@ impl IndexCoordinator {
                 },
             )
             .optional()?;
-        let mutation = upsert_metadata_transaction(
-            &transaction,
-            &folder_id,
-            candidate,
-            "parsing",
-            None,
-            Some(&attempt_token),
-            true,
-        )?;
+        let mut claimed = None;
+        for claim in 0..MAX_PARSE_ATTEMPT_TOKEN_CLAIMS {
+            let attempt_token = self.attempt_tokens.generate();
+            match upsert_metadata_transaction(
+                &transaction,
+                &folder_id,
+                candidate,
+                "parsing",
+                None,
+                Some(&attempt_token),
+                true,
+            ) {
+                Ok(mutation) => {
+                    claimed = Some((attempt_token, mutation));
+                    break;
+                }
+                Err(error)
+                    if claim + 1 < MAX_PARSE_ATTEMPT_TOKEN_CLAIMS
+                        && is_parse_attempt_token_collision(&error) =>
+                {
+                    continue;
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        let (attempt_token, mutation) = claimed.ok_or(IndexingError::StateChanged)?;
         if mutation != ParseAttemptMutation::Applied {
             return Err(IndexingError::StateChanged);
         }
@@ -2220,6 +2302,15 @@ fn advance_file_transaction(
         [job_id],
     )?;
     Ok(())
+}
+
+fn is_parse_attempt_token_collision(error: &IndexingError) -> bool {
+    matches!(
+        error,
+        IndexingError::Database(rusqlite::Error::SqliteFailure(code, Some(message)))
+            if code.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE
+                && message == "UNIQUE constraint failed: documents.parse_attempt_token"
+    )
 }
 
 fn parser_failure(error: &ParserError) -> (&'static str, String) {

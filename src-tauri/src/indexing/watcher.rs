@@ -62,6 +62,22 @@ impl IndexWatcher {
         coordinator: Arc<IndexCoordinator>,
         folder_id: String,
     ) -> Result<Self, WatcherError> {
+        Self::start_inner(coordinator, folder_id, true).await
+    }
+
+    #[doc(hidden)]
+    pub async fn start_for_manual_events(
+        coordinator: Arc<IndexCoordinator>,
+        folder_id: String,
+    ) -> Result<Self, WatcherError> {
+        Self::start_inner(coordinator, folder_id, false).await
+    }
+
+    async fn start_inner(
+        coordinator: Arc<IndexCoordinator>,
+        folder_id: String,
+        watch_operating_system: bool,
+    ) -> Result<Self, WatcherError> {
         let root = coordinator.registered_root(&folder_id)?;
         let (sender, receiver) = mpsc::channel(WATCH_CHANNEL_CAPACITY);
         let callback_sender = sender.clone();
@@ -69,53 +85,62 @@ impl IndexWatcher {
         let callback_overflowed = Arc::clone(&overflowed);
         let callback_coordinator = Arc::clone(&coordinator);
         let callback_folder_id = folder_id.clone();
-        let mut watcher = notify::recommended_watcher(move |result: notify::Result<Event>| {
-            let Ok(event) = result else {
-                callback_overflowed.store(true, Ordering::Release);
-                let _ = callback_coordinator.record_folder_diagnostic(
-                    &callback_folder_id,
-                    "WATCHER_EVENT_ERROR",
-                    "the operating-system watcher reported an event error",
-                );
-                return;
-            };
-            for change in changes_from_event(event) {
-                if callback_sender
-                    .try_send(WatcherMessage::Change(change))
-                    .is_err()
-                {
+        let watcher = if watch_operating_system {
+            let mut watcher = notify::recommended_watcher(move |result: notify::Result<Event>| {
+                let Ok(event) = result else {
                     callback_overflowed.store(true, Ordering::Release);
+                    let _ = callback_coordinator.record_folder_diagnostic(
+                        &callback_folder_id,
+                        "WATCHER_EVENT_ERROR",
+                        "the operating-system watcher reported an event error",
+                    );
+                    return;
+                };
+                for change in changes_from_event(event) {
+                    if callback_sender
+                        .try_send(WatcherMessage::Change(change))
+                        .is_err()
+                    {
+                        callback_overflowed.store(true, Ordering::Release);
+                    }
                 }
-            }
-        })?;
-        watcher.watch(&root, RecursiveMode::Recursive)?;
+            })?;
+            watcher.watch(&root, RecursiveMode::Recursive)?;
+            Some(watcher)
+        } else {
+            None
+        };
         let worker = tokio::spawn(watcher_loop(
             Arc::clone(&coordinator),
             folder_id.clone(),
             receiver,
             Arc::clone(&overflowed),
         ));
-        let reconciliation = tokio::spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_secs(15 * 60));
-            interval.tick().await;
-            loop {
+        let reconciliation = watch_operating_system.then(|| {
+            tokio::spawn(async move {
+                let mut interval = tokio::time::interval(Duration::from_secs(15 * 60));
                 interval.tick().await;
-                if let Err(error) = coordinator.reconcile(&folder_id).await {
-                    let _ = coordinator.record_folder_diagnostic(
-                        &folder_id,
-                        "WATCHER_RECONCILE_FAILED",
-                        &error.to_string(),
-                    );
+                loop {
+                    interval.tick().await;
+                    if let Err(error) = coordinator.reconcile(&folder_id).await {
+                        let _ = coordinator.record_folder_diagnostic(
+                            &folder_id,
+                            "WATCHER_RECONCILE_FAILED",
+                            &error.to_string(),
+                        );
+                    }
                 }
-            }
+            })
         });
+        let mut tasks = vec![worker];
+        tasks.extend(reconciliation);
 
         Ok(Self {
             inner: Arc::new(WatcherInner {
                 sender,
                 overflowed,
-                _watcher: parking_lot::Mutex::new(Some(watcher)),
-                tasks: parking_lot::Mutex::new(vec![worker, reconciliation]),
+                _watcher: parking_lot::Mutex::new(watcher),
+                tasks: parking_lot::Mutex::new(tasks),
             }),
         })
     }

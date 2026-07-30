@@ -1,15 +1,15 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, RwLock};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use everyfile_lib::folders::repository::FolderRepository;
 use everyfile_lib::indexing::{
     DiscoveryProbe, DocumentParser, IndexCoordinator, IndexStatus, IndexWatcher, JobId, JobState,
-    WatchChange,
+    ParseAttemptTokenGenerator, WatchChange,
 };
 use everyfile_lib::infrastructure::database::Database;
 use everyfile_lib::infrastructure::secure_key::SecretKey;
@@ -160,15 +160,19 @@ impl TwoAttemptParser {
     }
 
     fn wait_until_entered(&self, expected: usize) {
+        assert!(
+            self.wait_until_entered_for(expected, Duration::from_secs(2)),
+            "parser attempts did not start"
+        );
+    }
+
+    fn wait_until_entered_for(&self, expected: usize, timeout: Duration) -> bool {
         let state = self.state.lock().unwrap();
-        let (state, timeout) = self
+        let (state, _) = self
             .ready
-            .wait_timeout_while(state, Duration::from_secs(2), |state| {
-                state.entered < expected
-            })
+            .wait_timeout_while(state, timeout, |state| state.entered < expected)
             .unwrap();
-        assert_eq!(state.entered, expected, "parser attempts did not start");
-        assert!(!timeout.timed_out());
+        state.entered >= expected
     }
 
     fn release(&self, attempt: usize) {
@@ -209,6 +213,40 @@ impl DocumentParser for TwoAttemptParser {
             metadata: serde_json::json!({}),
             warnings: vec![],
         })
+    }
+}
+
+struct ScriptedAttemptTokens {
+    tokens: Mutex<VecDeque<String>>,
+    calls: AtomicUsize,
+}
+
+impl ScriptedAttemptTokens {
+    fn new(tokens: [&str; 2]) -> Self {
+        Self {
+            tokens: Mutex::new(tokens.into_iter().map(str::to_owned).collect()),
+            calls: AtomicUsize::new(0),
+        }
+    }
+}
+
+impl ParseAttemptTokenGenerator for ScriptedAttemptTokens {
+    fn generate(&self) -> String {
+        self.calls.fetch_add(1, Ordering::AcqRel);
+        self.tokens
+            .lock()
+            .unwrap()
+            .pop_front()
+            .expect("test token sequence was exhausted")
+    }
+}
+
+struct ReleaseTwoAttempts(Arc<TwoAttemptParser>);
+
+impl Drop for ReleaseTwoAttempts {
+    fn drop(&mut self) {
+        self.0.release(0);
+        self.0.release(1);
     }
 }
 
@@ -725,6 +763,151 @@ async fn assert_cancelled_superseded_attempt_is_harmless(first_outcome: Supersed
     assert_eq!(owned_or_parsing, 0);
 }
 
+async fn assert_uncancelled_superseded_attempt_is_stale(first_outcome: SupersededAttemptOutcome) {
+    let harness = IndexHarness::new();
+    harness.write("shared.txt", "previous committed content");
+    let initial_job = harness.start().await;
+    assert_eq!(
+        harness.wait_until_finished(&initial_job).await.state,
+        JobState::Completed
+    );
+    harness.write(
+        "shared.txt",
+        "replacement file body that forces a new identity",
+    );
+
+    let parser = Arc::new(TwoAttemptParser::new(first_outcome));
+    let _release_attempts = ReleaseTwoAttempts(Arc::clone(&parser));
+    let coordinator_a = Arc::new(IndexCoordinator::with_parser(
+        Arc::clone(&harness.database),
+        Arc::clone(&parser),
+        10 * 1024 * 1024,
+    ));
+    let coordinator_b = Arc::new(IndexCoordinator::with_parser(
+        Arc::clone(&harness.database),
+        Arc::clone(&parser),
+        10 * 1024 * 1024,
+    ));
+
+    let folder_id = harness.folder_id.clone();
+    let attempt_a = tokio::spawn(async move { coordinator_a.reconcile(&folder_id).await });
+    parser.wait_until_entered(1);
+    let token_a: String = harness
+        .database
+        .connection()
+        .query_row(
+            "SELECT parse_attempt_token FROM documents WHERE file_name = 'shared.txt'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let folder_id = harness.folder_id.clone();
+    let attempt_b = tokio::spawn(async move { coordinator_b.reconcile(&folder_id).await });
+    parser.wait_until_entered(2);
+    let token_b: String = harness
+        .database
+        .connection()
+        .query_row(
+            "SELECT parse_attempt_token FROM documents WHERE file_name = 'shared.txt'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+
+    parser.release(0);
+    attempt_a.await.unwrap().unwrap();
+    let while_b_owned: (String, String, String, String) = harness
+        .database
+        .connection()
+        .query_row(
+            "SELECT documents.parse_state, documents.parse_attempt_token,
+                    document_content.body, document_fts.body
+             FROM documents
+             JOIN document_content ON document_content.document_id = documents.id
+             JOIN document_fts ON document_fts.document_id = documents.id
+             WHERE documents.file_name = 'shared.txt'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .unwrap();
+    let in_flight_jobs: (i64, i64) = harness
+        .database
+        .connection()
+        .query_row(
+            "SELECT
+               COUNT(*) FILTER (
+                 WHERE state = 'completed'
+                   AND completed_files = 1
+                   AND total_files = 1
+               ),
+               COUNT(*) FILTER (
+                 WHERE state = 'parsing'
+                   AND completed_files = 0
+                   AND total_files = 1
+               )
+             FROM index_jobs WHERE id <> ?1",
+            [&initial_job],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+
+    parser.release(1);
+    attempt_b.await.unwrap().unwrap();
+
+    assert_ne!(token_a, token_b);
+    assert_eq!(
+        while_b_owned,
+        (
+            "parsing".into(),
+            token_b,
+            "previous committed content".into(),
+            "previous committed content".into(),
+        )
+    );
+    assert_eq!(in_flight_jobs, (1, 1));
+    let final_state: (String, Option<String>, String, String, i64, i64, i64) = harness
+        .database
+        .connection()
+        .query_row(
+            "SELECT documents.parse_state, documents.parse_attempt_token,
+                    document_content.body, document_fts.body,
+                    (SELECT COUNT(*) FROM document_content
+                     WHERE document_id = documents.id),
+                    (SELECT COUNT(*) FROM document_fts
+                     WHERE document_id = documents.id),
+                    (SELECT COUNT(*) FROM index_job_errors)
+             FROM documents
+             JOIN document_content ON document_content.document_id = documents.id
+             JOIN document_fts ON document_fts.document_id = documents.id
+             WHERE documents.file_name = 'shared.txt'",
+            [],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                ))
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        final_state,
+        (
+            "parsed".into(),
+            None,
+            "committed content from attempt B".into(),
+            "committed content from attempt B".into(),
+            1,
+            1,
+            0,
+        )
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn cancelled_superseded_success_cannot_restore_over_the_new_attempt_owner() {
     assert_cancelled_superseded_attempt_is_harmless(SupersededAttemptOutcome::Success).await;
@@ -733,6 +916,16 @@ async fn cancelled_superseded_success_cannot_restore_over_the_new_attempt_owner(
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn cancelled_superseded_failure_cannot_restore_over_the_new_attempt_owner() {
     assert_cancelled_superseded_attempt_is_harmless(SupersededAttemptOutcome::Failure).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn uncancelled_superseded_success_is_stale_while_the_new_attempt_owns_the_row() {
+    assert_uncancelled_superseded_attempt_is_stale(SupersededAttemptOutcome::Success).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn uncancelled_superseded_failure_is_stale_while_the_new_attempt_owns_the_row() {
+    assert_uncancelled_superseded_attempt_is_stale(SupersededAttemptOutcome::Failure).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -917,6 +1110,30 @@ async fn watcher_correlates_separate_rename_halves_and_updates_fts_identity() {
     let old = harness.root.join("old.txt");
     let new = harness.root.join("new.txt");
     fs::rename(&old, &new).unwrap();
+    let stored_identity: (i64, String) = harness
+        .database
+        .connection()
+        .query_row(
+            "SELECT size_bytes, modified_at FROM documents WHERE file_name = 'old.txt'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    let renamed_metadata = fs::metadata(&new).unwrap();
+    let renamed_identity = (
+        i64::try_from(renamed_metadata.len()).unwrap(),
+        renamed_metadata
+            .modified()
+            .unwrap()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+            .to_string(),
+    );
+    assert_eq!(
+        stored_identity, renamed_identity,
+        "test fixture did not preserve rename identity"
+    );
     let watcher = harness.watcher.lock().unwrap().as_ref().unwrap().clone();
     watcher
         .ingest(WatchChange::RenameFrom {
@@ -937,6 +1154,279 @@ async fn watcher_correlates_separate_rename_halves_and_updates_fts_identity() {
     assert!(harness.document("old.txt").await.is_none());
     assert!(harness.document("new.txt").await.is_some());
     assert_eq!(harness.search("new").await.len(), 1);
+}
+
+async fn assert_watcher_rename_invalidates_an_active_attempt(
+    first_outcome: SupersededAttemptOutcome,
+) {
+    let harness = IndexHarness::new();
+    harness.write("old.txt", "previous committed content");
+    let initial_job = harness.start().await;
+    assert_eq!(
+        harness.wait_until_finished(&initial_job).await.state,
+        JobState::Completed
+    );
+    harness.write(
+        "old.txt",
+        "replacement file body that forces a new identity",
+    );
+
+    let parser = Arc::new(TwoAttemptParser::new(first_outcome));
+    let _release_attempts = ReleaseTwoAttempts(Arc::clone(&parser));
+    let coordinator = Arc::new(IndexCoordinator::with_parser(
+        Arc::clone(&harness.database),
+        Arc::clone(&parser),
+        10 * 1024 * 1024,
+    ));
+    let active_job = coordinator.start(&harness.folder_id).await.unwrap();
+    parser.wait_until_entered(1);
+    let token_a: String = harness
+        .database
+        .connection()
+        .query_row(
+            "SELECT parse_attempt_token FROM documents WHERE file_name = 'old.txt'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let document_before_rename: (String, String) = harness
+        .database
+        .connection()
+        .query_row(
+            "SELECT documents.id, document_content.body
+             FROM documents
+             JOIN document_content ON document_content.document_id = documents.id
+             WHERE documents.file_name = 'old.txt'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(document_before_rename.1, "previous committed content");
+
+    let old = harness.root.join("old.txt");
+    let new = harness.root.join("new.txt");
+    fs::rename(&old, &new).unwrap();
+    let stored_identity: (i64, String) = harness
+        .database
+        .connection()
+        .query_row(
+            "SELECT size_bytes, modified_at FROM documents WHERE file_name = 'old.txt'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    let renamed_metadata = fs::metadata(&new).unwrap();
+    let renamed_identity = (
+        i64::try_from(renamed_metadata.len()).unwrap(),
+        renamed_metadata
+            .modified()
+            .unwrap()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+            .to_string(),
+    );
+    assert_eq!(
+        stored_identity, renamed_identity,
+        "active-attempt fixture did not preserve rename identity"
+    );
+    let watcher =
+        IndexWatcher::start_for_manual_events(Arc::clone(&coordinator), harness.folder_id.clone())
+            .await
+            .unwrap();
+    watcher
+        .ingest(WatchChange::Rename {
+            from: old.clone(),
+            to: new.clone(),
+        })
+        .await
+        .unwrap();
+    let flushing_watcher = watcher.clone();
+    let mut flush = tokio::spawn(async move { flushing_watcher.flush().await });
+    let replacement_started = parser.wait_until_entered_for(2, Duration::from_secs(2));
+
+    if !replacement_started {
+        parser.release(0);
+        parser.release(1);
+        tokio::time::timeout(Duration::from_secs(5), &mut flush)
+            .await
+            .expect("watcher flush did not finish after parser cleanup")
+            .unwrap()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !matches!(
+            coordinator.status(&active_job).await.unwrap().state,
+            JobState::Completed | JobState::Failed
+        ) {
+            assert!(Instant::now() < deadline, "old parser job did not finish");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("rename did not schedule a replacement parser");
+    }
+
+    let token_b: String = harness
+        .database
+        .connection()
+        .query_row(
+            "SELECT parse_attempt_token FROM documents WHERE file_name = 'new.txt'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_ne!(token_a, token_b);
+    let document_after_replacement_started: (String, Option<String>) = harness
+        .database
+        .connection()
+        .query_row(
+            "SELECT documents.id, document_content.body
+             FROM documents
+             LEFT JOIN document_content ON document_content.document_id = documents.id
+             WHERE documents.file_name = 'new.txt'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    let old_rows_after_replacement_started: i64 = harness
+        .database
+        .connection()
+        .query_row(
+            "SELECT COUNT(*) FROM documents WHERE file_name = 'old.txt'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        old_rows_after_replacement_started, 0,
+        "rename left the original document row behind"
+    );
+    assert_eq!(
+        document_after_replacement_started.0, document_before_rename.0,
+        "rename/replacement changed the document identity"
+    );
+    assert_eq!(
+        document_after_replacement_started.1.as_deref(),
+        Some("previous committed content")
+    );
+
+    parser.release(0);
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        let status = coordinator.status(&active_job).await.unwrap();
+        if matches!(status.state, JobState::Completed | JobState::Failed) {
+            assert_eq!(status.state, JobState::Completed);
+            assert_eq!((status.completed_files, status.total_files), (1, 1));
+            break;
+        }
+        assert!(Instant::now() < deadline, "old parser job did not finish");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let while_replacement_owned: (String, String, Option<String>, Option<String>) = harness
+        .database
+        .connection()
+        .query_row(
+            "SELECT documents.parse_state, documents.parse_attempt_token,
+                    document_content.body, document_fts.body
+             FROM documents
+             LEFT JOIN document_content ON document_content.document_id = documents.id
+             LEFT JOIN document_fts ON document_fts.document_id = documents.id
+             WHERE documents.file_name = 'new.txt'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .unwrap();
+    assert_eq!(while_replacement_owned.0, "parsing");
+    assert_eq!(while_replacement_owned.1, token_b);
+    assert_eq!(
+        while_replacement_owned.2.as_deref(),
+        Some("previous committed content")
+    );
+    assert_eq!(
+        while_replacement_owned.3.as_deref(),
+        Some("previous committed content")
+    );
+
+    parser.release(1);
+    tokio::time::timeout(Duration::from_secs(5), &mut flush)
+        .await
+        .expect("watcher flush did not finish after replacement parser")
+        .unwrap()
+        .unwrap();
+
+    let final_state: (
+        String,
+        String,
+        Option<String>,
+        String,
+        String,
+        String,
+        i64,
+        i64,
+    ) = harness
+        .database
+        .connection()
+        .query_row(
+            "SELECT documents.canonical_path, documents.parse_state,
+                    documents.parse_attempt_token, document_content.body,
+                    document_fts.file_name, document_fts.body,
+                    (SELECT COUNT(*) FROM document_content
+                     WHERE document_id = documents.id),
+                    (SELECT COUNT(*) FROM document_fts
+                     WHERE document_id = documents.id)
+             FROM documents
+             JOIN document_content ON document_content.document_id = documents.id
+             JOIN document_fts ON document_fts.document_id = documents.id
+             WHERE documents.file_name = 'new.txt'",
+            [],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                    row.get(7)?,
+                ))
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        final_state,
+        (
+            new.canonicalize().unwrap().to_string_lossy().into_owned(),
+            "parsed".into(),
+            None,
+            "committed content from attempt B".into(),
+            "new.txt".into(),
+            "committed content from attempt B".into(),
+            1,
+            1,
+        )
+    );
+    let old_or_owned: i64 = harness
+        .database
+        .connection()
+        .query_row(
+            "SELECT COUNT(*) FROM documents
+             WHERE canonical_path = ?1
+                OR parse_state = 'parsing'
+                OR parse_attempt_token IS NOT NULL",
+            [old.to_string_lossy()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(old_or_owned, 0);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn watcher_rename_makes_a_late_success_stale_and_reindexes_the_new_path() {
+    assert_watcher_rename_invalidates_an_active_attempt(SupersededAttemptOutcome::Success).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn watcher_rename_makes_a_late_failure_stale_and_reindexes_the_new_path() {
+    assert_watcher_rename_invalidates_an_active_attempt(SupersededAttemptOutcome::Failure).await;
 }
 
 #[tokio::test]
@@ -1560,6 +2050,81 @@ async fn foreground_activity_yields_background_parsing_between_files() {
         harness.wait_until_finished(&job).await.state,
         JobState::Completed
     );
+}
+
+#[tokio::test]
+async fn parse_attempt_token_collision_retries_only_the_claim_and_then_commits() {
+    let harness = IndexHarness::new().with_valid_file("target.txt");
+    harness
+        .database
+        .connection()
+        .execute(
+            "INSERT INTO documents
+             (id, folder_id, canonical_path, file_name, extension, size_bytes,
+              modified_at, parse_state, parse_attempt_token)
+             VALUES ('collision-owner', ?1, ?2, 'collision-owner.txt', 'txt',
+                     1, '1', 'parsing', 'reused-token')",
+            rusqlite::params![
+                harness.folder_id,
+                harness.root.join("collision-owner.txt").to_string_lossy()
+            ],
+        )
+        .unwrap();
+    let tokens = Arc::new(ScriptedAttemptTokens::new(["reused-token", "fresh-token"]));
+    let coordinator = Arc::new(IndexCoordinator::with_parser_and_token_generator(
+        Arc::clone(&harness.database),
+        Arc::clone(&harness.parser),
+        10 * 1024 * 1024,
+        Arc::clone(&tokens),
+    ));
+
+    let job = coordinator.start(&harness.folder_id).await.unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let status = loop {
+        let status = coordinator.status(&job).await.unwrap();
+        if matches!(
+            status.state,
+            JobState::Completed | JobState::Cancelled | JobState::Failed
+        ) {
+            break status;
+        }
+        assert!(Instant::now() < deadline, "token collision retry hung");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    };
+
+    assert_eq!(status.state, JobState::Completed);
+    assert_eq!((status.completed_files, status.total_files), (1, 1));
+    assert_eq!(tokens.calls.load(Ordering::Acquire), 2);
+    assert_eq!(harness.parse_count("target.txt"), 1);
+    let result: (String, Option<String>, String, String) = harness
+        .database
+        .connection()
+        .query_row(
+            "SELECT documents.parse_state, documents.parse_attempt_token,
+                    document_content.body, document_fts.body
+             FROM documents
+             JOIN document_content ON document_content.document_id = documents.id
+             JOIN document_fts ON document_fts.document_id = documents.id
+             WHERE documents.file_name = 'target.txt'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        result,
+        ("parsed".into(), None, "target".into(), "target".into())
+    );
+    let collision_owner: (String, String) = harness
+        .database
+        .connection()
+        .query_row(
+            "SELECT parse_state, parse_attempt_token
+             FROM documents WHERE id = 'collision-owner'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(collision_owner, ("parsing".into(), "reused-token".into()));
 }
 
 #[tokio::test]

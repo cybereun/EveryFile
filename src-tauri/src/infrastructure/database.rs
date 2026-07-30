@@ -77,6 +77,13 @@ impl Database {
                 [],
             )
             .map_err(DatabaseError::Migration)?;
+        transaction
+            .execute_batch(
+                "CREATE UNIQUE INDEX IF NOT EXISTS documents_parse_attempt_token_unique
+                   ON documents(parse_attempt_token)
+                   WHERE parse_attempt_token IS NOT NULL;",
+            )
+            .map_err(DatabaseError::Migration)?;
         transaction.commit().map_err(DatabaseError::Migration)
     }
 
