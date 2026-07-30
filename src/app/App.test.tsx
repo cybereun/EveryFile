@@ -62,7 +62,7 @@ describe("App", () => {
     ).toBeVisible();
     expect(screen.getByRole("status")).toHaveTextContent("42");
     expect(screen.getByRole("status")).toHaveTextContent("1");
-    expect(screen.getByRole("status")).toHaveTextContent("v0.1.0");
+    expect(screen.getByRole("status")).toHaveTextContent("v1.0.0");
   });
 
   it("toggles the sidebar with Ctrl+B and focuses search with slash", () => {

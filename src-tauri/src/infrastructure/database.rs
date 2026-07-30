@@ -18,6 +18,8 @@ const PARSE_ATTEMPT_OWNERSHIP_MIGRATION: &str =
     include_str!("../../migrations/0005_parse_attempt_ownership.sql");
 const LIBRARY_CONSTRAINTS_MIGRATION: &str =
     include_str!("../../migrations/0006_library_constraints.sql");
+const SETTINGS_AND_MAINTENANCE_MIGRATION: &str =
+    include_str!("../../migrations/0007_settings_and_maintenance.sql");
 
 pub struct Database {
     connection: Mutex<Connection>,
@@ -91,6 +93,9 @@ impl Database {
             .map_err(DatabaseError::Migration)?;
         transaction
             .execute_batch(LIBRARY_CONSTRAINTS_MIGRATION)
+            .map_err(DatabaseError::Migration)?;
+        transaction
+            .execute_batch(SETTINGS_AND_MAINTENANCE_MIGRATION)
             .map_err(DatabaseError::Migration)?;
         transaction.commit().map_err(DatabaseError::Migration)
     }

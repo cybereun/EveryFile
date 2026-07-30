@@ -7,6 +7,7 @@ import {
   type ReactNode,
 } from "react";
 import type { SearchHit } from "../../lib/types";
+import { exportResults } from "../../lib/ipc";
 
 interface SearchResultsProps {
   hits: SearchHit[];
@@ -18,6 +19,8 @@ interface SearchResultsProps {
   onLoadMore: () => void;
   onOpen: (documentId: string) => Promise<void>;
   onSelect: (documentId: string) => void;
+  clickBehavior?: "preview" | "open";
+  dateDisplay?: "relative" | "absolute";
 }
 
 function formatSize(bytes: number) {
@@ -28,6 +31,25 @@ function formatSize(bytes: number) {
   }
   const value = bytes / (1024 * 1024);
   return `${Number.isInteger(value) ? value : value.toFixed(1)} MB`;
+}
+
+function relativeDate(value: string) {
+  const elapsed = new Date(value).getTime() - Date.now();
+  if (!Number.isFinite(elapsed)) return value;
+  const units = [
+    ["year", 365 * 24 * 60 * 60 * 1000],
+    ["month", 30 * 24 * 60 * 60 * 1000],
+    ["day", 24 * 60 * 60 * 1000],
+    ["hour", 60 * 60 * 1000],
+    ["minute", 60 * 1000],
+  ] as const;
+  const formatter = new Intl.RelativeTimeFormat("ko-KR", { numeric: "auto" });
+  for (const [unit, milliseconds] of units) {
+    if (Math.abs(elapsed) >= milliseconds) {
+      return formatter.format(Math.round(elapsed / milliseconds), unit);
+    }
+  }
+  return "방금";
 }
 
 export function highlightedSnippet(text: string): ReactNode[] {
@@ -65,11 +87,15 @@ function ResultRow({
   selected,
   onSelect,
   onOpen,
+  clickBehavior,
+  dateDisplay,
 }: {
   hit: SearchHit;
   selected: boolean;
   onSelect: () => void;
   onOpen: () => void;
+  clickBehavior: "preview" | "open";
+  dateDisplay: "relative" | "absolute";
 }) {
   const parent = hit.path.replace(/[\\/][^\\/]+$/, "");
   return (
@@ -77,7 +103,10 @@ function ResultRow({
       aria-selected={selected}
       className={`search-result-row${selected ? " is-selected" : ""}`}
       id={`search-result-${hit.documentId}`}
-      onClick={onSelect}
+      onClick={() => {
+        onSelect();
+        if (clickBehavior === "open") onOpen();
+      }}
       onDoubleClick={onOpen}
       role="option"
       type="button"
@@ -91,7 +120,9 @@ function ResultRow({
           {parent}
         </span>
         <time dateTime={hit.modifiedAt}>
-          {new Date(hit.modifiedAt).toLocaleString("ko-KR")}
+          {dateDisplay === "relative"
+            ? relativeDate(hit.modifiedAt)
+            : new Date(hit.modifiedAt).toLocaleString("ko-KR")}
         </time>
         <span>{formatSize(hit.sizeBytes)}</span>
       </span>
@@ -112,6 +143,8 @@ export function SearchResults({
   onLoadMore,
   onOpen,
   onSelect,
+  clickBehavior = "preview",
+  dateDisplay = "absolute",
 }: SearchResultsProps) {
   const [selectedDocumentId, setSelectedDocumentId] = useState<string | null>(
     hits[0]?.documentId ?? null,
@@ -188,6 +221,30 @@ export function SearchResults({
         <strong>{total.toLocaleString()}개</strong>
         <span>{elapsedMs.toLocaleString()}ms</span>
         {loading && <span>검색 중…</span>}
+        {hits.length > 0 && (
+          <span className="results-export">
+            <button
+              type="button"
+              onClick={() =>
+                void exportResults({ kind: "searchResults", hits }, "csv").catch(
+                  () => setOpenError("CSV 내보내기에 실패했습니다."),
+                )
+              }
+            >
+              CSV
+            </button>
+            <button
+              type="button"
+              onClick={() =>
+                void exportResults({ kind: "searchResults", hits }, "xlsx").catch(
+                  () => setOpenError("Excel 내보내기에 실패했습니다."),
+                )
+              }
+            >
+              Excel
+            </button>
+          </span>
+        )}
       </div>
       <div
         aria-activedescendant={
@@ -213,6 +270,8 @@ export function SearchResults({
                 <h3 className="result-group-heading">{labels[hit.matchKind]}</h3>
               )}
               <ResultRow
+                clickBehavior={clickBehavior}
+                dateDisplay={dateDisplay}
                 hit={hit}
                 onOpen={() => {
                   selectDocument(hit.documentId);

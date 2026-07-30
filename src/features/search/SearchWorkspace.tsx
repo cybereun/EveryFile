@@ -1,10 +1,16 @@
 import {
   forwardRef,
+  useEffect,
   useMemo,
   useState,
   type Ref,
 } from "react";
-import type { FolderRecord, SearchRequest, SearchResponse } from "../../lib/types";
+import type {
+  FolderRecord,
+  SearchRequest,
+  SearchResponse,
+  StatisticsSearchFilter,
+} from "../../lib/types";
 import {
   cancelSearch,
   openSourceFile,
@@ -22,6 +28,11 @@ export interface SearchWorkspaceProps {
   cancelApi?: (requestId: string) => Promise<boolean>;
   openApi?: (documentId: string) => Promise<void>;
   debounceMs?: number;
+  statisticsFilter?: StatisticsSearchFilter | null;
+  historyQuery?: string | null;
+  pageSize?: number;
+  fileClickBehavior?: "preview" | "open";
+  dateDisplay?: "relative" | "absolute";
 }
 
 export const SearchWorkspace = forwardRef<HTMLInputElement, SearchWorkspaceProps>(
@@ -33,6 +44,11 @@ export const SearchWorkspace = forwardRef<HTMLInputElement, SearchWorkspaceProps
       cancelApi = cancelSearch,
       openApi = openSourceFile,
       debounceMs,
+      statisticsFilter,
+      historyQuery,
+      pageSize,
+      fileClickBehavior,
+      dateDisplay,
     },
     ref: Ref<HTMLInputElement>,
   ) {
@@ -41,8 +57,18 @@ export const SearchWorkspace = forwardRef<HTMLInputElement, SearchWorkspaceProps
       search: searchApi,
       cancel: cancelApi,
       debounceMs,
+      pageSize,
     });
     const within = withinResults.trim().toLocaleLowerCase();
+    useEffect(() => {
+      if (!statisticsFilter) return;
+      search.patchFilters(statisticsFilter);
+    }, [statisticsFilter, search.patchFilters]);
+
+    useEffect(() => {
+      if (historyQuery == null) return;
+      search.setQuery(historyQuery);
+    }, [historyQuery, search.setQuery]);
     const visibleHits = useMemo(() => {
       if (!within) return search.hits;
       return search.hits.filter((hit) =>
@@ -72,6 +98,8 @@ export const SearchWorkspace = forwardRef<HTMLInputElement, SearchWorkspaceProps
           withinResults={withinResults}
         />
         <SearchResults
+          clickBehavior={fileClickBehavior}
+          dateDisplay={dateDisplay}
           elapsedMs={search.elapsedMs}
           error={search.error}
           hasMore={search.hasMore}

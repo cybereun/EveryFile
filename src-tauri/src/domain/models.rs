@@ -200,9 +200,14 @@ pub struct IndexFailure {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[serde(default)]
 pub struct AppSettings {
     pub language: String,
     pub theme: String,
+    pub file_click_behavior: String,
+    pub date_display: String,
+    pub excluded_path_patterns: Vec<String>,
+    pub indexing_intensity: String,
     pub history_retention_days: u32,
     pub minimize_to_tray: bool,
     pub start_with_windows: bool,
@@ -216,6 +221,10 @@ impl Default for AppSettings {
         Self {
             language: "ko".into(),
             theme: "light".into(),
+            file_click_behavior: "preview".into(),
+            date_display: "relative".into(),
+            excluded_path_patterns: Vec::new(),
+            indexing_intensity: "balanced".into(),
             history_retention_days: 90,
             minimize_to_tray: false,
             start_with_windows: false,

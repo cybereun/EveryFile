@@ -151,4 +151,77 @@ export interface AppSettings {
   startHidden: boolean;
   maxFileSizeBytes: number;
   resultPageSize: number;
+  fileClickBehavior?: "preview" | "open";
+  dateDisplay?: "relative" | "absolute";
+  excludedPathPatterns?: string[];
+  indexingIntensity?: "low" | "balanced" | "high";
 }
+
+export interface StatisticsBucket {
+  label: string;
+  count: number;
+}
+
+export interface FolderStatisticsBucket extends StatisticsBucket {
+  id: string;
+}
+
+export interface StatisticsDocument {
+  documentId: string;
+  fileName: string;
+  path: string;
+  extension: string;
+  sizeBytes: number;
+  modifiedAt: string;
+}
+
+export interface SearchHistoryRecord {
+  id: string;
+  query: string;
+  mode: string;
+  filters: Record<string, unknown>;
+  resultCount: number;
+  elapsedMs: number;
+  searchedAt: string;
+}
+
+export interface SearchFrequency {
+  query: string;
+  count: number;
+  lastSearchedAt: string;
+}
+
+export interface DocumentStatistics {
+  totalDocuments: number;
+  indexedDocuments: number;
+  totalBytes: number;
+  byExtension: StatisticsBucket[];
+  byFolder: FolderStatisticsBucket[];
+  byYear: StatisticsBucket[];
+  recentlyModified: StatisticsDocument[];
+  largestDocuments: StatisticsDocument[];
+  parseStates: StatisticsBucket[];
+  totalSearches: number;
+  uniqueSearchTerms: number;
+  frequentSearches: SearchFrequency[];
+  recentSearches: SearchHistoryRecord[];
+}
+
+export interface ParseErrorRecord {
+  documentId: string;
+  fileName: string;
+  path: string;
+  errorCode: string;
+}
+
+export type StatisticsSearchFilter =
+  | { extensions: string[] }
+  | { folderIds: string[] };
+
+export type ExportFormat = "csv" | "xlsx" | "markdown";
+
+export type ExportRequest =
+  | { kind: "searchResults"; hits: SearchHit[] }
+  | { kind: "markdownDocument"; fileName: string; markdown: string };
+
+export type ExportOutcome = "written" | "cancelled";

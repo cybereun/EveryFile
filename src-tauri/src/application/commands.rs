@@ -1,22 +1,33 @@
 use std::path::PathBuf;
 
 use serde::Serialize;
-use tauri::AppHandle;
 use tauri::State;
+use tauri::{AppHandle, Manager};
 use tauri_plugin_dialog::DialogExt;
 
 use crate::application::source_open::{
     open_indexed_location, open_indexed_source, read_indexed_pdf_cancellable, SourceOpenError,
 };
+use crate::diagnostics::{
+    require_reset_confirmation, start_reset_worker, DiagnosticError, DiagnosticsLogger,
+};
 use crate::domain::models::{
     BookmarkRecord, FolderRecord, PreviewDocument, SearchRequest, SearchResponse, TagRecord,
+};
+use crate::export::{
+    export_to_destination, ExportError, ExportFormat, ExportOutcome, ExportRequest,
 };
 use crate::folders::repository::{FolderError, FolderRepository};
 use crate::indexing::{IndexStatus, IndexingError, JobId};
 use crate::library::pdf_read::PdfReadError;
 use crate::library::repository::{LibraryError, LibraryRepository};
 use crate::search::{SearchError, SearchRepository};
-use crate::{settings::AppSettings, state::AppState};
+use crate::settings::{AppSettings, SettingsError, SettingsRepository};
+use crate::state::AppState;
+use crate::statistics::{
+    DocumentStatistics, ParseErrorRecord, SearchHistoryRecord, StatisticsError,
+    StatisticsRepository,
+};
 
 #[tauri::command]
 pub fn get_settings(state: State<'_, AppState>) -> Result<AppSettings, String> {
@@ -36,7 +47,13 @@ pub fn save_settings(
         .settings
         .write()
         .map_err(|_| "settings lock is unavailable".to_string())?;
-    *current_settings = settings;
+    let saved = SettingsRepository::new(state.database.clone())
+        .save(&settings)
+        .map_err(|error| error.to_string())?;
+    StatisticsRepository::new(state.database.clone())
+        .run_history_retention(saved.history_retention_days)
+        .map_err(|error| error.to_string())?;
+    *current_settings = saved;
     Ok(current_settings.clone())
 }
 
@@ -301,6 +318,146 @@ pub async fn save_markdown(
     Ok(true)
 }
 
+#[tauri::command]
+pub fn get_statistics(state: State<'_, AppState>) -> Result<DocumentStatistics, CommandError> {
+    let repository = StatisticsRepository::new(state.database.clone());
+    run_due_retention(&repository, &state)?;
+    repository.get_statistics().map_err(CommandError::from)
+}
+
+#[tauri::command]
+pub fn list_search_history(
+    limit: u32,
+    offset: u32,
+    state: State<'_, AppState>,
+) -> Result<Vec<SearchHistoryRecord>, CommandError> {
+    let repository = StatisticsRepository::new(state.database.clone());
+    run_due_retention(&repository, &state)?;
+    repository
+        .list_search_history(limit, offset)
+        .map_err(CommandError::from)
+}
+
+#[tauri::command]
+pub fn delete_search_history(id: String, state: State<'_, AppState>) -> Result<bool, CommandError> {
+    StatisticsRepository::new(state.database.clone())
+        .delete_search_history(&id)
+        .map_err(CommandError::from)
+}
+
+#[tauri::command]
+pub fn clear_search_history(state: State<'_, AppState>) -> Result<u64, CommandError> {
+    StatisticsRepository::new(state.database.clone())
+        .clear_search_history()
+        .map_err(CommandError::from)
+}
+
+#[tauri::command]
+pub async fn export_results(
+    app: AppHandle,
+    request: ExportRequest,
+    format: ExportFormat,
+) -> Result<ExportOutcome, CommandError> {
+    let mut dialog = app.dialog().file();
+    dialog = match format {
+        ExportFormat::Csv => dialog.add_filter("CSV", &["csv"]),
+        ExportFormat::Xlsx => dialog.add_filter("Excel", &["xlsx"]),
+        ExportFormat::Markdown => dialog.add_filter("Markdown", &["md"]),
+    };
+    let suggested_name = match &request {
+        ExportRequest::SearchResults { .. } => match format {
+            ExportFormat::Csv => "everyfile-search.csv".to_owned(),
+            ExportFormat::Xlsx => "everyfile-search.xlsx".to_owned(),
+            ExportFormat::Markdown => "everyfile-search.md".to_owned(),
+        },
+        ExportRequest::MarkdownDocument { file_name, .. } => markdown_file_name(file_name),
+    };
+    let selected = tauri::async_runtime::spawn_blocking(move || {
+        dialog.set_file_name(suggested_name).blocking_save_file()
+    })
+    .await
+    .map_err(|error| CommandError::new("EXPORT_DIALOG_FAILED", error.to_string()))?;
+    let selected = selected
+        .map(|path| {
+            path.into_path()
+                .map_err(|error| CommandError::new("EXPORT_PATH_INVALID", error.to_string()))
+        })
+        .transpose()?;
+    export_to_destination(&request, format, selected.as_deref()).map_err(CommandError::from)
+}
+
+#[tauri::command]
+pub fn list_parse_errors(
+    state: State<'_, AppState>,
+) -> Result<Vec<ParseErrorRecord>, CommandError> {
+    StatisticsRepository::new(state.database.clone())
+        .list_parse_errors()
+        .map_err(CommandError::from)
+}
+
+#[tauri::command]
+pub async fn retry_parse(
+    document_id: String,
+    state: State<'_, AppState>,
+) -> Result<bool, CommandError> {
+    let repository = StatisticsRepository::new(state.database.clone());
+    let folder_id = repository
+        .failed_document_folder(&document_id)
+        .map_err(CommandError::from)?;
+    let Some(folder_id) = folder_id else {
+        return Ok(false);
+    };
+    if !repository
+        .retry_parse(&document_id)
+        .map_err(CommandError::from)?
+    {
+        return Ok(false);
+    }
+    state
+        .indexing
+        .reconcile(&folder_id)
+        .await
+        .map_err(CommandError::from)?;
+    Ok(true)
+}
+
+#[tauri::command]
+pub fn reset_application_data(app: AppHandle, confirmed: bool) -> Result<(), CommandError> {
+    require_reset_confirmation(confirmed).map_err(CommandError::from)?;
+    let app_data_dir = app
+        .path()
+        .app_local_data_dir()
+        .map_err(|error| CommandError::new("APP_DATA_PATH_FAILED", error.to_string()))?;
+    start_reset_worker(&app_data_dir).map_err(CommandError::from)?;
+    app.exit(0);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn get_diagnostics_log_folder(app: AppHandle) -> Result<String, CommandError> {
+    let app_data_dir = app
+        .path()
+        .app_local_data_dir()
+        .map_err(|error| CommandError::new("APP_DATA_PATH_FAILED", error.to_string()))?;
+    let logger = DiagnosticsLogger::new(&app_data_dir, Vec::new()).map_err(CommandError::from)?;
+    Ok(logger.log_directory().to_string_lossy().into_owned())
+}
+
+fn run_due_retention(
+    repository: &StatisticsRepository,
+    state: &State<'_, AppState>,
+) -> Result<(), CommandError> {
+    let days = state
+        .settings
+        .read()
+        .map_err(|_| CommandError::new("SETTINGS_LOCK_FAILED", "settings lock is unavailable"))?
+        .history_retention_days;
+    repository
+        .run_due_history_retention(days)
+        .map(|_| ())
+        .map_err(CommandError::from)
+}
+
 fn markdown_file_name(file_name: &str) -> String {
     let stem = std::path::Path::new(file_name)
         .file_stem()
@@ -369,6 +526,30 @@ impl From<LibraryError> for CommandError {
 
 impl From<PdfReadError> for CommandError {
     fn from(error: PdfReadError) -> Self {
+        Self::new(error.code(), error.to_string())
+    }
+}
+
+impl From<StatisticsError> for CommandError {
+    fn from(error: StatisticsError) -> Self {
+        Self::new(error.code(), error.to_string())
+    }
+}
+
+impl From<ExportError> for CommandError {
+    fn from(error: ExportError) -> Self {
+        Self::new(error.code(), error.to_string())
+    }
+}
+
+impl From<SettingsError> for CommandError {
+    fn from(error: SettingsError) -> Self {
+        Self::new(error.code(), error.to_string())
+    }
+}
+
+impl From<DiagnosticError> for CommandError {
+    fn from(error: DiagnosticError) -> Self {
         Self::new(error.code(), error.to_string())
     }
 }

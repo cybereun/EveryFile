@@ -1,5 +1,7 @@
 pub mod application;
+pub mod diagnostics;
 pub mod domain;
+pub mod export;
 pub mod folders;
 pub mod indexing;
 pub mod infrastructure;
@@ -8,6 +10,7 @@ pub mod parsing;
 pub mod search;
 pub mod settings;
 pub mod state;
+pub mod statistics;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -24,10 +27,14 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
-            let app_data_dir = app.path().app_data_dir()?;
+            let app_data_dir = app.path().app_local_data_dir()?;
             let key = SecureKeyStore::load_or_create(&app_data_dir)?;
             let database = Arc::new(Database::open(&app_data_dir.join("everyfile.db"), &key)?);
             database.migrate()?;
+            let settings_repository = settings::SettingsRepository::new(Arc::clone(&database));
+            let persisted_settings = settings_repository.load()?;
+            statistics::StatisticsRepository::new(Arc::clone(&database))
+                .run_due_history_retention(persisted_settings.history_retention_days)?;
             let parser = Arc::new(ParserClient::new(
                 parser_executable_path(),
                 Duration::from_secs(30),
@@ -41,11 +48,29 @@ pub fn run() {
             let indexing = Arc::new(IndexCoordinator::with_parser_and_sink(
                 Arc::clone(&database),
                 parser,
-                200 * 1024 * 1024,
+                persisted_settings.max_file_size_bytes,
                 Some(status_sink),
             ));
             let app_state = state::AppState::new(database, indexing);
+            *app_state
+                .settings
+                .write()
+                .map_err(|_| "settings lock is unavailable")? = persisted_settings;
             tauri::async_runtime::block_on(app_state.restore_runtime())?;
+            let registered_roots = app_state
+                .folders
+                .list()?
+                .into_iter()
+                .map(|folder| PathBuf::from(folder.canonical_path))
+                .collect();
+            diagnostics::DiagnosticsLogger::new(&app_data_dir, registered_roots)?.write(
+                &diagnostics::DiagnosticEvent {
+                    level: "info".into(),
+                    code: "APP_STARTED".into(),
+                    message: "EveryFile started; local diagnostic retention completed".into(),
+                    document_id: None,
+                },
+            )?;
             app.manage(app_state);
             Ok(())
         })
@@ -72,6 +97,15 @@ pub fn run() {
             application::commands::create_tag,
             application::commands::set_document_tags,
             application::commands::save_markdown,
+            application::commands::get_statistics,
+            application::commands::list_search_history,
+            application::commands::delete_search_history,
+            application::commands::clear_search_history,
+            application::commands::export_results,
+            application::commands::list_parse_errors,
+            application::commands::retry_parse,
+            application::commands::reset_application_data,
+            application::commands::get_diagnostics_log_folder,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

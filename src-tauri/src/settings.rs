@@ -1,1 +1,132 @@
+use std::sync::Arc;
+
+use rusqlite::params;
+use thiserror::Error;
+
 pub use crate::domain::models::AppSettings;
+use crate::infrastructure::database::Database;
+
+#[derive(Clone)]
+pub struct SettingsRepository {
+    database: Arc<Database>,
+}
+
+impl SettingsRepository {
+    pub fn new(database: Arc<Database>) -> Self {
+        Self { database }
+    }
+
+    pub fn load(&self) -> Result<AppSettings, SettingsError> {
+        let connection = self.database.connection();
+        let stored = connection
+            .query_row(
+                "SELECT settings_json FROM app_settings WHERE id = 1",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        match stored {
+            Some(json) => {
+                let settings = serde_json::from_str(&json).map_err(SettingsError::Deserialize)?;
+                validate(&settings)?;
+                Ok(settings)
+            }
+            None => Ok(AppSettings::default()),
+        }
+    }
+
+    pub fn save(&self, settings: &AppSettings) -> Result<AppSettings, SettingsError> {
+        validate(settings)?;
+        let json = serde_json::to_string(settings).map_err(SettingsError::Serialize)?;
+        self.database.connection().execute(
+            "INSERT INTO app_settings (id, settings_json, updated_at)
+             VALUES (1, ?1, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+             ON CONFLICT(id) DO UPDATE SET
+               settings_json = excluded.settings_json,
+               updated_at = excluded.updated_at",
+            params![json],
+        )?;
+        Ok(settings.clone())
+    }
+}
+
+fn validate(settings: &AppSettings) -> Result<(), SettingsError> {
+    if !matches!(settings.language.as_str(), "ko" | "en") {
+        return Err(SettingsError::Invalid("language must be ko or en".into()));
+    }
+    if !matches!(settings.theme.as_str(), "light" | "dark" | "system") {
+        return Err(SettingsError::Invalid(
+            "theme must be light, dark, or system".into(),
+        ));
+    }
+    if !matches!(settings.file_click_behavior.as_str(), "preview" | "open") {
+        return Err(SettingsError::Invalid(
+            "file click behavior must be preview or open".into(),
+        ));
+    }
+    if !matches!(settings.date_display.as_str(), "relative" | "absolute") {
+        return Err(SettingsError::Invalid(
+            "date display must be relative or absolute".into(),
+        ));
+    }
+    if !matches!(
+        settings.indexing_intensity.as_str(),
+        "low" | "balanced" | "high"
+    ) {
+        return Err(SettingsError::Invalid(
+            "indexing intensity must be low, balanced, or high".into(),
+        ));
+    }
+    if settings.excluded_path_patterns.len() > 100
+        || settings.excluded_path_patterns.iter().any(|pattern| {
+            pattern.trim().is_empty()
+                || pattern.len() > 260
+                || pattern.chars().any(char::is_control)
+        })
+    {
+        return Err(SettingsError::Invalid(
+            "excluded path patterns must contain 1-100 non-control characters each".into(),
+        ));
+    }
+    if !matches!(settings.history_retention_days, 0 | 30 | 90 | 365) {
+        return Err(SettingsError::Invalid(
+            "history retention must be 30, 90, 365, or 0 for unlimited".into(),
+        ));
+    }
+    if settings.max_file_size_bytes == 0 {
+        return Err(SettingsError::Invalid(
+            "maximum file size must be greater than zero".into(),
+        ));
+    }
+    if !(1..=200).contains(&settings.result_page_size) {
+        return Err(SettingsError::Invalid(
+            "result page size must be between 1 and 200".into(),
+        ));
+    }
+    Ok(())
+}
+
+use rusqlite::OptionalExtension;
+
+#[derive(Debug, Error)]
+pub enum SettingsError {
+    #[error("settings database operation failed")]
+    Database(#[from] rusqlite::Error),
+    #[error("settings serialization failed")]
+    Serialize(#[source] serde_json::Error),
+    #[error("stored settings are invalid")]
+    Deserialize(#[source] serde_json::Error),
+    #[error("invalid settings: {0}")]
+    Invalid(String),
+}
+
+impl SettingsError {
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::Database(_) => "SETTINGS_DATABASE_FAILED",
+            Self::Serialize(_) => "SETTINGS_SERIALIZE_FAILED",
+            Self::Deserialize(_) => "SETTINGS_STORED_INVALID",
+            Self::Invalid(_) => "SETTINGS_INVALID",
+        }
+    }
+}

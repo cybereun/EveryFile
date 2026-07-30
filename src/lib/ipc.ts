@@ -8,6 +8,12 @@ import type {
   SearchRequest,
   SearchResponse,
   Tag,
+  DocumentStatistics,
+  ExportFormat,
+  ExportOutcome,
+  ExportRequest,
+  ParseErrorRecord,
+  SearchHistoryRecord,
 } from "./types";
 
 export const getSettings = () => invoke<AppSettings>("get_settings");
@@ -67,3 +73,30 @@ export const cancelIndexing = (jobId: string) =>
 
 export const getIndexStatus = (jobId: string) =>
   invoke<IndexStatus>("get_index_status", { jobId });
+
+export const getStatistics = () =>
+  invoke<DocumentStatistics>("get_statistics");
+
+export const listSearchHistory = (limit = 100, offset = 0) =>
+  invoke<SearchHistoryRecord[]>("list_search_history", { limit, offset });
+
+export const deleteSearchHistory = (id: string) =>
+  invoke<void>("delete_search_history", { id });
+
+export const clearSearchHistory = () =>
+  invoke<void>("clear_search_history");
+
+export const exportResults = (request: ExportRequest, format: ExportFormat) =>
+  invoke<ExportOutcome>("export_results", { request, format });
+
+export const listParseErrors = () =>
+  invoke<ParseErrorRecord[]>("list_parse_errors");
+
+export const getDiagnosticsLogFolder = () =>
+  invoke<string>("get_diagnostics_log_folder");
+
+export const retryParse = (documentId: string) =>
+  invoke<void>("retry_parse", { documentId });
+
+export const resetApplicationData = () =>
+  invoke<void>("reset_application_data", { confirmed: true });

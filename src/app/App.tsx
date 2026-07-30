@@ -3,7 +3,14 @@ import { ResizablePane } from "../components/ResizablePane";
 import { IndexStatusController } from "../features/folders/IndexStatus";
 import { PreviewPanel } from "../features/preview/PreviewPanel";
 import { SearchWorkspace } from "../features/search/SearchWorkspace";
-import type { FolderRecord } from "../lib/types";
+import { SettingsDialog } from "../features/settings/SettingsDialog";
+import { StatisticsDialog } from "../features/statistics/StatisticsDialog";
+import type {
+  AppSettings,
+  FolderRecord,
+  StatisticsSearchFilter,
+} from "../lib/types";
+import { getSettings, saveSettings } from "../lib/ipc";
 import "../styles/app.css";
 import { Header } from "./Header";
 import { defaultLocale, productTranslations, type Locale } from "./translations";
@@ -18,7 +25,7 @@ const RIGHT_PANE_MAX = 720;
 const CENTER_PANE_MIN = 520;
 const PREVIEW_BREAKPOINT = 1100;
 const COMPACT_HEADER_BREAKPOINT = 560;
-const APP_VERSION = "v0.1.0";
+const APP_VERSION = "v1.0.0";
 
 export interface AppProps {
   folders?: FolderRecord[];
@@ -163,6 +170,12 @@ export function App({
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [workspaceSelectedDocumentId, setWorkspaceSelectedDocumentId] =
     useState(selectedDocumentId);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [statisticsOpen, setStatisticsOpen] = useState(false);
+  const [statisticsFilter, setStatisticsFilter] =
+    useState<StatisticsSearchFilter | null>(null);
+  const [historyQuery, setHistoryQuery] = useState<string | null>(null);
+  const [appSettings, setAppSettings] = useState<AppSettings | null>(null);
   const searchInput = useRef<HTMLInputElement>(null);
   const [leftWidth, setLeftWidth] = usePersistedWidth(
     LEFT_PANE_KEY,
@@ -217,6 +230,17 @@ export function App({
   }, [selectedDocumentId]);
 
   useEffect(() => {
+    void getSettings()
+      .then((settings) => {
+        setAppSettings(settings);
+        if (settings.language === "ko" || settings.language === "en") {
+          setLocale(settings.language);
+        }
+      })
+      .catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
     const handleShortcut = (event: KeyboardEvent) => {
       const textEntry = isTextEntryTarget(event.target);
       if (
@@ -253,13 +277,26 @@ export function App({
         locale={locale}
         tagline={tagline}
         onAddFolder={onAddFolder}
-        onLocaleChange={setLocale}
+        onLocaleChange={(nextLocale) => {
+          setLocale(nextLocale);
+          if (appSettings) {
+            const nextSettings = { ...appSettings, language: nextLocale };
+            setAppSettings(nextSettings);
+            void saveSettings(nextSettings).catch(() => undefined);
+          }
+        }}
         onHome={() => {
           setSidebarOpen(true);
           searchInput.current?.focus();
         }}
-        onSettings={onSettings}
-        onStatistics={onStatistics}
+        onSettings={() => {
+          onSettings?.();
+          setSettingsOpen(true);
+        }}
+        onStatistics={() => {
+          onStatistics?.();
+          setStatisticsOpen(true);
+        }}
       />
       <main ref={workspaceRef} className="workspace">
         <ResizablePane
@@ -278,6 +315,11 @@ export function App({
         <section className="center-pane" aria-label="검색 작업 공간 / Search workspace">
           <SearchWorkspace
             folders={folders}
+            historyQuery={historyQuery}
+            statisticsFilter={statisticsFilter}
+            pageSize={appSettings?.resultPageSize}
+            fileClickBehavior={appSettings?.fileClickBehavior}
+            dateDisplay={appSettings?.dateDisplay}
             onSelectDocument={(documentId) => {
               setWorkspaceSelectedDocumentId(documentId);
               onDocumentSelect?.(documentId);
@@ -300,6 +342,30 @@ export function App({
           <PreviewPanel documentId={workspaceSelectedDocumentId} />
         </ResizablePane>
       </main>
+      <SettingsDialog
+        folders={folders}
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        onSaved={(settings) => {
+          setAppSettings(settings);
+          if (settings.language === "ko" || settings.language === "en") {
+            setLocale(settings.language);
+          }
+        }}
+      />
+      <StatisticsDialog
+        open={statisticsOpen}
+        onClose={() => setStatisticsOpen(false)}
+        onApplyFilter={(filter) => {
+          setStatisticsFilter(filter);
+          setHistoryQuery(null);
+        }}
+        onSearchHistory={(query) => {
+          setHistoryQuery(query);
+          setStatisticsFilter(null);
+          setStatisticsOpen(false);
+        }}
+      />
       <footer className="app-status">
         <div className="status-summary" role="status" aria-live="polite">
           <span>색인 문서 {indexedDocumentCount.toLocaleString()}개</span>

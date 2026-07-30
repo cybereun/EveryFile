@@ -10,6 +10,7 @@ import {
   setBookmark,
   setDocumentTags,
   saveMarkdown,
+  exportResults,
 } from "../../lib/ipc";
 import type { PreviewBlock, PreviewDocument } from "../../lib/types";
 import { DocumentTextView } from "./DocumentTextView";
@@ -168,7 +169,20 @@ export function PreviewPanel({
         }}
         onOpen={() => void run(preview.documentId, () => openApi(preview.documentId))}
         onOpenLocation={() => void run(preview.documentId, () => openLocationApi(preview.documentId))}
-        onSaveMarkdown={() => void run(preview.documentId, () => saveMarkdownApi(preview.documentId))}
+        onSaveMarkdown={() =>
+          void run(preview.documentId, () =>
+            saveMarkdownApi === saveMarkdown
+              ? exportResults(
+                  {
+                    kind: "markdownDocument",
+                    fileName: preview.fileName,
+                    markdown: preview.markdown,
+                  },
+                  "markdown",
+                )
+              : saveMarkdownApi(preview.documentId),
+          )
+        }
       />
       <TagEditor
         key={preview.documentId}
