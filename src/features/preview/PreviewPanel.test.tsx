@@ -131,6 +131,29 @@ describe("secure document preview", () => {
     expect(screen.getByRole("menuitem", { name: "태그 추가" })).toBeVisible();
   });
 
+  it("supports keyboard navigation and restores focus when the more menu closes", async () => {
+    render(
+      <PreviewPanel
+        documentId="doc-1"
+        getPreviewApi={vi.fn().mockResolvedValue(preview)}
+      />,
+    );
+
+    await screen.findByText(preview.fileName);
+    const trigger = screen.getByRole("button", { name: "더보기" });
+    fireEvent.click(trigger);
+    const first = screen.getByRole("menuitem", { name: "파일 위치 열기" });
+    await waitFor(() => expect(first).toHaveFocus());
+
+    fireEvent.keyDown(document, { key: "End" });
+    expect(screen.getByRole("menuitem", { name: "태그 추가" })).toHaveFocus();
+    fireEvent.keyDown(document, { key: "ArrowDown" });
+    expect(first).toHaveFocus();
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+  });
+
   it("shows AI actions only when enabled and runs an Ollama summary", async () => {
     const runAi = vi.fn().mockResolvedValue("핵심 요약입니다.");
     render(

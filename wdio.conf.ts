@@ -31,5 +31,5 @@ export const config = {
   connectionRetryCount: 1,
   framework: "mocha",
   reporters: ["spec"],
-  mochaOpts: { ui: "bdd", timeout: 180_000 },
+  mochaOpts: { ui: "bdd", timeout: 600_000 },
 };

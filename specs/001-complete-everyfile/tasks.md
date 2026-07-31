@@ -46,8 +46,8 @@ preview a result and exercise all non-AI document actions.
 - [x] T020 [US2] Add explicit header controls and keyboard shortcuts for both panels in `src/app/Header.tsx`
 - [x] T021 [US2] Add visible folder-add action inside the empty left panel in `src/app/App.tsx`
 - [x] T022 [US2] Preserve user preference when responsive layout temporarily hides a panel in `src/app/App.tsx`
-- [ ] T023 [US2] Close remaining preview toolbar/dialog keyboard gaps in `src/features/preview/`
-- [ ] T024 [US2] Pass packaged panel/restart/preview acceptance in `tests/e2e/workspace-preview.spec.ts`
+- [x] T023 [US2] Close remaining preview toolbar/dialog keyboard gaps in `src/features/preview/`
+- [x] T024 [US2] Pass packaged panel/restart/preview acceptance in `tests/e2e/workspace-preview.e2e.ts`
 
 ## Phase 5: User Story 3 - Search Scans with Local OCR (P2)
 
