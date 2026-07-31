@@ -20,6 +20,8 @@ const LIBRARY_CONSTRAINTS_MIGRATION: &str =
     include_str!("../../migrations/0006_library_constraints.sql");
 const SETTINGS_AND_MAINTENANCE_MIGRATION: &str =
     include_str!("../../migrations/0007_settings_and_maintenance.sql");
+const OCR_MIGRATION: &str = include_str!("../../migrations/0008_ocr.sql");
+const AI_MIGRATION: &str = include_str!("../../migrations/0009_ai.sql");
 
 pub struct Database {
     connection: Mutex<Option<Connection>>,
@@ -96,6 +98,12 @@ impl Database {
             .map_err(DatabaseError::Migration)?;
         transaction
             .execute_batch(SETTINGS_AND_MAINTENANCE_MIGRATION)
+            .map_err(DatabaseError::Migration)?;
+        transaction
+            .execute_batch(OCR_MIGRATION)
+            .map_err(DatabaseError::Migration)?;
+        transaction
+            .execute_batch(AI_MIGRATION)
             .map_err(DatabaseError::Migration)?;
         transaction.commit().map_err(DatabaseError::Migration)
     }

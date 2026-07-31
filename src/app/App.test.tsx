@@ -1,5 +1,5 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 
 describe("App", () => {
@@ -78,6 +78,65 @@ describe("App", () => {
 
     fireEvent.keyDown(window, { key: "/" });
     expect(screen.getByRole("searchbox")).toHaveFocus();
+  });
+
+  it("toggles and persists the left and right panels independently", () => {
+    const { unmount } = render(<App selectedDocumentId="document-1" />);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /왼쪽 패널 닫기.*Toggle left panel/ }),
+    );
+    expect(
+      screen.getByRole("complementary", {
+        name: /Indexed folders/,
+        hidden: true,
+      }),
+    ).not.toBeVisible();
+    expect(
+      screen.getByRole("region", {
+        name: /Document preview/,
+      }),
+    ).toBeVisible();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /오른쪽 패널 닫기.*Toggle right panel/ }),
+    );
+    expect(
+      screen.getByRole("region", {
+        name: /Document preview/,
+        hidden: true,
+      }),
+    ).not.toBeVisible();
+    expect(window.localStorage.getItem("everyfile.ui.left-pane-visible")).toBe(
+      "false",
+    );
+    expect(window.localStorage.getItem("everyfile.ui.right-pane-visible")).toBe(
+      "false",
+    );
+
+    unmount();
+    render(<App selectedDocumentId="document-1" />);
+    expect(
+      screen.getByRole("complementary", {
+        name: /Indexed folders/,
+        hidden: true,
+      }),
+    ).not.toBeVisible();
+    expect(
+      screen.getByRole("region", {
+        name: /Document preview/,
+        hidden: true,
+      }),
+    ).not.toBeVisible();
+  });
+
+  it("adds a folder from the empty left panel", () => {
+    const onAddFolder = vi.fn();
+    render(<App onAddFolder={onAddFolder} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "폴더 추가" }));
+
+    expect(onAddFolder).toHaveBeenCalledOnce();
   });
 
   it("does not hijack Ctrl+B or slash in text-entry controls", () => {

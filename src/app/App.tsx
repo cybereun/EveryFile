@@ -1,5 +1,9 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ResizablePane } from "../components/ResizablePane";
+import {
+  CommandStatus,
+  type CommandStatusMessage,
+} from "../components/CommandStatus";
 import { IndexStatusController } from "../features/folders/IndexStatus";
 import { PreviewPanel } from "../features/preview/PreviewPanel";
 import { SearchWorkspace } from "../features/search/SearchWorkspace";
@@ -17,6 +21,8 @@ import { defaultLocale, productTranslations, type Locale } from "./translations"
 
 const LEFT_PANE_KEY = "everyfile.ui.left-pane-width";
 const RIGHT_PANE_KEY = "everyfile.ui.right-pane-width";
+const LEFT_PANE_VISIBLE_KEY = "everyfile.ui.left-pane-visible";
+const RIGHT_PANE_VISIBLE_KEY = "everyfile.ui.right-pane-visible";
 const LEFT_PANE_DEFAULT = 260;
 const LEFT_PANE_MIN = 208;
 const LEFT_PANE_MAX = 420;
@@ -33,9 +39,41 @@ export interface AppProps {
   queueState?: "idle" | "indexing" | "paused" | "error";
   selectedDocumentId?: string | null;
   onAddFolder?: () => void;
+  onRemoveFolder?: (folderId: string) => void;
   onSettings?: () => void;
   onStatistics?: () => void;
   onDocumentSelect?: (documentId: string) => void;
+  commandStatus?: CommandStatusMessage | null;
+  onDismissCommandStatus?: () => void;
+}
+
+function readPersistedVisibility(key: string, fallback: boolean) {
+  try {
+    const value = window.localStorage.getItem(key);
+    if (value === "true") return true;
+    if (value === "false") return false;
+  } catch {
+    // Retain the safe default when browser storage is unavailable.
+  }
+  return fallback;
+}
+
+function usePersistedVisibility(key: string, fallback: boolean) {
+  const [visible, setVisible] = useState(() =>
+    readPersistedVisibility(key, fallback),
+  );
+  const updateVisible = (next: boolean | ((current: boolean) => boolean)) => {
+    setVisible((current) => {
+      const value = typeof next === "function" ? next(current) : next;
+      try {
+        window.localStorage.setItem(key, String(value));
+      } catch {
+        // Keep the in-memory preference when browser storage is unavailable.
+      }
+      return value;
+    });
+  };
+  return [visible, updateVisible] as const;
 }
 
 function readPersistedWidth(key: string, fallback: number, min: number, max: number) {
@@ -120,7 +158,15 @@ function isTextEntryTarget(target: EventTarget | null) {
   );
 }
 
-function FolderPane({ folders }: { folders: FolderRecord[] }) {
+function FolderPane({
+  folders,
+  onAddFolder,
+  onRemoveFolder,
+}: {
+  folders: FolderRecord[];
+  onAddFolder?: () => void;
+  onRemoveFolder?: (folderId: string) => void;
+}) {
   return (
     <aside className="folder-pane" aria-label="등록 폴더 / Indexed folders">
       <div className="pane-heading">
@@ -129,6 +175,10 @@ function FolderPane({ folders }: { folders: FolderRecord[] }) {
       </div>
       {folders.length === 0 ? (
         <div className="folder-empty">
+          <button type="button" onClick={onAddFolder} disabled={!onAddFolder}>
+            폴더 추가
+          </button>
+          <br />
           선택한 폴더만 이 PC에서 색인됩니다.
           <br />
           폴더 추가 버튼으로 시작하세요.
@@ -136,12 +186,22 @@ function FolderPane({ folders }: { folders: FolderRecord[] }) {
       ) : (
         <div className="folder-list">
           {folders.map((folder) => (
-            <button className="folder-item" key={folder.id} type="button">
-              <span>{folder.displayName}</span>
+            <div className="folder-item" key={folder.id}>
+              <span title={folder.canonicalPath}>{folder.displayName}</span>
               <span className="folder-count">
                 {folder.documentCount.toLocaleString()}
               </span>
-            </button>
+              {onRemoveFolder && (
+                <button
+                  type="button"
+                  className="folder-remove"
+                  aria-label={`${folder.displayName} 등록 해제`}
+                  onClick={() => onRemoveFolder(folder.id)}
+                >
+                  ×
+                </button>
+              )}
+            </div>
           ))}
         </div>
       )}
@@ -162,12 +222,22 @@ export function App({
   queueState = "idle",
   selectedDocumentId = null,
   onAddFolder,
+  onRemoveFolder,
   onSettings,
   onStatistics,
   onDocumentSelect,
+  commandStatus = null,
+  onDismissCommandStatus,
 }: AppProps) {
   const [locale, setLocale] = useState<Locale>(defaultLocale);
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [leftPanelOpen, setLeftPanelOpen] = usePersistedVisibility(
+    LEFT_PANE_VISIBLE_KEY,
+    true,
+  );
+  const [rightPanelOpen, setRightPanelOpen] = usePersistedVisibility(
+    RIGHT_PANE_VISIBLE_KEY,
+    true,
+  );
   const [workspaceSelectedDocumentId, setWorkspaceSelectedDocumentId] =
     useState(selectedDocumentId);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -191,12 +261,13 @@ export function App({
   );
   const [workspaceRef, workspaceWidth] = useWorkspaceWidth();
   const { tagline } = productTranslations[locale];
-  const previewRequested = workspaceWidth > PREVIEW_BREAKPOINT;
+  const previewRequested =
+    rightPanelOpen && workspaceWidth > PREVIEW_BREAKPOINT;
   const leftCanFit = workspaceWidth >= LEFT_PANE_MIN + CENTER_PANE_MIN;
   const previewCanFit =
     previewRequested &&
     workspaceWidth >=
-      CENTER_PANE_MIN + RIGHT_PANE_MIN + (sidebarOpen ? LEFT_PANE_MIN : 0);
+      CENTER_PANE_MIN + RIGHT_PANE_MIN + (leftPanelOpen ? LEFT_PANE_MIN : 0);
   const leftMaximumForLayout = Math.max(
     LEFT_PANE_MIN,
     Math.min(
@@ -206,7 +277,7 @@ export function App({
         (previewCanFit ? RIGHT_PANE_MIN : 0),
     ),
   );
-  const leftPaneVisible = sidebarOpen && leftCanFit;
+  const leftPaneVisible = leftPanelOpen && leftCanFit;
   const renderedLeftWidth = leftPaneVisible
     ? Math.min(leftWidth, leftMaximumForLayout)
     : leftWidth;
@@ -245,13 +316,26 @@ export function App({
       const textEntry = isTextEntryTarget(event.target);
       if (
         event.ctrlKey &&
+        !event.shiftKey &&
         !event.altKey &&
         !event.metaKey &&
         event.key.toLowerCase() === "b" &&
         !textEntry
       ) {
         event.preventDefault();
-        setSidebarOpen((open) => !open);
+        setLeftPanelOpen((open) => !open);
+        return;
+      }
+      if (
+        event.ctrlKey &&
+        event.shiftKey &&
+        !event.altKey &&
+        !event.metaKey &&
+        event.key.toLowerCase() === "b" &&
+        !textEntry
+      ) {
+        event.preventDefault();
+        setRightPanelOpen((open) => !open);
         return;
       }
       if (
@@ -277,6 +361,10 @@ export function App({
         locale={locale}
         tagline={tagline}
         onAddFolder={onAddFolder}
+        leftPanelOpen={leftPanelOpen}
+        rightPanelOpen={rightPanelOpen}
+        onToggleLeftPanel={() => setLeftPanelOpen((open) => !open)}
+        onToggleRightPanel={() => setRightPanelOpen((open) => !open)}
         onLocaleChange={(nextLocale) => {
           setLocale(nextLocale);
           if (appSettings) {
@@ -286,7 +374,7 @@ export function App({
           }
         }}
         onHome={() => {
-          setSidebarOpen(true);
+          setLeftPanelOpen(true);
           searchInput.current?.focus();
         }}
         onSettings={() => {
@@ -298,6 +386,12 @@ export function App({
           setStatisticsOpen(true);
         }}
       />
+      <div className="command-status-slot">
+        <CommandStatus
+          message={commandStatus}
+          onDismiss={onDismissCommandStatus}
+        />
+      </div>
       <main ref={workspaceRef} className="workspace">
         <ResizablePane
           className="left-pane-container"
@@ -309,7 +403,11 @@ export function App({
           resizeEdge="right"
           width={renderedLeftWidth}
         >
-          <FolderPane folders={folders} />
+          <FolderPane
+            folders={folders}
+            onAddFolder={onAddFolder}
+            onRemoveFolder={onRemoveFolder}
+          />
         </ResizablePane>
 
         <section className="center-pane" aria-label="검색 작업 공간 / Search workspace">
@@ -339,7 +437,11 @@ export function App({
           resizeEdge="left"
           width={renderedRightWidth}
         >
-          <PreviewPanel documentId={workspaceSelectedDocumentId} />
+          <PreviewPanel
+            documentId={workspaceSelectedDocumentId}
+            aiEnabled={appSettings?.aiEnabled ?? false}
+            aiProvider={appSettings?.aiProvider ?? "ollama"}
+          />
         </ResizablePane>
       </main>
       <SettingsDialog

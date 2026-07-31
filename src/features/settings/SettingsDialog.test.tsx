@@ -15,9 +15,28 @@ const settings: AppSettings = {
 };
 
 describe("SettingsDialog", () => {
+  it("offers local OCR and separate math OCR controls in Search", async () => {
+    render(
+      <SettingsDialog
+        open
+        onClose={() => undefined}
+        loadSettings={async () => settings}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole("tab", { name: /Search|검색/ }));
+    const localOcr = screen.getByRole("checkbox", { name: "로컬 OCR 활성화" });
+    const mathOcr = screen.getByRole("checkbox", { name: "수학 OCR 활성화" });
+    expect(localOcr).not.toBeChecked();
+    expect(mathOcr).toBeDisabled();
+
+    fireEvent.click(localOcr);
+    expect(mathOcr).toBeEnabled();
+  });
+
   afterEach(cleanup);
 
-  it("offers the four Phase 1 tabs without AI controls", async () => {
+  it("offers the complete settings tabs and gates AI provider controls", async () => {
     render(
       <SettingsDialog
         open
@@ -28,13 +47,13 @@ describe("SettingsDialog", () => {
     );
 
     expect(await screen.findByRole("dialog", { name: "설정" })).toBeVisible();
-    expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual([
-      "일반",
-      "검색",
-      "시스템",
-      "진단",
-    ]);
-    expect(screen.queryByText(/AI 기능|LLM Provider/i)).not.toBeInTheDocument();
+    expect(screen.getAllByRole("tab")).toHaveLength(5);
+    fireEvent.click(screen.getByRole("tab", { name: "AI" }));
+    expect(screen.getByRole("checkbox", { name: "AI 기능 활성화" })).not.toBeChecked();
+    expect(screen.queryByLabelText("LLM Provider")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("checkbox", { name: "AI 기능 활성화" }));
+    expect(screen.getByLabelText("LLM Provider")).toBeVisible();
   });
 
   it("saves retention changes and restores focus after Escape", async () => {

@@ -14,6 +14,10 @@ edition = "2021"
 name = "everyfile_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[features]
+default = []
+e2e = ["dep:tauri-plugin-wdio-webdriver"]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
@@ -41,6 +45,8 @@ windows = { version = "0.62.2", features = [
 tokio = { version = "=1.53.1", features = ["macros", "rt-multi-thread", "sync", "time"] }
 notify = "=8.2.0"
 rust_xlsxwriter = "=0.97.0"
+reqwest = { version = "=0.13.4", default-features = false, features = ["json", "native-tls"] }
+tauri-plugin-wdio-webdriver = { version = "=1.2.0", optional = true }
 
 [dev-dependencies]
 tempfile = "3.27.0"

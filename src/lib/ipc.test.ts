@@ -11,15 +11,20 @@ import {
   createTag,
   getPdfBytes,
   getIndexStatus,
+  getAiSecretStatus,
   getPreview,
   getSettings,
   listFolders,
+  registerFolder,
+  removeFolder,
   openSourceFile,
   openSourceLocation,
   pauseIndexing,
   resumeIndexing,
+  runDocumentAi,
   removeBookmark,
   saveMarkdown,
+  saveAiSecret,
   saveSettings,
   searchDocuments,
   startIndexing,
@@ -62,7 +67,12 @@ describe("IPC wrappers", () => {
 
     await getSettings();
     await saveSettings(settings);
+    await getAiSecretStatus("openai");
+    await saveAiSecret("openai", "secret");
+    await runDocumentAi("document-1", "질문", true);
     await listFolders();
+    await registerFolder();
+    await removeFolder("folder-1");
     await searchDocuments(request);
     await cancelSearch("search-1");
     await openSourceFile("document-1");
@@ -84,7 +94,15 @@ describe("IPC wrappers", () => {
     expect(invoke.mock.calls).toEqual([
       ["get_settings"],
       ["save_settings", { settings }],
+      ["get_ai_secret_status", { provider: "openai" }],
+      ["save_ai_secret", { provider: "openai", secret: "secret" }],
+      [
+        "run_document_ai",
+        { documentId: "document-1", question: "질문", remoteConsent: true },
+      ],
       ["list_folders"],
+      ["register_folder"],
+      ["remove_folder", { folderId: "folder-1" }],
       ["search_documents", { request }],
       ["cancel_search", { requestId: "search-1" }],
       ["open_source_file", { documentId: "document-1" }],

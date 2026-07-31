@@ -1,11 +1,15 @@
+pub mod ai;
 pub mod application;
 pub mod diagnostics;
 pub mod domain;
+#[cfg(feature = "e2e")]
+mod e2e;
 pub mod export;
 pub mod folders;
 pub mod indexing;
 pub mod infrastructure;
 pub mod library;
+pub mod ocr;
 pub mod parsing;
 pub mod search;
 pub mod settings;
@@ -29,8 +33,10 @@ pub fn run() {
 
 pub fn run_with_reset_completion(reset_completion: Option<diagnostics::ResetCompletionStartup>) {
     let reset_completion = Arc::new(Mutex::new(reset_completion));
-    tauri::Builder::default()
-        .plugin(tauri_plugin_dialog::init())
+    let builder = tauri::Builder::default().plugin(tauri_plugin_dialog::init());
+    #[cfg(feature = "e2e")]
+    let builder = builder.plugin(tauri_plugin_wdio_webdriver::init());
+    builder
         .setup(move |app| {
             let app_data_dir = app.path().app_local_data_dir()?;
             let key = SecureKeyStore::load_or_create(&app_data_dir)?;
@@ -67,6 +73,8 @@ pub fn run_with_reset_completion(reset_completion: Option<diagnostics::ResetComp
                 .write()
                 .map_err(|_| "settings lock is unavailable")? = persisted_settings;
             tauri::async_runtime::block_on(app_state.restore_runtime())?;
+            #[cfg(feature = "e2e")]
+            tauri::async_runtime::block_on(e2e::register_startup_fixture(&app_state))?;
             let registered_roots = app_state
                 .folders
                 .list()?
@@ -103,6 +111,9 @@ pub fn run_with_reset_completion(reset_completion: Option<diagnostics::ResetComp
         .invoke_handler(tauri::generate_handler![
             application::commands::get_settings,
             application::commands::save_settings,
+            application::commands::get_ai_secret_status,
+            application::commands::save_ai_secret,
+            application::commands::run_document_ai,
             application::commands::register_folder,
             application::commands::remove_folder,
             application::commands::list_folders,

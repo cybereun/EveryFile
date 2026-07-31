@@ -131,6 +131,27 @@ describe("secure document preview", () => {
     expect(screen.getByRole("menuitem", { name: "태그 추가" })).toBeVisible();
   });
 
+  it("shows AI actions only when enabled and runs an Ollama summary", async () => {
+    const runAi = vi.fn().mockResolvedValue("핵심 요약입니다.");
+    render(
+      <PreviewPanel
+        documentId="doc-1"
+        getPreviewApi={vi.fn().mockResolvedValue(preview)}
+        aiEnabled
+        aiProvider="ollama"
+        runAiApi={runAi}
+      />,
+    );
+
+    await screen.findByText(preview.fileName);
+    fireEvent.click(screen.getByRole("button", { name: "AI 요약" }));
+    expect(screen.getByRole("region", { name: "문서 AI" })).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "실행" }));
+
+    await screen.findByText("핵심 요약입니다.");
+    expect(runAi).toHaveBeenCalledWith("doc-1", null, true);
+  });
+
   it("explains that non-PDF original layout is unavailable without conversion", async () => {
     render(
       <PreviewPanel

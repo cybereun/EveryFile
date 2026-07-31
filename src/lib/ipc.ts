@@ -21,7 +21,30 @@ export const getSettings = () => invoke<AppSettings>("get_settings");
 export const saveSettings = (settings: AppSettings) =>
   invoke<AppSettings>("save_settings", { settings });
 
+export const getAiSecretStatus = (provider: string) =>
+  invoke<boolean>("get_ai_secret_status", { provider });
+
+export const saveAiSecret = (provider: string, secret: string | null) =>
+  invoke<void>("save_ai_secret", { provider, secret });
+
+export const runDocumentAi = (
+  documentId: string,
+  question: string | null,
+  remoteConsent: boolean,
+) =>
+  invoke<string>("run_document_ai", {
+    documentId,
+    question,
+    remoteConsent,
+  });
+
 export const listFolders = () => invoke<FolderRecord[]>("list_folders");
+
+export const registerFolder = () =>
+  invoke<FolderRecord | null>("register_folder");
+
+export const removeFolder = (folderId: string) =>
+  invoke<void>("remove_folder", { folderId });
 
 export const searchDocuments = (request: SearchRequest) =>
   invoke<SearchResponse>("search_documents", { request });

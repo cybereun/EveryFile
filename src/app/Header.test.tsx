@@ -81,4 +81,32 @@ describe("compact Header menu", () => {
       screen.queryByRole("group", { name: "추가 메뉴 / More actions" }),
     ).not.toBeInTheDocument();
   });
+
+  it("exposes independent panel controls", () => {
+    const onToggleLeftPanel = vi.fn();
+    const onToggleRightPanel = vi.fn();
+    render(
+      <Header
+        compact={false}
+        locale="ko"
+        tagline="EveryFile"
+        leftPanelOpen
+        rightPanelOpen={false}
+        onToggleLeftPanel={onToggleLeftPanel}
+        onToggleRightPanel={onToggleRightPanel}
+        onHome={() => undefined}
+        onLocaleChange={() => undefined}
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /Toggle left panel/ }),
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: /Toggle right panel/ }),
+    );
+
+    expect(onToggleLeftPanel).toHaveBeenCalledOnce();
+    expect(onToggleRightPanel).toHaveBeenCalledOnce();
+  });
 });

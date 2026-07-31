@@ -1,10 +1,12 @@
 use std::path::PathBuf;
 
+use rusqlite::{params, OptionalExtension};
 use serde::Serialize;
 use tauri::State;
 use tauri::{AppHandle, Manager};
 use tauri_plugin_dialog::DialogExt;
 
+use crate::ai::AiService;
 use crate::application::source_open::{
     open_indexed_location, open_indexed_source, read_indexed_pdf_cancellable, SourceOpenError,
 };
@@ -59,6 +61,95 @@ pub fn save_settings(
         .map_err(|error| error.to_string())?;
     *current_settings = saved;
     Ok(current_settings.clone())
+}
+
+fn validate_secret_provider(provider: &str) -> Result<(), CommandError> {
+    if matches!(provider, "gemini" | "openai") {
+        Ok(())
+    } else {
+        Err(CommandError::new(
+            "AI_PROVIDER_INVALID",
+            "API secrets are supported only for Gemini and OpenAI",
+        ))
+    }
+}
+
+#[tauri::command]
+pub fn get_ai_secret_status(
+    provider: String,
+    state: State<'_, AppState>,
+) -> Result<bool, CommandError> {
+    validate_secret_provider(&provider)?;
+    let present = state
+        .database
+        .connection()
+        .query_row(
+            "SELECT 1 FROM ai_secrets WHERE provider = ?1",
+            params![provider],
+            |_| Ok(true),
+        )
+        .optional()
+        .map_err(|error| CommandError::new("AI_SECRET_READ_FAILED", error.to_string()))?
+        .unwrap_or(false);
+    Ok(present)
+}
+
+#[tauri::command]
+pub fn save_ai_secret(
+    provider: String,
+    secret: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<(), CommandError> {
+    validate_secret_provider(&provider)?;
+    let normalized = secret.map(|value| value.trim().to_string());
+    if normalized.as_ref().is_some_and(|value| value.len() > 4096) {
+        return Err(CommandError::new(
+            "AI_SECRET_INVALID",
+            "API key is too long",
+        ));
+    }
+    let connection = state.database.connection();
+    match normalized.filter(|value| !value.is_empty()) {
+        Some(value) => {
+            connection
+                .execute(
+                    "INSERT INTO ai_secrets (provider, secret, updated_at)
+                     VALUES (?1, ?2, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+                     ON CONFLICT(provider) DO UPDATE SET
+                       secret = excluded.secret,
+                       updated_at = excluded.updated_at",
+                    params![provider, value],
+                )
+                .map_err(|error| CommandError::new("AI_SECRET_SAVE_FAILED", error.to_string()))?;
+        }
+        None => {
+            connection
+                .execute(
+                    "DELETE FROM ai_secrets WHERE provider = ?1",
+                    params![provider],
+                )
+                .map_err(|error| CommandError::new("AI_SECRET_DELETE_FAILED", error.to_string()))?;
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn run_document_ai(
+    document_id: String,
+    question: Option<String>,
+    remote_consent: bool,
+    state: State<'_, AppState>,
+) -> Result<String, CommandError> {
+    let settings = state
+        .settings
+        .read()
+        .map_err(|_| CommandError::new("SETTINGS_LOCK_FAILED", "settings are unavailable"))?
+        .clone();
+    AiService::new(state.database.clone())
+        .run(&document_id, question.as_deref(), &settings, remote_consent)
+        .await
+        .map_err(|error| CommandError::new("AI_REQUEST_FAILED", error.to_string()))
 }
 
 #[tauri::command]

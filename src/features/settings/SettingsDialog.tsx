@@ -2,23 +2,27 @@ import { useCallback, useEffect, useState } from "react";
 import { useModalDialog } from "../../components/useModalDialog";
 import {
   getSettings,
+  getAiSecretStatus,
   getDiagnosticsLogFolder,
   listParseErrors,
   resetApplicationData as resetApplicationDataCommand,
   retryParse,
+  saveAiSecret,
   saveSettings,
 } from "../../lib/ipc";
 import type { AppSettings, FolderRecord, ParseErrorRecord } from "../../lib/types";
 import { DiagnosticsSettings } from "./DiagnosticsSettings";
 import { GeneralSettings } from "./GeneralSettings";
+import { AiSettings } from "./AiSettings";
 import { SearchSettings } from "./SearchSettings";
 import { SystemSettings } from "./SystemSettings";
 
-type SettingsTab = "general" | "search" | "system" | "diagnostics";
+type SettingsTab = "general" | "search" | "ai" | "system" | "diagnostics";
 
 const tabs: { id: SettingsTab; label: string }[] = [
   { id: "general", label: "일반" },
   { id: "search", label: "검색" },
+  { id: "ai", label: "AI" },
   { id: "system", label: "시스템" },
   { id: "diagnostics", label: "진단" },
 ];
@@ -54,6 +58,8 @@ export function SettingsDialog({
   const [message, setMessage] = useState("");
   const [logFolder, setLogFolder] = useState<string>();
   const [resetConfirmationOpen, setResetConfirmationOpen] = useState(false);
+  const [hasSavedSecret, setHasSavedSecret] = useState(false);
+  const [secretDraft, setSecretDraft] = useState<string | null>(null);
   const close = useCallback(() => onClose(), [onClose]);
   const dialogRef = useModalDialog(open && !resetConfirmationOpen, close);
 
@@ -64,6 +70,18 @@ export function SettingsDialog({
     void loadParseErrors().then(setErrors).catch(() => setErrors([]));
     void loadDiagnosticsLogFolder().then(setLogFolder).catch(() => setLogFolder(undefined));
   }, [loadDiagnosticsLogFolder, loadParseErrors, loadSettings, open]);
+
+  useEffect(() => {
+    if (!open || !settings || (settings.aiProvider ?? "ollama") === "ollama") {
+      setHasSavedSecret(false);
+      setSecretDraft(null);
+      return;
+    }
+    setSecretDraft(null);
+    void getAiSecretStatus(settings.aiProvider ?? "gemini")
+      .then(setHasSavedSecret)
+      .catch(() => setHasSavedSecret(false));
+  }, [open, settings?.aiProvider]);
 
   if (!open) return null;
 
@@ -134,6 +152,14 @@ export function SettingsDialog({
             <GeneralSettings settings={settings} onChange={setSettings} />
           ) : activeTab === "search" ? (
             <SearchSettings settings={settings} folders={folders} onChange={setSettings} />
+          ) : activeTab === "ai" ? (
+            <AiSettings
+              settings={settings}
+              hasSavedSecret={hasSavedSecret}
+              secretDraft={secretDraft}
+              onChange={setSettings}
+              onSecretDraftChange={setSecretDraft}
+            />
           ) : activeTab === "system" ? (
             <SystemSettings
               settings={settings}
@@ -170,6 +196,14 @@ export function SettingsDialog({
                   startHidden: false,
                   minimizeToTray: false,
                 });
+                if (
+                  saved.aiProvider !== "ollama" &&
+                  secretDraft !== null
+                ) {
+                  await saveAiSecret(saved.aiProvider ?? "gemini", secretDraft);
+                  setHasSavedSecret(secretDraft.trim().length > 0);
+                  setSecretDraft(null);
+                }
                 setSettings(saved);
                 onSaved?.(saved);
                 setMessage("저장했습니다.");

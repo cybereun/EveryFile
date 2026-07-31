@@ -7,6 +7,8 @@ interface PreviewToolbarProps {
   onCopyPath: () => void;
   onCopyText: () => void;
   onFind: () => void;
+  onAiSummary?: () => void;
+  onAiQuestion?: () => void;
   onOpen: () => void;
   onOpenLocation: () => void;
   onSaveMarkdown: () => void;
@@ -18,6 +20,8 @@ export function PreviewToolbar({
   onCopyPath,
   onCopyText,
   onFind,
+  onAiSummary,
+  onAiQuestion,
   onOpen,
   onOpenLocation,
   onSaveMarkdown,
@@ -50,6 +54,12 @@ export function PreviewToolbar({
     <div className="preview-toolbar" aria-label="미리보기 도구" ref={root}>
       <button onClick={onOpen} type="button">파일 열기</button>
       <button onClick={onFind} type="button">찾기</button>
+      {onAiSummary && (
+        <button onClick={onAiSummary} type="button">AI 요약</button>
+      )}
+      {onAiQuestion && (
+        <button onClick={onAiQuestion} type="button">이 파일에 질문</button>
+      )}
       {bookmark}
       <div className="preview-more">
         <button

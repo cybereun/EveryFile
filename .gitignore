@@ -8,6 +8,13 @@ pnpm-debug.log*
 lerna-debug.log*
 
 node_modules
+.agents/
+.env*
+coverage/
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
 .worktrees/
 .superpowers/
 dist
@@ -23,6 +30,8 @@ dist-ssr
 !.vscode/extensions.json
 .idea
 .DS_Store
+Thumbs.db
+*.tmp
 *.suo
 *.ntvs*
 *.njsproj

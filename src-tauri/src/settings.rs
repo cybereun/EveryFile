@@ -113,6 +113,35 @@ fn validate(settings: &AppSettings) -> Result<(), SettingsError> {
             "indexing intensity must be low, balanced, or high".into(),
         ));
     }
+    if settings.math_ocr_enabled && !settings.ocr_enabled {
+        return Err(SettingsError::Invalid(
+            "math OCR requires local OCR to be enabled".into(),
+        ));
+    }
+    if !matches!(
+        settings.ai_provider.as_str(),
+        "ollama" | "gemini" | "openai"
+    ) {
+        return Err(SettingsError::Invalid(
+            "AI provider must be ollama, gemini, or openai".into(),
+        ));
+    }
+    if !settings.ai_temperature.is_finite() || !(0.0..=2.0).contains(&settings.ai_temperature) {
+        return Err(SettingsError::Invalid(
+            "AI temperature must be between 0 and 2".into(),
+        ));
+    }
+    if !(128..=32768).contains(&settings.ai_max_tokens) {
+        return Err(SettingsError::Invalid(
+            "AI max tokens must be between 128 and 32768".into(),
+        ));
+    }
+    if settings.ai_enabled && (settings.ai_model.trim().is_empty() || settings.ai_model.len() > 200)
+    {
+        return Err(SettingsError::Invalid(
+            "AI model must contain 1-200 characters".into(),
+        ));
+    }
     if settings.excluded_path_patterns.len() > 100
         || settings.excluded_path_patterns.iter().any(|pattern| {
             pattern.trim().is_empty()

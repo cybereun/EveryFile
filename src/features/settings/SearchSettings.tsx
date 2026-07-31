@@ -6,15 +6,71 @@ interface SearchSettingsProps {
   onChange: (settings: AppSettings) => void;
 }
 
-export function SearchSettings({ settings, folders, onChange }: SearchSettingsProps) {
+export function SearchSettings({
+  settings,
+  folders,
+  onChange,
+}: SearchSettingsProps) {
+  const ocrEnabled = settings.ocrEnabled ?? false;
+  const mathOcrEnabled = settings.mathOcrEnabled ?? false;
+
   return (
     <div className="settings-grid">
+      <section className="settings-card" aria-labelledby="ocr-heading">
+        <div className="settings-toggle-row">
+          <div>
+            <h3 id="ocr-heading">로컬 OCR</h3>
+            <p>
+              스캔 PDF와 이미지의 글자를 PC 안에서 인식합니다. 문서와 이미지는
+              외부 서버로 전송되지 않습니다.
+            </p>
+          </div>
+          <input
+            aria-label="로컬 OCR 활성화"
+            type="checkbox"
+            checked={ocrEnabled}
+            onChange={(event) =>
+              onChange({
+                ...settings,
+                ocrEnabled: event.target.checked,
+                mathOcrEnabled: event.target.checked ? mathOcrEnabled : false,
+              })
+            }
+          />
+        </div>
+        <p className="settings-help">
+          지원 이미지: JPG, PNG, WebP, BMP, TIFF. 일반 PDF에 정상 텍스트가
+          있으면 기존 텍스트를 사용하고 OCR을 건너뜁니다.
+        </p>
+        <div className="settings-toggle-row">
+          <div>
+            <strong>수학 OCR</strong>
+            <p>
+              수식이 포함된 PDF를 위한 별도 모델입니다. 모델이 크며 CPU 사용량과
+              처리 시간이 크게 늘어납니다.
+            </p>
+          </div>
+          <input
+            aria-label="수학 OCR 활성화"
+            type="checkbox"
+            checked={mathOcrEnabled}
+            disabled={!ocrEnabled}
+            onChange={(event) =>
+              onChange({ ...settings, mathOcrEnabled: event.target.checked })
+            }
+          />
+        </div>
+      </section>
+
       <label>
         검색 히스토리 보관 기간
         <select
           value={settings.historyRetentionDays}
           onChange={(event) =>
-            onChange({ ...settings, historyRetentionDays: Number(event.target.value) })
+            onChange({
+              ...settings,
+              historyRetentionDays: Number(event.target.value),
+            })
           }
         >
           <option value={30}>30일</option>
@@ -33,7 +89,8 @@ export function SearchSettings({ settings, folders, onChange }: SearchSettingsPr
           onChange={(event) =>
             onChange({
               ...settings,
-              maxFileSizeBytes: Math.max(1, Number(event.target.value)) * 1_048_576,
+              maxFileSizeBytes:
+                Math.max(1, Number(event.target.value)) * 1_048_576,
             })
           }
         />
@@ -69,13 +126,6 @@ export function SearchSettings({ settings, folders, onChange }: SearchSettingsPr
         />
         <small id="exclude-path-help">한 줄에 하나씩 입력합니다.</small>
       </label>
-      <div className="settings-disabled-row" aria-disabled="true">
-        <div>
-          <strong>파일 버전 그룹화</strong>
-          <p>Phase 2에서 제공됩니다.</p>
-        </div>
-        <input aria-label="파일 버전 그룹화" type="checkbox" disabled />
-      </div>
     </div>
   );
 }

@@ -7,6 +7,10 @@ interface HeaderProps {
   locale: Locale;
   tagline: string;
   onAddFolder?: () => void;
+  leftPanelOpen?: boolean;
+  rightPanelOpen?: boolean;
+  onToggleLeftPanel?: () => void;
+  onToggleRightPanel?: () => void;
   onHome: () => void;
   onLocaleChange: (locale: Locale) => void;
   onSettings?: () => void;
@@ -48,6 +52,15 @@ function SettingsIcon() {
   );
 }
 
+function PanelIcon({ side }: { side: "left" | "right" }) {
+  return (
+    <svg {...iconProps}>
+      <rect x="3" y="4" width="18" height="16" rx="2" />
+      <path d={side === "left" ? "M9 4v16" : "M15 4v16"} />
+    </svg>
+  );
+}
+
 function LanguageControl({
   locale,
   onLocaleChange,
@@ -78,6 +91,10 @@ export function Header({
   locale,
   tagline,
   onAddFolder,
+  leftPanelOpen = true,
+  rightPanelOpen = true,
+  onToggleLeftPanel = () => undefined,
+  onToggleRightPanel = () => undefined,
   onHome,
   onLocaleChange,
   onSettings,
@@ -164,6 +181,18 @@ export function Header({
                 aria-label="추가 메뉴 / More actions"
               >
                 <IconButton
+                  label={`${leftPanelOpen ? "왼쪽 패널 닫기" : "왼쪽 패널 열기"} / Toggle left panel`}
+                  aria-pressed={leftPanelOpen}
+                  onClick={() => runMenuAction(onToggleLeftPanel)}
+                  icon={<PanelIcon side="left" />}
+                />
+                <IconButton
+                  label={`${rightPanelOpen ? "오른쪽 패널 닫기" : "오른쪽 패널 열기"} / Toggle right panel`}
+                  aria-pressed={rightPanelOpen}
+                  onClick={() => runMenuAction(onToggleRightPanel)}
+                  icon={<PanelIcon side="right" />}
+                />
+                <IconButton
                   label="통계 / Statistics"
                   disabled={!onStatistics}
                   onClick={() => runMenuAction(onStatistics)}
@@ -192,6 +221,18 @@ export function Header({
           </div>
         ) : (
           <>
+            <IconButton
+              label={`${leftPanelOpen ? "왼쪽 패널 닫기" : "왼쪽 패널 열기"} / Toggle left panel`}
+              aria-pressed={leftPanelOpen}
+              onClick={onToggleLeftPanel}
+              icon={<PanelIcon side="left" />}
+            />
+            <IconButton
+              label={`${rightPanelOpen ? "오른쪽 패널 닫기" : "오른쪽 패널 열기"} / Toggle right panel`}
+              aria-pressed={rightPanelOpen}
+              onClick={onToggleRightPanel}
+              icon={<PanelIcon side="right" />}
+            />
             <IconButton
               label="통계 / Statistics"
               disabled={!onStatistics}

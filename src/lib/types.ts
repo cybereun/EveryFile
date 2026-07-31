@@ -156,6 +156,14 @@ export interface AppSettings {
   dateDisplay?: "relative" | "absolute";
   excludedPathPatterns?: string[];
   indexingIntensity?: "low" | "balanced" | "high";
+  ocrEnabled?: boolean;
+  mathOcrEnabled?: boolean;
+  aiEnabled?: boolean;
+  aiProvider?: "ollama" | "gemini" | "openai";
+  aiBaseUrl?: string;
+  aiModel?: string;
+  aiTemperature?: number;
+  aiMaxTokens?: number;
 }
 
 export interface StatisticsBucket {
