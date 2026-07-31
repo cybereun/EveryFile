@@ -5,6 +5,7 @@ use serde::Serialize;
 use tauri::State;
 use tauri::{AppHandle, Manager};
 use tauri_plugin_dialog::DialogExt;
+use zeroize::Zeroizing;
 
 use crate::ai::AiService;
 use crate::application::source_open::{
@@ -111,6 +112,7 @@ pub fn save_ai_secret(
     let connection = state.database.connection();
     match normalized.filter(|value| !value.is_empty()) {
         Some(value) => {
+            let value = Zeroizing::new(value);
             connection
                 .execute(
                     "INSERT INTO ai_secrets (provider, secret, updated_at)
@@ -118,7 +120,7 @@ pub fn save_ai_secret(
                      ON CONFLICT(provider) DO UPDATE SET
                        secret = excluded.secret,
                        updated_at = excluded.updated_at",
-                    params![provider, value],
+                    params![provider, value.as_str()],
                 )
                 .map_err(|error| CommandError::new("AI_SECRET_SAVE_FAILED", error.to_string()))?;
         }
@@ -136,6 +138,7 @@ pub fn save_ai_secret(
 
 #[tauri::command]
 pub async fn run_document_ai(
+    request_id: String,
     document_id: String,
     question: Option<String>,
     remote_consent: bool,
@@ -146,10 +149,30 @@ pub async fn run_document_ai(
         .read()
         .map_err(|_| CommandError::new("SETTINGS_LOCK_FAILED", "settings are unavailable"))?
         .clone();
-    AiService::new(state.database.clone())
-        .run(&document_id, question.as_deref(), &settings, remote_consent)
+    AiService::new(state.database.clone(), &state.ai_requests)
+        .run(
+            &request_id,
+            &document_id,
+            question.as_deref(),
+            &settings,
+            remote_consent,
+        )
         .await
-        .map_err(|error| CommandError::new("AI_REQUEST_FAILED", error.to_string()))
+        .map_err(|error| CommandError::new(error.code(), error.to_string()))
+}
+
+#[tauri::command]
+pub fn cancel_document_ai(
+    request_id: String,
+    state: State<'_, AppState>,
+) -> Result<bool, CommandError> {
+    if request_id.is_empty() || request_id.len() > 100 {
+        return Err(CommandError::new(
+            "AI_REQUEST_INVALID",
+            "AI request id is invalid",
+        ));
+    }
+    Ok(state.ai_requests.cancel(&request_id))
 }
 
 #[tauri::command]

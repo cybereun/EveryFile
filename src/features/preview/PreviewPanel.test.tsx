@@ -172,7 +172,46 @@ describe("secure document preview", () => {
     fireEvent.click(screen.getByRole("button", { name: "실행" }));
 
     await screen.findByText("핵심 요약입니다.");
-    expect(runAi).toHaveBeenCalledWith("doc-1", null, true);
+    expect(runAi).toHaveBeenCalledWith(
+      expect.any(String),
+      "doc-1",
+      null,
+      true,
+    );
+  });
+
+  it("requires remote consent and cancels an active document AI request", async () => {
+    const runAi = vi.fn(
+      (
+        _requestId: string,
+        _documentId: string,
+        _question: string | null,
+        _remoteConsent: boolean,
+      ) => new Promise<string>(() => undefined),
+    );
+    const cancelAi = vi.fn().mockResolvedValue(true);
+    render(
+      <PreviewPanel
+        cancelAiApi={cancelAi}
+        documentId="doc-1"
+        getPreviewApi={vi.fn().mockResolvedValue(preview)}
+        aiEnabled
+        aiProvider="openai"
+        runAiApi={runAi}
+      />,
+    );
+
+    await screen.findByText(preview.fileName);
+    fireEvent.click(screen.getByRole("button", { name: "AI 요약" }));
+    const execute = screen.getByRole("button", { name: "실행" });
+    expect(execute).toBeDisabled();
+    fireEvent.click(screen.getByRole("checkbox"));
+    fireEvent.click(execute);
+    await waitFor(() => expect(runAi).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole("button", { name: "취소" }));
+    await waitFor(() =>
+      expect(cancelAi).toHaveBeenCalledWith(runAi.mock.calls[0][0]),
+    );
   });
 
   it("explains that non-PDF original layout is unavailable without conversion", async () => {

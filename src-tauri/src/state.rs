@@ -4,6 +4,7 @@ use std::sync::{
     Arc, RwLock,
 };
 
+use crate::ai::AiRequestRegistry;
 use crate::folders::repository::FolderRepository;
 use crate::indexing::{IndexCoordinator, IndexWatcher};
 use crate::infrastructure::database::Database;
@@ -20,6 +21,7 @@ pub struct AppState {
     pub indexing: Arc<IndexCoordinator>,
     pub searches: SearchRegistry,
     pub pdf_reads: PdfReadRegistry,
+    pub ai_requests: AiRequestRegistry,
     pub watchers: tokio::sync::Mutex<HashMap<String, IndexWatcher>>,
 }
 
@@ -34,6 +36,7 @@ impl AppState {
             indexing,
             searches,
             pdf_reads: PdfReadRegistry::default(),
+            ai_requests: AiRequestRegistry::default(),
             watchers: tokio::sync::Mutex::new(HashMap::new()),
         }
     }
@@ -90,6 +93,7 @@ impl AppState {
         self.database_ready.store(false, Ordering::Release);
         self.searches.cancel_all();
         self.pdf_reads.cancel_all();
+        self.ai_requests.cancel_all();
         self.watchers.lock().await.clear();
         self.indexing.shutdown_all().await;
         self.database.close()?;

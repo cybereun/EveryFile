@@ -8,6 +8,7 @@ import {
   cancelSearch,
   cancelIndexing,
   cancelPdfRead,
+  cancelDocumentAi,
   createTag,
   getPdfBytes,
   getIndexStatus,
@@ -69,7 +70,8 @@ describe("IPC wrappers", () => {
     await saveSettings(settings);
     await getAiSecretStatus("openai");
     await saveAiSecret("openai", "secret");
-    await runDocumentAi("document-1", "질문", true);
+    await runDocumentAi("request-1", "document-1", "질문", true);
+    await cancelDocumentAi("request-1");
     await listFolders();
     await registerFolder();
     await removeFolder("folder-1");
@@ -98,8 +100,14 @@ describe("IPC wrappers", () => {
       ["save_ai_secret", { provider: "openai", secret: "secret" }],
       [
         "run_document_ai",
-        { documentId: "document-1", question: "질문", remoteConsent: true },
+        {
+          requestId: "request-1",
+          documentId: "document-1",
+          question: "질문",
+          remoteConsent: true,
+        },
       ],
+      ["cancel_document_ai", { requestId: "request-1" }],
       ["list_folders"],
       ["register_folder"],
       ["remove_folder", { folderId: "folder-1" }],

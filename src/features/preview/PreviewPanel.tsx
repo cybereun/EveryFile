@@ -12,11 +12,13 @@ import {
   saveMarkdown,
   exportResults,
   runDocumentAi,
+  cancelDocumentAi,
 } from "../../lib/ipc";
 import type { PreviewBlock, PreviewDocument } from "../../lib/types";
 import { DocumentTextView } from "./DocumentTextView";
 import { PdfLayoutView, type PdfLoader } from "./PdfLayoutView";
 import { PreviewToolbar } from "./PreviewToolbar";
+import { DocumentAiPanel } from "./DocumentAiPanel";
 
 function textFromBlocks(blocks: PreviewBlock[]): string {
   return blocks
@@ -49,6 +51,7 @@ interface PreviewPanelProps {
   aiEnabled?: boolean;
   aiProvider?: "ollama" | "gemini" | "openai";
   runAiApi?: typeof runDocumentAi;
+  cancelAiApi?: typeof cancelDocumentAi;
 }
 
 export function PreviewPanel({
@@ -65,6 +68,7 @@ export function PreviewPanel({
   aiEnabled = false,
   aiProvider = "ollama",
   runAiApi = runDocumentAi,
+  cancelAiApi = cancelDocumentAi,
 }: PreviewPanelProps) {
   const [preview, setPreview] = useState<PreviewDocument | null>(null);
   const [tab, setTab] = useState<"text" | "layout">("text");
@@ -73,10 +77,6 @@ export function PreviewPanel({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [aiMode, setAiMode] = useState<"summary" | "question" | null>(null);
-  const [aiQuestion, setAiQuestion] = useState("");
-  const [aiConsent, setAiConsent] = useState(false);
-  const [aiAnswer, setAiAnswer] = useState("");
-  const [aiLoading, setAiLoading] = useState(false);
   const selectedDocumentId = useRef(documentId);
   selectedDocumentId.current = documentId;
   const plainText = useMemo(
@@ -95,8 +95,6 @@ export function PreviewPanel({
     setError(null);
     setTab("text");
     setAiMode(null);
-    setAiAnswer("");
-    setAiConsent(false);
     void getPreviewApi(documentId)
       .then((result) => {
         if (active) setPreview(result);
@@ -133,26 +131,6 @@ export function PreviewPanel({
       }
       await navigator.clipboard.writeText(value);
     });
-
-  const runAi = async (ownerDocumentId: string) => {
-    setAiLoading(true);
-    setAiAnswer("");
-    setError(null);
-    try {
-      const answer = await runAiApi(
-        ownerDocumentId,
-        aiMode === "question" ? aiQuestion : null,
-        aiProvider === "ollama" || aiConsent,
-      );
-      if (selectedDocumentId.current === ownerDocumentId) setAiAnswer(answer);
-    } catch (caught) {
-      if (selectedDocumentId.current === ownerDocumentId) {
-        setError(caught instanceof Error ? caught.message : "AI 요청에 실패했습니다.");
-      }
-    } finally {
-      if (selectedDocumentId.current === ownerDocumentId) setAiLoading(false);
-    }
-  };
 
   if (!documentId) {
     return (
@@ -206,7 +184,6 @@ export function PreviewPanel({
           aiEnabled
             ? () => {
                 setAiMode("summary");
-                setAiAnswer("");
               }
             : undefined
         }
@@ -214,7 +191,6 @@ export function PreviewPanel({
           aiEnabled
             ? () => {
                 setAiMode("question");
-                setAiAnswer("");
               }
             : undefined
         }
@@ -236,46 +212,14 @@ export function PreviewPanel({
         }
       />
       {aiEnabled && aiMode && (
-        <section className="document-ai-panel" aria-label="문서 AI">
-          <header>
-            <strong>{aiMode === "summary" ? "AI 요약" : "이 파일에 대한 질문"}</strong>
-            <button type="button" onClick={() => setAiMode(null)} aria-label="AI 패널 닫기">
-              ×
-            </button>
-          </header>
-          {aiMode === "question" && (
-            <textarea
-              aria-label="문서에 대한 질문"
-              placeholder="이 문서에 대해 무엇을 알고 싶나요?"
-              value={aiQuestion}
-              onChange={(event) => setAiQuestion(event.target.value)}
-            />
-          )}
-          {aiProvider !== "ollama" && (
-            <label className="ai-consent">
-              <input
-                type="checkbox"
-                checked={aiConsent}
-                onChange={(event) => setAiConsent(event.target.checked)}
-              />
-              선택한 문서 내용 일부를 {aiProvider === "gemini" ? "Google Gemini" : "OpenAI"}로
-              전송하는 데 동의합니다.
-            </label>
-          )}
-          <button
-            type="button"
-            className="primary-button"
-            disabled={
-              aiLoading ||
-              (aiMode === "question" && !aiQuestion.trim()) ||
-              (aiProvider !== "ollama" && !aiConsent)
-            }
-            onClick={() => void runAi(preview.documentId)}
-          >
-            {aiLoading ? "생성 중…" : "실행"}
-          </button>
-          {aiAnswer && <div className="ai-answer" aria-live="polite">{aiAnswer}</div>}
-        </section>
+        <DocumentAiPanel
+          cancelApi={cancelAiApi}
+          documentId={preview.documentId}
+          mode={aiMode}
+          onClose={() => setAiMode(null)}
+          provider={aiProvider}
+          runApi={runAiApi}
+        />
       )}
       <TagEditor
         key={preview.documentId}

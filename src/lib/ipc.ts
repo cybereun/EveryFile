@@ -28,15 +28,20 @@ export const saveAiSecret = (provider: string, secret: string | null) =>
   invoke<void>("save_ai_secret", { provider, secret });
 
 export const runDocumentAi = (
+  requestId: string,
   documentId: string,
   question: string | null,
   remoteConsent: boolean,
 ) =>
   invoke<string>("run_document_ai", {
+    requestId,
     documentId,
     question,
     remoteConsent,
   });
+
+export const cancelDocumentAi = (requestId: string) =>
+  invoke<boolean>("cancel_document_ai", { requestId });
 
 export const listFolders = () => invoke<FolderRecord[]>("list_folders");
 

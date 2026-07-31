@@ -70,16 +70,16 @@ PDF, JPG, PNG, WebP, BMP, and TIFF fixtures; verify skip/recognition behavior.
 **Independent Test**: AI controls are absent while disabled; each provider
 passes a mock stream contract, consent, summary/question, and cancellation test.
 
-- [ ] T035 [P] [US4] Add AI settings/request migrations in `src-tauri/migrations/0009_ai.sql`
-- [ ] T036 [P] [US4] Add protected provider-secret storage tests in `src-tauri/tests/ai_secrets.rs`
-- [ ] T037 [P] [US4] Add provider contract fixtures/tests in `src-tauri/tests/ai_providers.rs`
-- [ ] T038 [US4] Implement endpoint policy, consent, cancellation, and secret storage in `src-tauri/src/ai/`
-- [ ] T039 [US4] Implement Ollama native chat/model adapter in `src-tauri/src/ai/ollama.rs`
-- [ ] T040 [US4] Implement Gemini streaming adapter in `src-tauri/src/ai/gemini.rs`
-- [ ] T041 [US4] Implement OpenAI streaming Responses adapter in `src-tauri/src/ai/openai.rs`
-- [ ] T042 [US4] Implement bounded local chunk retrieval and cited prompts in `src-tauri/src/ai/retrieval.rs`
+- [x] T035 [P] [US4] Add AI settings/request migrations in `src-tauri/migrations/0009_ai.sql`
+- [x] T036 [P] [US4] Add protected provider-secret storage tests in `src-tauri/tests/ai_secrets.rs`
+- [x] T037 [P] [US4] Add provider contract fixtures/tests in `src-tauri/tests/ai_providers.rs`
+- [x] T038 [US4] Implement endpoint policy, consent, cancellation, and secret storage in `src-tauri/src/ai/`
+- [x] T039 [US4] Implement Ollama native chat/model adapter in `src-tauri/src/ai/ollama.rs`
+- [x] T040 [US4] Implement Gemini streaming adapter in `src-tauri/src/ai/gemini.rs`
+- [x] T041 [US4] Implement OpenAI streaming Responses adapter in `src-tauri/src/ai/openai.rs`
+- [x] T042 [US4] Implement bounded local chunk retrieval and cited prompts in `src-tauri/src/ai/retrieval.rs`
 - [x] T043 [US4] Add AI activation/provider/connection settings in `src/features/settings/AiSettings.tsx`
-- [ ] T044 [US4] Add cancellable summary and document-question UI in `src/features/preview/DocumentAiPanel.tsx`
+- [x] T044 [US4] Add cancellable summary and document-question UI in `src/features/preview/DocumentAiPanel.tsx`
 - [ ] T045 [US4] Pass disabled/local/remote packaged AI acceptance in `tests/e2e/ai.spec.ts`
 
 ## Phase 7: User Story 5 - Understand and Manage the Library (P2)

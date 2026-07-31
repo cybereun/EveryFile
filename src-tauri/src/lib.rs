@@ -123,6 +123,7 @@ pub fn run_with_reset_completion(reset_completion: Option<diagnostics::ResetComp
             application::commands::get_ai_secret_status,
             application::commands::save_ai_secret,
             application::commands::run_document_ai,
+            application::commands::cancel_document_ai,
             application::commands::register_folder,
             application::commands::remove_folder,
             application::commands::list_folders,
