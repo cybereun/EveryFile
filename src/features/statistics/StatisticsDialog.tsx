@@ -24,6 +24,7 @@ export interface StatisticsDialogProps {
   clearHistory?: () => Promise<void>;
   onApplyFilter?: (filter: StatisticsSearchFilter) => void;
   onSearchHistory?: (query: string) => void;
+  registeredFolderIds?: string[];
 }
 
 function decimal(value: string) {
@@ -107,6 +108,7 @@ export function StatisticsDialog({
   clearHistory,
   onApplyFilter,
   onSearchHistory,
+  registeredFolderIds,
 }: StatisticsDialogProps) {
   const [activeTab, setActiveTab] = useState<StatisticsTab>("documents");
   const [statistics, setStatistics] = useState<DocumentStatistics | null>(null);
@@ -219,7 +221,13 @@ export function StatisticsDialog({
                   <table className="data-table" aria-label="폴더별 문서 수">
                     <thead><tr><th scope="col">폴더</th><th scope="col">문서 수</th></tr></thead>
                     <tbody>
-                      {statistics.byFolder.map((bucket) => (
+                      {statistics.byFolder
+                        .filter(
+                          (bucket) =>
+                            !registeredFolderIds ||
+                            registeredFolderIds.includes(bucket.id),
+                        )
+                        .map((bucket) => (
                         <tr key={bucket.id}>
                           <th scope="row">
                             <button
@@ -235,7 +243,7 @@ export function StatisticsDialog({
                           </th>
                           <td>{formatInteger(bucket.count)}</td>
                         </tr>
-                      ))}
+                        ))}
                     </tbody>
                   </table>
                 </section>

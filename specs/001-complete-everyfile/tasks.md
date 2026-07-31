@@ -87,11 +87,11 @@ passes a mock stream contract, consent, summary/question, and cancellation test.
 **Independent Test**: Create normal/private history, bookmark, note, and tags;
 restart, filter statistics, export, reset, and compare source fixture hashes.
 
-- [ ] T046 [P] [US5] Audit and expand production statistics/history tests in `src/features/statistics/StatisticsDialog.test.tsx`
-- [ ] T047 [P] [US5] Add restart persistence/cascade fixtures in `src-tauri/tests/library_actions.rs`
-- [ ] T048 [US5] Connect statistics filters and history queries to production folder state in `src/app/DesktopApp.tsx`
-- [ ] T049 [US5] Complete accessible charts/tables, deletion, and private-search states in `src/features/statistics/`
-- [ ] T050 [US5] Verify CSV/XLSX/Markdown exports and source identity locks in `src-tauri/tests/statistics_and_export.rs`
+- [x] T046 [P] [US5] Audit and expand production statistics/history tests in `src/features/statistics/StatisticsDialog.test.tsx`
+- [x] T047 [P] [US5] Add restart persistence/cascade fixtures in `src-tauri/tests/library_actions.rs`
+- [x] T048 [US5] Connect statistics filters and history queries to production folder state in `src/app/App.tsx`
+- [x] T049 [US5] Complete accessible charts/tables, deletion, and private-search states in `src/features/statistics/`
+- [x] T050 [US5] Verify CSV/XLSX/Markdown exports and source identity locks in `src-tauri/tests/statistics_and_export.rs`
 - [ ] T051 [US5] Pass packaged persistence/private/reset/source-integrity acceptance in `tests/e2e/library-management.spec.ts`
 
 ## Phase 8: User Story 6 - Install or Run Portably (P1)

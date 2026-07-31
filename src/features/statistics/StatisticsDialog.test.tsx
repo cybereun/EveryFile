@@ -134,4 +134,46 @@ describe("StatisticsDialog", () => {
     expect(await screen.findByText("저장된 검색 히스토리가 없습니다.")).toBeVisible();
     expect(screen.queryByText("자주 검색")).not.toBeInTheDocument();
   });
+
+  it("shows the private-search policy and excludes stale folder buckets", async () => {
+    render(
+      <StatisticsDialog
+        open
+        onClose={() => undefined}
+        loadStatistics={async () => ({
+          ...statistics,
+          byFolder: [
+            ...statistics.byFolder,
+            { id: "removed", label: "Removed", count: "9" },
+          ],
+        })}
+        loadHistory={async () => []}
+        registeredFolderIds={["documents"]}
+      />,
+    );
+
+    expect(await screen.findByText("Documents")).toBeVisible();
+    expect(screen.queryByText("Removed")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: "검색 히스토리" }));
+    expect(
+      await screen.findByText(/비공개 검색은 기록에 저장되지 않으며/),
+    ).toBeVisible();
+  });
+
+  it("supports arrow-key tab navigation", async () => {
+    render(
+      <StatisticsDialog
+        open
+        onClose={() => undefined}
+        loadStatistics={async () => statistics}
+        loadHistory={async () => []}
+      />,
+    );
+    const documents = await screen.findByRole("tab", { name: "문서 통계" });
+    fireEvent.keyDown(documents, { key: "ArrowRight" });
+    expect(screen.getByRole("tab", { name: "검색 히스토리" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+  });
 });

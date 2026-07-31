@@ -458,6 +458,7 @@ export function App({
       />
       <StatisticsDialog
         open={statisticsOpen}
+        registeredFolderIds={folders.map((folder) => folder.id)}
         onClose={() => setStatisticsOpen(false)}
         onApplyFilter={(filter) => {
           setStatisticsFilter(filter);

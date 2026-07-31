@@ -57,6 +57,9 @@ export function SearchHistoryTab({
 
   return (
     <>
+      <p className="statistics-privacy-note" role="note">
+        비공개 검색은 기록에 저장되지 않으며 통계에도 포함되지 않습니다.
+      </p>
       {frequent.length > 0 && (
         <section className="frequent-searches" aria-labelledby="frequent-searches-heading">
           <h3 id="frequent-searches-heading">자주 검색</h3>
@@ -80,9 +83,14 @@ export function SearchHistoryTab({
             <button
               type="button"
               onClick={async () => {
-                await clearHistory();
-                setHistory([]);
-                setFrequent([]);
+                setMessage("");
+                try {
+                  await clearHistory();
+                  setHistory([]);
+                  setFrequent([]);
+                } catch {
+                  setMessage("검색 히스토리를 삭제하지 못했습니다.");
+                }
               }}
             >
               전체 삭제
@@ -121,10 +129,15 @@ export function SearchHistoryTab({
                   type="button"
                   aria-label={`${record.query} 기록 삭제`}
                   onClick={async () => {
-                    await deleteHistory(record.id);
-                    setHistory((records) =>
-                      records.filter((item) => item.id !== record.id),
-                    );
+                    setMessage("");
+                    try {
+                      await deleteHistory(record.id);
+                      setHistory((records) =>
+                        records.filter((item) => item.id !== record.id),
+                      );
+                    } catch {
+                      setMessage("검색 기록을 삭제하지 못했습니다.");
+                    }
                   }}
                 >
                   삭제
@@ -138,6 +151,7 @@ export function SearchHistoryTab({
       ) : (
         <p role="status">최근 검색 기록이 없습니다.</p>
       )}
+      {message && <p role="alert">{message}</p>}
     </>
   );
 }

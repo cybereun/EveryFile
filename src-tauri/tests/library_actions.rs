@@ -67,6 +67,73 @@ fn document_tags_are_replaced_atomically_and_cascade_with_documents() {
 }
 
 #[test]
+fn bookmarks_notes_and_tags_survive_restart_then_cascade_with_the_folder() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("restart.db");
+    let database = Arc::new(
+        Database::open(&path, &SecretKey::from_bytes(Zeroizing::new([71_u8; 32]))).unwrap(),
+    );
+    database.migrate().unwrap();
+    database
+        .connection()
+        .execute_batch(
+            "INSERT INTO folders
+             (id, canonical_path, display_name, created_at, enabled)
+             VALUES ('folder-restart', 'C:\\restart', 'Restart', 'now', 1);
+             INSERT INTO documents
+             (id, folder_id, canonical_path, file_name, extension, size_bytes,
+              modified_at, parse_state)
+             VALUES ('doc-restart', 'folder-restart', 'C:\\restart\\report.pdf',
+                     'report.pdf', 'pdf', 8, 'now', 'parsed');
+             INSERT INTO document_content
+             (document_id, title, body, markdown, blocks_json, warnings_json)
+             VALUES ('doc-restart', 'Restart', 'Body', 'Body', '[]', '[]');",
+        )
+        .unwrap();
+    let library = LibraryRepository::new(Arc::clone(&database));
+    library
+        .set_bookmark("doc-restart", "재시작 후에도 남는 메모")
+        .unwrap();
+    let tag = library.create_tag("Restart", "terracotta").unwrap();
+    library
+        .set_document_tags("doc-restart", std::slice::from_ref(&tag.id))
+        .unwrap();
+    drop(library);
+    drop(database);
+
+    let reopened = Arc::new(
+        Database::open(&path, &SecretKey::from_bytes(Zeroizing::new([71_u8; 32]))).unwrap(),
+    );
+    reopened.migrate().unwrap();
+    let library = LibraryRepository::new(Arc::clone(&reopened));
+    assert_eq!(
+        library.list_bookmarks().unwrap()[0].note,
+        "재시작 후에도 남는 메모"
+    );
+    assert_eq!(
+        library.get_preview("doc-restart").unwrap().tags[0].name,
+        "Restart"
+    );
+
+    reopened
+        .connection()
+        .execute("DELETE FROM folders WHERE id = 'folder-restart'", [])
+        .unwrap();
+    let remaining: i64 = reopened
+        .connection()
+        .query_row(
+            "SELECT
+               (SELECT COUNT(*) FROM documents) +
+               (SELECT COUNT(*) FROM bookmarks) +
+               (SELECT COUNT(*) FROM document_tags)",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(remaining, 0);
+}
+
+#[test]
 fn preview_normalizes_untrusted_parser_blocks_and_warnings() {
     let fixture = Fixture::new();
     fixture.seed_document("doc-1", "unsafe.pdf");

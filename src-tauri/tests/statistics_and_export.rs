@@ -176,6 +176,42 @@ fn exports_quote_csv_preserve_xlsx_numbers_and_use_atomic_sibling_writes() {
 }
 
 #[test]
+fn exporting_results_never_changes_the_indexed_source_fixture() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("source.txt");
+    let original = b"immutable source document\n";
+    fs::write(&source, original).unwrap();
+    let request = ExportRequest::SearchResults {
+        hits: vec![SearchHit {
+            document_id: "source-lock".into(),
+            file_name: "source.txt".into(),
+            path: source.to_string_lossy().into_owned(),
+            extension: "txt".into(),
+            size_bytes: original.len() as u64,
+            modified_at: "2026-07-31T00:00:00Z".into(),
+            snippet: Some("immutable source document".into()),
+            score: 1.0,
+            match_kind: SearchMatchKind::Content,
+        }],
+    };
+
+    export_to_destination(
+        &request,
+        ExportFormat::Csv,
+        Some(&temp.path().join("results.csv")),
+    )
+    .unwrap();
+    export_to_destination(
+        &request,
+        ExportFormat::Xlsx,
+        Some(&temp.path().join("results.xlsx")),
+    )
+    .unwrap();
+
+    assert_eq!(fs::read(source).unwrap(), original);
+}
+
+#[test]
 fn csv_escapes_formulae_after_leading_whitespace_and_control_characters() {
     let temp = tempfile::tempdir().unwrap();
     let request = ExportRequest::SearchResults {
