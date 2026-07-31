@@ -1,5 +1,11 @@
 import { execFileSync, spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  rmSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
@@ -21,7 +27,11 @@ afterAll(() => {
     temporary &&
     path.resolve(temporary).startsWith(path.resolve(tmpdir()) + path.sep)
   ) {
-    rmSync(temporary, { recursive: true, force: true });
+    try {
+      rmSync(temporary, { recursive: true, force: true, maxRetries: 5, retryDelay: 500 });
+    } catch {
+      // Windows may briefly retain WebView2 files after the smoke process exits.
+    }
   }
 });
 
@@ -47,18 +57,27 @@ async function smoke(executable: string, profile: string) {
   await new Promise((resolve) => setTimeout(resolve, 8_000));
   expect(child.exitCode).toBeNull();
   child.kill();
+  await new Promise<void>((resolve) => {
+    if (child.exitCode !== null) {
+      resolve();
+      return;
+    }
+    child.once("exit", () => resolve());
+    setTimeout(resolve, 10_000);
+  });
 }
 
 describe.skipIf(!enabled)("EveryFile clean release distributions", () => {
   it("runs the portable distribution with both local sidecars", async () => {
     expect(existsSync(portableZip)).toBe(true);
     const destination = path.join(temporary, "portable");
+    mkdirSync(destination, { recursive: true });
     execFileSync(
       "powershell",
       [
         "-NoProfile",
         "-Command",
-        "Expand-Archive -LiteralPath $args[0] -DestinationPath $args[1] -Force",
+        "& { param($archive, $destination) Expand-Archive -LiteralPath $archive -DestinationPath $destination -Force }",
         portableZip,
         destination,
       ],
@@ -69,7 +88,7 @@ describe.skipIf(!enabled)("EveryFile clean release distributions", () => {
     expect(findFile(destination, "everyfile-parser.exe")).toBeTruthy();
     expect(findFile(destination, "everyfile-ocr.exe")).toBeTruthy();
     await smoke(executable!, path.join(temporary, "portable-profile"));
-  });
+  }, 300_000);
 
   it("silently installs to a clean location and launches without a console", async () => {
     expect(existsSync(installer)).toBe(true);
@@ -83,5 +102,5 @@ describe.skipIf(!enabled)("EveryFile clean release distributions", () => {
     const executable = findFile(destination, "EveryFile.exe");
     expect(executable).toBeTruthy();
     await smoke(executable!, path.join(temporary, "installed-profile"));
-  });
+  }, 300_000);
 });

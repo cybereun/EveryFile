@@ -101,12 +101,12 @@ on a clean Windows profile with the correct icon and no console.
 
 - [x] T052 [P] [US6] Add parser/OCR/app GUI-subsystem and icon resource assertions in `scripts/verify-no-console.ps1`
 - [x] T053 [P] [US6] Add dependency/license/model completeness checks in `scripts/build-portable.ps1`
-- [ ] T054 [US6] Run frontend build/tests and low-memory Rust format/Clippy/tests via `scripts/release-gate.ps1`
-- [ ] T055 [US6] Run zero-egress privacy and cloud-placeholder gates via `scripts/release-gate.ps1`
-- [ ] T056 [US6] Build and smoke installer and portable distributions via `scripts/release-windows.ps1`
+- [x] T054 [US6] Run frontend build/tests and low-memory Rust format/Clippy/tests via `scripts/release-gate.ps1`
+- [x] T055 [US6] Run zero-egress privacy and cloud-placeholder gates via `scripts/release-gate.ps1`
+- [x] T056 [US6] Build and smoke installer and portable distributions via `scripts/release-windows.ps1`
 - [x] T057 [US6] Complete a second convergence audit against `spec.md` in `specs/001-complete-everyfile/convergence.md`
-- [ ] T058 [US6] Stage installer, portable ZIP, checksums, notices, and release notes in `artifacts/release/`
-- [ ] T059 [US6] Pass the clean-profile installer and portable independent test in `tests/e2e/release.spec.ts`
+- [x] T058 [US6] Stage installer, portable ZIP, checksums, notices, and release notes in `artifacts/release/`
+- [x] T059 [US6] Pass the clean-profile installer and portable independent test in `tests/e2e/release.spec.ts`
 
 ## Final Phase: Polish and Cross-Cutting Concerns
 
@@ -115,9 +115,9 @@ on a clean Windows profile with the correct icon and no console.
 - [x] T062 Verify `L:\codex-L\Everyfile-copy` remains unchanged and clean-room evidence is recorded in `specs/001-complete-everyfile/convergence.md`
 - [x] T063 Review all deferred minor accessibility/data-migration notes from `.superpowers/sdd/2026-07-29-everyfile-phase-1-core-search/progress.md`
 - [x] T064 Complete the final accessibility/localization audit in `specs/001-complete-everyfile/convergence.md`
-- [ ] T065 Re-verify every detailed search operator/filter/sort/paging/preset contract in `src-tauri/tests/search_queries.rs` and `src/features/search/SearchWorkspace.test.tsx`
-- [ ] T066 Re-verify every promised parser format and notice with fixtures in `src-tauri/tests/parser_sidecar.rs`
-- [ ] T067 Re-verify encrypted storage, cloud-placeholder avoidance, and zero-egress core behavior in `src-tauri/tests/encrypted_database.rs` and `src-tauri/tests/folder_discovery.rs`
+- [x] T065 Re-verify every detailed search operator/filter/sort/paging/preset contract in `src-tauri/tests/search_queries.rs` and `src/features/search/SearchWorkspace.test.tsx`
+- [x] T066 Re-verify every promised parser format and notice with fixtures in `src-tauri/tests/parser_sidecar.rs`
+- [x] T067 Re-verify encrypted storage, cloud-placeholder avoidance, and zero-egress core behavior in `src-tauri/tests/encrypted_database.rs` and `src-tauri/tests/folder_discovery.rs`
 - [x] T068 Run the 10,000-file filename and 100,000-document search performance gates in `src-tauri/tests/performance.rs`
 - [ ] T069 Tag the tested revision and publish installer, portable ZIP, checksums, and notices to GitHub Release
 - [ ] T070 Confirm no unchecked task remains in `specs/001-complete-everyfile/tasks.md` and provide final run/install instructions
