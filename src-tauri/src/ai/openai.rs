@@ -2,25 +2,22 @@ use reqwest::{Client, Url};
 use serde_json::{json, Value};
 use tokio::sync::watch;
 
-use super::{await_response_text, nonempty, AiError};
+use super::{await_response_text, nonempty, AiError, GenerationRequest};
 
-pub async fn chat(
+pub(crate) async fn chat(
     client: &Client,
     mut url: Url,
     api_key: &str,
-    model: &str,
-    prompt: &str,
-    temperature: f32,
-    max_tokens: u32,
+    generation: GenerationRequest<'_>,
     cancellation: watch::Receiver<bool>,
 ) -> Result<String, AiError> {
     url.set_path("/v1/responses");
     let request = client.post(url).bearer_auth(api_key).json(&json!({
-        "model": model,
-        "input": prompt,
+            "model": generation.model,
+            "input": generation.prompt,
         "stream": true,
-        "temperature": temperature,
-        "max_output_tokens": max_tokens
+            "temperature": generation.temperature,
+            "max_output_tokens": generation.max_tokens
     }));
     let body = await_response_text(request, cancellation).await?;
     parse_stream(&body)

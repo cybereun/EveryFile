@@ -2,28 +2,28 @@ use reqwest::{Client, Url};
 use serde_json::{json, Value};
 use tokio::sync::watch;
 
-use super::{await_response_text, nonempty, AiError};
+use super::{await_response_text, nonempty, AiError, GenerationRequest};
 
-pub async fn chat(
+pub(crate) async fn chat(
     client: &Client,
     mut url: Url,
     api_key: &str,
-    model: &str,
-    prompt: &str,
-    temperature: f32,
-    max_tokens: u32,
+    generation: GenerationRequest<'_>,
     cancellation: watch::Receiver<bool>,
 ) -> Result<String, AiError> {
-    url.set_path(&format!("/v1beta/models/{model}:streamGenerateContent"));
+    url.set_path(&format!(
+        "/v1beta/models/{}:streamGenerateContent",
+        generation.model
+    ));
     url.query_pairs_mut().append_pair("alt", "sse");
     let request = client
         .post(url)
         .header("x-goog-api-key", api_key)
         .json(&json!({
-            "contents": [{"parts": [{"text": prompt}]}],
+            "contents": [{"parts": [{"text": generation.prompt}]}],
             "generationConfig": {
-                "temperature": temperature,
-                "maxOutputTokens": max_tokens
+                "temperature": generation.temperature,
+                "maxOutputTokens": generation.max_tokens
             }
         }));
     let body = await_response_text(request, cancellation).await?;

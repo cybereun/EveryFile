@@ -56,6 +56,13 @@ pub struct AiService<'a> {
     client: reqwest::Client,
 }
 
+pub(crate) struct GenerationRequest<'a> {
+    pub model: &'a str,
+    pub prompt: &'a str,
+    pub temperature: f32,
+    pub max_tokens: u32,
+}
+
 impl<'a> AiService<'a> {
     pub fn new(database: Arc<Database>, requests: &'a AiRequestRegistry) -> Self {
         Self {
@@ -129,28 +136,20 @@ impl<'a> AiService<'a> {
         if retrieved.chunk_count == 0 {
             return Err(AiError::Document("document has no retrievable text".into()));
         }
+        let request = GenerationRequest {
+            model: &settings.ai_model,
+            prompt: &retrieved.prompt,
+            temperature: settings.ai_temperature,
+            max_tokens: settings.ai_max_tokens,
+        };
         match settings.ai_provider.as_str() {
-            "ollama" => {
-                ollama::chat(
-                    &self.client,
-                    endpoint,
-                    &settings.ai_model,
-                    &retrieved.prompt,
-                    settings.ai_temperature,
-                    settings.ai_max_tokens,
-                    cancellation,
-                )
-                .await
-            }
+            "ollama" => ollama::chat(&self.client, endpoint, request, cancellation).await,
             "gemini" => {
                 gemini::chat(
                     &self.client,
                     endpoint,
                     &self.secret("gemini")?,
-                    &settings.ai_model,
-                    &retrieved.prompt,
-                    settings.ai_temperature,
-                    settings.ai_max_tokens,
+                    request,
                     cancellation,
                 )
                 .await
@@ -160,10 +159,7 @@ impl<'a> AiService<'a> {
                     &self.client,
                     endpoint,
                     &self.secret("openai")?,
-                    &settings.ai_model,
-                    &retrieved.prompt,
-                    settings.ai_temperature,
-                    settings.ai_max_tokens,
+                    request,
                     cancellation,
                 )
                 .await

@@ -35,14 +35,19 @@ pub fn run_with_reset_completion(reset_completion: Option<diagnostics::ResetComp
     let reset_completion = Arc::new(Mutex::new(reset_completion));
     let builder = tauri::Builder::default().plugin(tauri_plugin_dialog::init());
     #[cfg(feature = "e2e")]
-    let builder = builder.plugin(tauri_plugin_wdio_webdriver::init());
+    let builder = builder
+        .plugin(tauri_plugin_wdio::init())
+        .plugin(tauri_plugin_wdio_webdriver::init());
     builder
         .setup(move |app| {
             #[cfg(feature = "e2e")]
             if let Some(window) = app.get_webview_window("main") {
                 window.set_size(tauri::LogicalSize::new(1440.0, 900.0))?;
+                window.set_position(tauri::LogicalPosition::new(-10_000.0, -10_000.0))?;
             }
             let app_data_dir = app.path().app_local_data_dir()?;
+            #[cfg(feature = "e2e")]
+            e2e::reset_state_if_requested(&app_data_dir).map_err(std::io::Error::other)?;
             let key = SecureKeyStore::load_or_create(&app_data_dir)?;
             let database = Arc::new(Database::open(&app_data_dir.join("everyfile.db"), &key)?);
             database.migrate()?;
@@ -50,6 +55,12 @@ pub fn run_with_reset_completion(reset_completion: Option<diagnostics::ResetComp
             let loaded_settings = settings_repository.load_with_migration()?;
             let normalized_legacy_settings = loaded_settings.normalized_unsupported_flags;
             let persisted_settings = loaded_settings.settings;
+            #[cfg(feature = "e2e")]
+            let persisted_settings = {
+                let mut settings = persisted_settings;
+                e2e::apply_settings_overrides(&mut settings);
+                settings
+            };
             statistics::StatisticsRepository::new(Arc::clone(&database))
                 .run_due_history_retention(persisted_settings.history_retention_days)?;
             let parser = Arc::new(ParserClient::new(

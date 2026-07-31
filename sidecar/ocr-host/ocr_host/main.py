@@ -254,22 +254,42 @@ def handle_request(request: Any, engine: Any) -> dict[str, Any]:
         }
 
 
-def run() -> None:
-    engine = PaddleEngine()
-    for line in sys.stdin:
-        try:
-            request = json.loads(line)
-        except json.JSONDecodeError:
-            response = {
-                "id": None,
-                "ok": False,
-                "error": {"code": "INVALID_REQUEST", "message": "Invalid JSON"},
-            }
-        else:
-            response = handle_request(request, engine)
+def _write_response(response: dict[str, object]) -> bool:
+    try:
         sys.stdout.write(json.dumps(response, ensure_ascii=False, separators=(",", ":")) + "\n")
         sys.stdout.flush()
+        return True
+    except (BrokenPipeError, OSError, ValueError):
+        # The desktop parent owns this pipe. Closing the app while OCR is finishing
+        # is a normal shutdown path and must never surface a PyInstaller error box.
+        return False
+
+
+def run() -> None:
+    engine = PaddleEngine()
+    try:
+        for line in sys.stdin:
+            try:
+                request = json.loads(line)
+            except json.JSONDecodeError:
+                response = {
+                    "id": None,
+                    "ok": False,
+                    "error": {"code": "INVALID_REQUEST", "message": "Invalid JSON"},
+                }
+            else:
+                response = handle_request(request, engine)
+            if not _write_response(response):
+                return
+    except (OSError, ValueError):
+        # stdin can become invalid when the GUI parent exits or cancels indexing.
+        return
 
 
 if __name__ == "__main__":
-    run()
+    try:
+        run()
+    except Exception:
+        # A windowed PyInstaller executable displays uncaught exceptions in a
+        # modal dialog. Exit quietly; the Rust parent reports a bounded OCR error.
+        raise SystemExit(1) from None

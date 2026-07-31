@@ -4,6 +4,12 @@ import { fileURLToPath } from "node:url";
 const root = path.dirname(fileURLToPath(import.meta.url));
 const binary = path.join(root, "src-tauri", "target", "debug", "EveryFile.exe");
 const fixture = path.join(root, "tests", "fixtures", "folder-search");
+const appArgs = [
+  "--e2e-reset-state",
+  "--e2e-register-fixture-folder",
+  fixture,
+  "--e2e-enable-ocr",
+];
 
 export const config = {
   runner: "local",
@@ -14,7 +20,7 @@ export const config = {
       "@wdio/tauri-service",
       {
         appBinaryPath: binary,
-        appArgs: ["--e2e-register-fixture-folder", fixture],
+        appArgs,
         driverProvider: "embedded",
       },
     ],
@@ -22,7 +28,7 @@ export const config = {
   capabilities: [
     {
       browserName: "tauri",
-      "tauri:options": { application: binary },
+      "tauri:options": { application: binary, args: appArgs },
     },
   ],
   logLevel: "warn",

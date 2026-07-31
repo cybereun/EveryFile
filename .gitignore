@@ -25,6 +25,7 @@ dist-ssr
 /sidecar/ocr-host/models/
 /src-tauri/binaries/everyfile-ocr-*.exe
 /.cache/
+/tests/fixtures/folder-search/ocr-generated/
 /artifacts/
 /test-results/
 

@@ -32,6 +32,14 @@ select {
   cursor: pointer;
 }
 
+button,
+select,
+[role="tab"],
+.filter-check {
+  line-height: 1.25;
+  white-space: nowrap;
+}
+
 button:focus-visible,
 input:focus-visible,
 select:focus-visible,
@@ -72,10 +80,13 @@ select:focus-visible,
 }
 
 .brand h1 {
+  overflow: hidden;
   margin: 0;
   font-family: Georgia, "Times New Roman", serif;
-  font-size: 1.35rem;
+  font-size: clamp(1.1rem, 0.95rem + 0.45vw, 1.35rem);
   letter-spacing: -0.02em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .brand p {
@@ -483,8 +494,11 @@ select:focus-visible,
 
 .search-mode-tabs {
   display: flex;
+  min-width: 0;
+  overflow-x: auto;
   gap: 0.25rem;
   margin-bottom: 0.45rem;
+  scrollbar-width: thin;
 }
 
 .search-mode-tabs button,
@@ -497,6 +511,7 @@ select:focus-visible,
   border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);
   background: var(--color-surface);
+  font-size: clamp(0.78rem, 0.74rem + 0.12vw, 0.92rem);
   white-space: nowrap;
 }
 
@@ -916,6 +931,8 @@ select:focus-visible,
   position: relative;
   z-index: 5;
   display: flex;
+  min-width: 0;
+  overflow: visible;
   align-items: center;
   gap: 0.3rem;
   padding: 0.5rem 0.65rem;
@@ -930,15 +947,19 @@ select:focus-visible,
 .tag-editor input,
 .tag-editor select,
 .preview-layout-unavailable button {
+  flex: 0 0 auto;
   min-height: 2rem;
   padding: 0.28rem 0.55rem;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);
   background: var(--color-surface);
+  font-size: clamp(0.72rem, 0.69rem + 0.1vw, 0.86rem);
+  white-space: nowrap;
 }
 
 .preview-more {
   position: relative;
+  flex: 0 0 auto;
   margin-left: auto;
 }
 
@@ -967,10 +988,12 @@ select:focus-visible,
 
 .preview-tabs {
   display: flex;
+  overflow-x: auto;
   gap: 0.25rem;
   padding: 0.45rem 0.65rem 0;
   border-bottom: 1px solid var(--color-border);
   background: var(--color-surface-muted);
+  scrollbar-width: thin;
 }
 
 .preview-tags {
@@ -1177,7 +1200,8 @@ select:focus-visible,
   border-top: 1px solid var(--color-border);
   background: var(--color-surface);
   color: var(--color-text);
-  font-size: 0.75rem;
+  font-size: clamp(0.68rem, 0.64rem + 0.12vw, 0.75rem);
+  white-space: nowrap;
 }
 
 .status-summary {
@@ -1185,6 +1209,8 @@ select:focus-visible,
   width: 100%;
   align-items: center;
   gap: 0.7rem;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .status-summary span + span::before {
@@ -1229,11 +1255,26 @@ select:focus-visible,
   }
 
   .app-status {
-    flex-wrap: wrap;
+    gap: 0.35rem;
+    padding-inline: 0.55rem;
   }
 
   .status-summary {
-    flex-wrap: wrap;
+    gap: 0.35rem;
+  }
+
+  .status-summary span + span::before {
+    margin-right: 0.35rem;
+  }
+
+  .preview-toolbar {
+    gap: 0.15rem;
+    padding-inline: 0.35rem;
+  }
+
+  .preview-toolbar button {
+    padding-inline: 0.35rem;
+    font-size: 0.68rem;
   }
 }
 
@@ -1300,16 +1341,20 @@ select:focus-visible,
 
 .dialog-tabs {
   display: flex;
+  overflow-x: auto;
   gap: 0.25rem;
   padding: 0.65rem 1.1rem 0;
   border-bottom: 1px solid var(--color-border);
+  scrollbar-width: thin;
 }
 
 .dialog-tabs button {
+  flex: 0 0 auto;
   padding: 0.55rem 0.8rem;
   border: 1px solid transparent;
   border-bottom: 3px solid transparent;
   background: transparent;
+  font-size: clamp(0.8rem, 0.75rem + 0.15vw, 0.95rem);
 }
 
 .dialog-tabs button[aria-selected="true"] {

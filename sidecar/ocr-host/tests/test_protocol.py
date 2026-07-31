@@ -1,8 +1,15 @@
 import tempfile
 from pathlib import Path
 import unittest
+from unittest.mock import patch
 
-from ocr_host.main import handle_request, install_network_guard, merge_formulae, text_document
+from ocr_host.main import (
+    _write_response,
+    handle_request,
+    install_network_guard,
+    merge_formulae,
+    text_document,
+)
 
 
 class FakeResult:
@@ -24,6 +31,17 @@ class FakeEngine:
 
 
 class ProtocolTests(unittest.TestCase):
+    def test_parent_pipe_shutdown_is_silent(self) -> None:
+        class ClosedPipe:
+            def write(self, _value: str) -> None:
+                return None
+
+            def flush(self) -> None:
+                raise OSError(22, "Invalid argument")
+
+        with patch("ocr_host.main.sys.stdout", ClosedPipe()):
+            self.assertFalse(_write_response({"id": "closed", "ok": True}))
+
     def test_unwraps_current_paddle_result_shape(self) -> None:
         document = text_document(
             [

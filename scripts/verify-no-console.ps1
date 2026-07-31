@@ -9,7 +9,9 @@ if ([string]::IsNullOrWhiteSpace($ExecutablePath)) {
     $ExecutablePath = Join-Path $repoRoot 'artifacts\portable\EveryFile\EveryFile.exe'
 }
 $ExecutablePath = [System.IO.Path]::GetFullPath($ExecutablePath)
-$sidecarPath = Join-Path ([System.IO.Path]::GetDirectoryName($ExecutablePath)) 'everyfile-parser.exe'
+$executableDirectory = [System.IO.Path]::GetDirectoryName($ExecutablePath)
+$parserPath = Join-Path $executableDirectory 'everyfile-parser.exe'
+$ocrPath = Join-Path $executableDirectory 'everyfile-ocr.exe'
 
 function Get-PeSubsystem([string]$Path) {
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
@@ -39,10 +41,40 @@ function Get-PeSubsystem([string]$Path) {
     }
 }
 
-foreach ($path in @($ExecutablePath, $sidecarPath)) {
+foreach ($path in @($ExecutablePath, $parserPath, $ocrPath)) {
     $subsystem = Get-PeSubsystem $path
     if ($subsystem -ne 2) {
         throw "$path uses PE subsystem $subsystem instead of Windows GUI subsystem 2."
+    }
+}
+
+if (-not ('EveryFile.NativeIcon' -as [type])) {
+    Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+namespace EveryFile {
+  public static class NativeIcon {
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+    public static extern uint ExtractIconEx(
+      string file, int index, IntPtr[] large, IntPtr[] small, uint icons);
+    [DllImport("user32.dll")]
+    public static extern bool DestroyIcon(IntPtr icon);
+  }
+}
+'@
+}
+$largeIcon = [IntPtr[]]::new(1)
+$smallIcon = [IntPtr[]]::new(1)
+$iconCount = [EveryFile.NativeIcon]::ExtractIconEx(
+    $ExecutablePath, 0, $largeIcon, $smallIcon, 1
+)
+if ($iconCount -lt 1 -or ($largeIcon[0] -eq [IntPtr]::Zero -and
+        $smallIcon[0] -eq [IntPtr]::Zero)) {
+    throw "EveryFile.exe does not contain an extractable application icon."
+}
+foreach ($icon in @($largeIcon[0], $smallIcon[0])) {
+    if ($icon -ne [IntPtr]::Zero) {
+        [void][EveryFile.NativeIcon]::DestroyIcon($icon)
     }
 }
 
@@ -86,4 +118,4 @@ try {
     }
 }
 
-Write-Output 'PASS: EveryFile and its parser use the Windows GUI subsystem, the app title is correct, and no child console process appeared.'
+Write-Output 'PASS: EveryFile, parser, and OCR use the Windows GUI subsystem; the app icon/title are correct; no child console process appeared.'

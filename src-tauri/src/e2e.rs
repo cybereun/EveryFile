@@ -5,6 +5,30 @@ use std::path::{Path, PathBuf};
 use crate::state::AppState;
 
 const FIXTURE_ARGUMENT: &str = "--e2e-register-fixture-folder";
+const ENABLE_OCR_ARGUMENT: &str = "--e2e-enable-ocr";
+const RESET_STATE_ARGUMENT: &str = "--e2e-reset-state";
+
+pub fn reset_state_if_requested(app_data_dir: &Path) -> Result<(), String> {
+    if !std::env::args().any(|argument| argument == RESET_STATE_ARGUMENT) {
+        return Ok(());
+    }
+    for name in ["everyfile.db", "everyfile.db-wal", "everyfile.db-shm"] {
+        let path = app_data_dir.join(name);
+        if path.exists() {
+            std::fs::remove_file(&path)
+                .map_err(|error| format!("failed to reset {}: {error}", path.display()))?;
+        }
+    }
+    Ok(())
+}
+
+pub fn apply_settings_overrides(settings: &mut crate::domain::models::AppSettings) {
+    if std::env::args().any(|argument| argument == ENABLE_OCR_ARGUMENT) {
+        settings.ocr_enabled = true;
+        settings.math_ocr_enabled = false;
+        settings.ai_enabled = false;
+    }
+}
 
 pub fn fixture_folder_from_args() -> Result<Option<PathBuf>, String> {
     let mut args = std::env::args_os();
@@ -55,17 +79,12 @@ pub async fn register_startup_fixture(state: &AppState) -> Result<(), String> {
         .activate_registered_folder(&folder.id)
         .await
         .map_err(|error| error.to_string())?;
-    state
-        .indexing
-        .start(&folder.id)
-        .await
-        .map_err(|error| error.to_string())?;
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::validate_fixture_folder;
+    use super::{reset_state_if_requested, validate_fixture_folder};
     use std::path::PathBuf;
 
     #[test]
@@ -73,5 +92,14 @@ mod tests {
         let outside = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let error = validate_fixture_folder(&outside).expect_err("must reject source root");
         assert!(error.contains("tests/fixtures"));
+    }
+
+    #[test]
+    fn reset_is_inert_without_the_private_e2e_argument() {
+        let directory = tempfile::tempdir().expect("temp directory");
+        let database = directory.path().join("everyfile.db");
+        std::fs::write(&database, b"keep").expect("fixture");
+        reset_state_if_requested(directory.path()).expect("reset check");
+        assert!(database.exists());
     }
 }

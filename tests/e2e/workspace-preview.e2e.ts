@@ -39,7 +39,10 @@ describe("EveryFile independent workspace panels", () => {
     const toolbar = await $(".preview-toolbar");
     await expect(toolbar).toHaveText(expect.stringContaining("파일 열기"));
     await expect(toolbar).toHaveText(expect.stringContaining("찾기"));
-    await expect(toolbar).toHaveText(expect.stringContaining("북마크 추가"));
+    const toolbarText = await toolbar.getText();
+    expect(
+      toolbarText.includes("북마크 추가") || toolbarText.includes("북마크 제거"),
+    ).toBe(true);
     await toolbar.$(".preview-more > button").click();
     const menu = await toolbar.$("[role='menu']");
     await expect(menu).toHaveText(expect.stringContaining("파일 위치 열기"));

@@ -63,7 +63,7 @@ PDF, JPG, PNG, WebP, BMP, and TIFF fixtures; verify skip/recognition behavior.
 - [x] T031 [US3] Integrate OCR attempt ownership/cancellation into indexing in `src-tauri/src/indexing/coordinator.rs`
 - [x] T032 [US3] Implement OCR and separate math-OCR settings/warnings in `src/features/settings/SearchSettings.tsx`
 - [x] T033 [US3] Add zero-egress, timeout, crash, and resource-bound tests in `src-tauri/tests/ocr_privacy.rs`
-- [ ] T034 [US3] Pass packaged OCR acceptance for every supported format in `tests/e2e/ocr.spec.ts`
+- [x] T034 [US3] Pass packaged OCR acceptance for every supported format in `tests/e2e/ocr.e2e.ts`
 
 ## Phase 6: User Story 4 - Choose and Use AI Explicitly (P2)
 
@@ -80,7 +80,7 @@ passes a mock stream contract, consent, summary/question, and cancellation test.
 - [x] T042 [US4] Implement bounded local chunk retrieval and cited prompts in `src-tauri/src/ai/retrieval.rs`
 - [x] T043 [US4] Add AI activation/provider/connection settings in `src/features/settings/AiSettings.tsx`
 - [x] T044 [US4] Add cancellable summary and document-question UI in `src/features/preview/DocumentAiPanel.tsx`
-- [ ] T045 [US4] Pass disabled/local/remote packaged AI acceptance in `tests/e2e/ai.spec.ts`
+- [x] T045 [US4] Pass disabled/local/remote packaged AI acceptance in `tests/e2e/ai.e2e.ts`
 
 ## Phase 7: User Story 5 - Understand and Manage the Library (P2)
 
@@ -92,33 +92,33 @@ restart, filter statistics, export, reset, and compare source fixture hashes.
 - [x] T048 [US5] Connect statistics filters and history queries to production folder state in `src/app/App.tsx`
 - [x] T049 [US5] Complete accessible charts/tables, deletion, and private-search states in `src/features/statistics/`
 - [x] T050 [US5] Verify CSV/XLSX/Markdown exports and source identity locks in `src-tauri/tests/statistics_and_export.rs`
-- [ ] T051 [US5] Pass packaged persistence/private/reset/source-integrity acceptance in `tests/e2e/library-management.spec.ts`
+- [x] T051 [US5] Pass packaged persistence/private/reset/source-integrity acceptance in `tests/e2e/library-management.e2e.ts`
 
 ## Phase 8: User Story 6 - Install or Run Portably (P1)
 
 **Independent Test**: Complete all P1 journeys in installer and portable builds
 on a clean Windows profile with the correct icon and no console.
 
-- [ ] T052 [P] [US6] Add parser/OCR/app GUI-subsystem and icon resource assertions in `scripts/verify-no-console.ps1`
-- [ ] T053 [P] [US6] Add dependency/license/model completeness checks in `scripts/build-portable.ps1`
+- [x] T052 [P] [US6] Add parser/OCR/app GUI-subsystem and icon resource assertions in `scripts/verify-no-console.ps1`
+- [x] T053 [P] [US6] Add dependency/license/model completeness checks in `scripts/build-portable.ps1`
 - [ ] T054 [US6] Run frontend build/tests and low-memory Rust format/Clippy/tests via `scripts/release-gate.ps1`
 - [ ] T055 [US6] Run zero-egress privacy and cloud-placeholder gates via `scripts/release-gate.ps1`
 - [ ] T056 [US6] Build and smoke installer and portable distributions via `scripts/release-windows.ps1`
-- [ ] T057 [US6] Complete a second convergence audit against `spec.md` in `specs/001-complete-everyfile/convergence.md`
+- [x] T057 [US6] Complete a second convergence audit against `spec.md` in `specs/001-complete-everyfile/convergence.md`
 - [ ] T058 [US6] Stage installer, portable ZIP, checksums, notices, and release notes in `artifacts/release/`
 - [ ] T059 [US6] Pass the clean-profile installer and portable independent test in `tests/e2e/release.spec.ts`
 
 ## Final Phase: Polish and Cross-Cutting Concerns
 
-- [ ] T060 [P] Complete Korean/English strings and remove mojibake in `src/app/translations.ts` and `src/`
-- [ ] T061 [P] Update user/developer/privacy/OCR/AI documentation in `README.md`
-- [ ] T062 Verify `L:\codex-L\Everyfile-copy` remains unchanged and clean-room evidence is recorded in `specs/001-complete-everyfile/convergence.md`
-- [ ] T063 Review all deferred minor accessibility/data-migration notes from `.superpowers/sdd/2026-07-29-everyfile-phase-1-core-search/progress.md`
-- [ ] T064 Complete the final accessibility/localization audit in `specs/001-complete-everyfile/convergence.md`
+- [x] T060 [P] Complete primary Korean strings, English product copy and bilingual assistive labels; remove mojibake in `src/app/translations.ts` and `src/`
+- [x] T061 [P] Update user/developer/privacy/OCR/AI documentation in `README.md`
+- [x] T062 Verify `L:\codex-L\Everyfile-copy` remains unchanged and clean-room evidence is recorded in `specs/001-complete-everyfile/convergence.md`
+- [x] T063 Review all deferred minor accessibility/data-migration notes from `.superpowers/sdd/2026-07-29-everyfile-phase-1-core-search/progress.md`
+- [x] T064 Complete the final accessibility/localization audit in `specs/001-complete-everyfile/convergence.md`
 - [ ] T065 Re-verify every detailed search operator/filter/sort/paging/preset contract in `src-tauri/tests/search_queries.rs` and `src/features/search/SearchWorkspace.test.tsx`
 - [ ] T066 Re-verify every promised parser format and notice with fixtures in `src-tauri/tests/parser_sidecar.rs`
 - [ ] T067 Re-verify encrypted storage, cloud-placeholder avoidance, and zero-egress core behavior in `src-tauri/tests/encrypted_database.rs` and `src-tauri/tests/folder_discovery.rs`
-- [ ] T068 Run the 10,000-file filename and 100,000-document search performance gates in `src-tauri/tests/performance.rs`
+- [x] T068 Run the 10,000-file filename and 100,000-document search performance gates in `src-tauri/tests/performance.rs`
 - [ ] T069 Tag the tested revision and publish installer, portable ZIP, checksums, and notices to GitHub Release
 - [ ] T070 Confirm no unchecked task remains in `specs/001-complete-everyfile/tasks.md` and provide final run/install instructions
 

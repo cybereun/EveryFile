@@ -16,7 +16,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [features]
 default = []
-e2e = ["dep:tauri-plugin-wdio-webdriver"]
+e2e = ["dep:tauri-plugin-wdio", "dep:tauri-plugin-wdio-webdriver"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -47,6 +47,7 @@ notify = "=8.2.0"
 rust_xlsxwriter = "=0.97.0"
 reqwest = { version = "=0.13.4", default-features = false, features = ["json", "native-tls", "stream"] }
 futures-util = "=0.3.32"
+tauri-plugin-wdio = { version = "=1.2.0", optional = true }
 tauri-plugin-wdio-webdriver = { version = "=1.2.0", optional = true }
 
 [dev-dependencies]
