@@ -503,7 +503,6 @@ pub fn start_reset_worker(app_data_dir: &Path) -> Result<(), DiagnosticError> {
         .spawn();
     if let Err(error) = spawn {
         let _ = fs::remove_file(request_path);
-        let _ = cleanup_reset_state_temps(&local_guard, &local_appdata, &nonce);
         let _ = local_guard.sync_directory_supported();
         return Err(DiagnosticError::Io(error));
     }
@@ -635,7 +634,6 @@ where
         let startup_path = reset_startup_path(local_appdata, nonce)?;
         let parent_exited_path = reset_parent_exited_path(local_appdata, nonce)?;
         let local_guard = ResetRootGuard::open(local_appdata)?;
-        cleanup_reset_state_temps(&local_guard, local_appdata, nonce)?;
         let request = read_authenticated_reset_request(
             &local_guard,
             local_appdata,
@@ -722,7 +720,6 @@ where
 
     let result = (|| {
         let local_guard = ResetRootGuard::open(local_appdata)?;
-        cleanup_reset_state_temps(&local_guard, local_appdata, nonce)?;
         let completion_path = reset_completion_path(local_appdata, nonce)?;
         let startup_path = reset_startup_path(local_appdata, nonce)?;
         let completion =
@@ -902,7 +899,6 @@ where
         return Err(DiagnosticError::InvalidResetRequest);
     }
     let local_guard = ResetRootGuard::open(local_appdata)?;
-    cleanup_reset_state_temps(&local_guard, local_appdata, nonce)?;
     let completion_path = reset_completion_path(local_appdata, nonce)?;
     let startup_path = reset_startup_path(local_appdata, nonce)?;
     let completion =
@@ -998,7 +994,6 @@ where
     F: FnMut(ResetEvent) -> Result<(), DiagnosticError>,
 {
     let local_guard = ResetRootGuard::open(&startup.local_appdata)?;
-    cleanup_reset_state_temps(&local_guard, &startup.local_appdata, &startup.nonce)?;
     let completion_path = reset_completion_path(&startup.local_appdata, &startup.nonce)?;
     let startup_path = reset_startup_path(&startup.local_appdata, &startup.nonce)?;
     let stored_startup = read_reset_state::<ResetStartupRecord>(
@@ -1323,78 +1318,6 @@ fn reset_state_temp_path(
 }
 
 #[cfg(windows)]
-fn is_owned_reset_state_temp(nonce: &str, name: &str) -> bool {
-    if !valid_reset_nonce(nonce) {
-        return false;
-    }
-    let prefix = format!(".{APP_DATA_DIRECTORY}-reset-state-temp-{nonce}-");
-    let Some(remainder) = name.strip_prefix(&prefix) else {
-        return false;
-    };
-    let Some((step, random)) = remainder
-        .strip_suffix(".tmp")
-        .and_then(|value| value.rsplit_once('-'))
-    else {
-        return false;
-    };
-    matches!(
-        step,
-        "request"
-            | "parent-exited"
-            | "owner"
-            | "staged"
-            | "deleting"
-            | "deleted"
-            | "committed"
-            | "completed"
-            | "startup"
-    ) && random.len() == 32
-        && random
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-}
-
-#[cfg(windows)]
-fn cleanup_reset_state_temps(
-    local_guard: &ResetRootGuard,
-    local_appdata: &Path,
-    nonce: &str,
-) -> Result<(), DiagnosticError> {
-    local_guard.revalidate()?;
-    for entry in fs::read_dir(local_appdata).map_err(DiagnosticError::Io)? {
-        let entry = entry.map_err(DiagnosticError::Io)?;
-        let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
-            continue;
-        };
-        if !is_owned_reset_state_temp(nonce, &name) {
-            continue;
-        }
-        let path = entry.path();
-        let metadata = fs::symlink_metadata(&path).map_err(DiagnosticError::Io)?;
-        if is_reparse_or_symlink(&metadata) || !metadata.is_file() {
-            continue;
-        }
-        local_guard.revalidate()?;
-        fs::remove_file(path).map_err(classify_reset_io)?;
-    }
-    local_guard.sync_directory_supported()?;
-    local_guard.revalidate()
-}
-
-#[cfg(all(test, windows))]
-fn reset_state_temps_exist(local_appdata: &Path, nonce: &str) -> bool {
-    fs::read_dir(local_appdata)
-        .map(|entries| {
-            entries.filter_map(Result::ok).any(|entry| {
-                entry
-                    .file_name()
-                    .to_str()
-                    .is_some_and(|name| is_owned_reset_state_temp(nonce, name))
-            })
-        })
-        .unwrap_or(false)
-}
-
 #[cfg(windows)]
 fn create_reset_state<T, F>(
     local_guard: &ResetRootGuard,
@@ -1437,7 +1360,9 @@ where
     use std::os::windows::fs::OpenOptionsExt;
     use std::os::windows::io::AsRawHandle;
     use windows::Win32::Foundation::HANDLE;
-    use windows::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT;
+    use windows::Win32::Storage::FileSystem::{
+        DELETE, FILE_FLAG_OPEN_REPARSE_POINT, FILE_GENERIC_WRITE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+    };
 
     if path
         .parent()
@@ -1461,6 +1386,8 @@ where
     let temporary = reset_state_temp_path(local_appdata, nonce, step)?;
     let mut file = OpenOptions::new()
         .write(true)
+        .access_mode((FILE_GENERIC_WRITE | DELETE).0)
+        .share_mode((FILE_SHARE_READ | FILE_SHARE_WRITE).0)
         .create_new(true)
         .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT.0)
         .open(&temporary)
@@ -1469,6 +1396,7 @@ where
         step,
         point: ResetStateWritePoint::AfterTempCreate,
     })?;
+    let raw_handle = HANDLE(file.as_raw_handle());
     let split = (bytes.len() / 2).clamp(1, bytes.len() - 1);
     file.write_all(&bytes[..split])
         .map_err(DiagnosticError::Io)?;
@@ -1483,12 +1411,8 @@ where
         step,
         point: ResetStateWritePoint::AfterTempSync,
     })?;
-    let written_identity = file_information(HANDLE(file.as_raw_handle()))?.0;
-    let temporary_handle = WindowsFileHandle::open_for_rename(&temporary)?;
-    if temporary_handle.identity != written_identity
-        || temporary_handle.is_reparse()
-        || temporary_handle.is_directory()
-    {
+    let (written_identity, attributes) = file_information(raw_handle)?;
+    if attributes & 0x0000_0400 != 0 || attributes & 0x0000_0010 != 0 {
         return Err(DiagnosticError::InvalidResetRequest);
     }
     local_guard.revalidate()?;
@@ -1496,16 +1420,23 @@ where
         step,
         point: ResetStateWritePoint::BeforeRename,
     })?;
-    temporary_handle
-        .rename_to(path)
-        .map_err(classify_reset_error)?;
-    drop(file);
+    rename_windows_handle_to(raw_handle, path).map_err(classify_reset_error)?;
     on_event(ResetEvent::StateWritePoint {
         step,
         point: ResetStateWritePoint::AfterRename,
     })?;
     local_guard.sync_directory_supported()?;
+    let published = WindowsFileHandle::open_for_identity(path)?;
+    if published.identity != written_identity || published.is_reparse() || published.is_directory()
+    {
+        return Err(DiagnosticError::InvalidResetRequest);
+    }
+    drop(published);
     local_guard.revalidate()?;
+    file.sync_all().map_err(DiagnosticError::Io)?;
+    local_guard.sync_directory_supported()?;
+    local_guard.revalidate()?;
+    drop(file);
     on_event(ResetEvent::AfterStateWrite(step))
 }
 
@@ -1600,7 +1531,6 @@ where
     let startup_path = reset_startup_path(local_appdata, nonce)?;
     let quarantine_name = reset_quarantine_name(nonce)?;
     let quarantine = local_appdata.join(&quarantine_name);
-    cleanup_reset_state_temps(&local_guard, local_appdata, nonce)?;
     let request = read_authenticated_reset_request(
         &local_guard,
         local_appdata,
@@ -2531,14 +2461,18 @@ struct WindowsFileHandle {
 #[cfg(windows)]
 impl WindowsFileHandle {
     fn open_pinned(path: &Path) -> Result<Self, DiagnosticError> {
-        Self::open(path, false)
+        Self::open(path, false, false)
     }
 
     fn open_for_rename(path: &Path) -> Result<Self, DiagnosticError> {
-        Self::open(path, true)
+        Self::open(path, true, true)
     }
 
-    fn open(path: &Path, share_delete: bool) -> Result<Self, DiagnosticError> {
+    fn open_for_identity(path: &Path) -> Result<Self, DiagnosticError> {
+        Self::open(path, true, false)
+    }
+
+    fn open(path: &Path, share_delete: bool, delete_access: bool) -> Result<Self, DiagnosticError> {
         use std::os::windows::ffi::OsStrExt;
         use windows::core::PCWSTR;
         use windows::Win32::Storage::FileSystem::{
@@ -2557,7 +2491,7 @@ impl WindowsFileHandle {
         } else {
             FILE_SHARE_READ | FILE_SHARE_WRITE
         };
-        let access = if share_delete {
+        let access = if delete_access {
             FILE_READ_ATTRIBUTES | DELETE
         } else {
             FILE_READ_ATTRIBUTES
@@ -2599,42 +2533,50 @@ impl WindowsFileHandle {
     }
 
     fn rename_to(&self, destination: &Path) -> Result<(), DiagnosticError> {
-        use std::os::windows::ffi::OsStrExt;
-        use windows::Win32::Storage::FileSystem::{
-            FileRenameInfo, SetFileInformationByHandle, FILE_RENAME_INFO,
-        };
-
-        let name = destination.as_os_str().encode_wide().collect::<Vec<_>>();
-        let offset = std::mem::offset_of!(FILE_RENAME_INFO, FileName);
-        let byte_len = name
-            .len()
-            .checked_mul(std::mem::size_of::<u16>())
-            .ok_or(DiagnosticError::InvalidResetRequest)?;
-        let total = offset
-            .checked_add(byte_len)
-            .ok_or(DiagnosticError::InvalidResetRequest)?;
-        let words = total.div_ceil(std::mem::size_of::<usize>());
-        let mut buffer = vec![0_usize; words];
-        let info = buffer.as_mut_ptr().cast::<FILE_RENAME_INFO>();
-        unsafe {
-            (*info).Anonymous.ReplaceIfExists = false;
-            (*info).RootDirectory = windows::Win32::Foundation::HANDLE::default();
-            (*info).FileNameLength =
-                u32::try_from(byte_len).map_err(|_| DiagnosticError::InvalidResetRequest)?;
-            std::ptr::copy_nonoverlapping(
-                name.as_ptr(),
-                (info.cast::<u8>().add(offset)).cast::<u16>(),
-                name.len(),
-            );
-            SetFileInformationByHandle(
-                self.handle,
-                FileRenameInfo,
-                info.cast(),
-                u32::try_from(total).map_err(|_| DiagnosticError::InvalidResetRequest)?,
-            )
-        }
-        .map_err(windows_error)
+        rename_windows_handle_to(self.handle, destination)
     }
+}
+
+#[cfg(windows)]
+fn rename_windows_handle_to(
+    handle: windows::Win32::Foundation::HANDLE,
+    destination: &Path,
+) -> Result<(), DiagnosticError> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows::Win32::Storage::FileSystem::{
+        FileRenameInfo, SetFileInformationByHandle, FILE_RENAME_INFO,
+    };
+
+    let name = destination.as_os_str().encode_wide().collect::<Vec<_>>();
+    let offset = std::mem::offset_of!(FILE_RENAME_INFO, FileName);
+    let byte_len = name
+        .len()
+        .checked_mul(std::mem::size_of::<u16>())
+        .ok_or(DiagnosticError::InvalidResetRequest)?;
+    let total = offset
+        .checked_add(byte_len)
+        .ok_or(DiagnosticError::InvalidResetRequest)?;
+    let words = total.div_ceil(std::mem::size_of::<usize>());
+    let mut buffer = vec![0_usize; words];
+    let info = buffer.as_mut_ptr().cast::<FILE_RENAME_INFO>();
+    unsafe {
+        (*info).Anonymous.ReplaceIfExists = false;
+        (*info).RootDirectory = windows::Win32::Foundation::HANDLE::default();
+        (*info).FileNameLength =
+            u32::try_from(byte_len).map_err(|_| DiagnosticError::InvalidResetRequest)?;
+        std::ptr::copy_nonoverlapping(
+            name.as_ptr(),
+            (info.cast::<u8>().add(offset)).cast::<u16>(),
+            name.len(),
+        );
+        SetFileInformationByHandle(
+            handle,
+            FileRenameInfo,
+            info.cast(),
+            u32::try_from(total).map_err(|_| DiagnosticError::InvalidResetRequest)?,
+        )
+    }
+    .map_err(windows_error)
 }
 
 #[cfg(windows)]
@@ -3047,7 +2989,10 @@ mod windows_reset_tests {
                 &mut inject_once,
             )
             .is_err());
-            assert!(faulted);
+            assert!(
+                faulted,
+                "write failed before injected point {step:?}/{fault_point:?}"
+            );
             if final_path.exists() {
                 assert_eq!(
                     read_reset_state::<ResetRequest>(&local_guard, &local, &final_path).unwrap(),
@@ -3056,7 +3001,6 @@ mod windows_reset_tests {
                 );
             }
 
-            cleanup_reset_state_temps(&local_guard, &local, &nonce).unwrap();
             if !final_path.exists() {
                 let mut no_fault = |_| Ok(());
                 write_reset_state_with_events(
@@ -3074,8 +3018,57 @@ mod windows_reset_tests {
                 read_reset_state::<ResetRequest>(&local_guard, &local, &final_path).unwrap(),
                 request
             );
-            assert!(!reset_state_temps_exist(&local, &nonce));
         }
+    }
+
+    #[test]
+    fn reset_recovery_never_deletes_a_substituted_nonce_shaped_temp_file() {
+        let temp = tempfile::tempdir().unwrap();
+        let local = temp.path().join("Local");
+        let app_data = local.join(APP_DATA_DIRECTORY);
+        fs::create_dir_all(&app_data).unwrap();
+        fs::write(app_data.join("owned"), b"owned").unwrap();
+
+        let nonce = "00000000000000000000000000000500";
+        let substituted = local.join(format!(
+            ".{APP_DATA_DIRECTORY}-reset-state-temp-{nonce}-owner-\
+             0123456789abcdef0123456789abcdef.tmp"
+        ));
+        fs::write(&substituted, b"unowned-victim").unwrap();
+
+        let request = ResetRequest {
+            nonce: nonce.to_owned(),
+            parent_pid: 123,
+            parent_created: 456,
+        };
+        let local_guard = ResetRootGuard::open(&local).unwrap();
+        let request_path = reset_request_path(&local, nonce).unwrap();
+        let mut no_event = |_| Ok(());
+        create_reset_state(
+            &local_guard,
+            &local,
+            &request_path,
+            &request,
+            nonce,
+            ResetStateStep::Request,
+            &mut no_event,
+        )
+        .unwrap();
+
+        let mut wait_for_parent = |_: u32, _: u64| Ok(());
+        assert_eq!(
+            run_authenticated_reset_worker(
+                &local,
+                nonce,
+                &request,
+                3,
+                Duration::ZERO,
+                &mut wait_for_parent,
+                &mut no_event,
+            ),
+            ResetWorkerOutcome::Success
+        );
+        assert_eq!(fs::read(&substituted).unwrap(), b"unowned-victim");
     }
 
     #[test]
@@ -3806,6 +3799,7 @@ mod windows_reset_tests {
 
     fn only_completion_receipt_remains(local_appdata: &Path, nonce: &str) -> bool {
         let completion = reset_completion_path(local_appdata, nonce).unwrap();
+        let abandoned_temp_prefix = format!(".{APP_DATA_DIRECTORY}-reset-state-temp-{nonce}-");
         completion.is_file()
             && fs::read_dir(local_appdata)
                 .unwrap()
@@ -3816,7 +3810,13 @@ mod windows_reset_tests {
                         .to_string_lossy()
                         .starts_with(&format!(".{APP_DATA_DIRECTORY}-reset-"))
                 })
-                .all(|entry| entry.path() == completion)
+                .all(|entry| {
+                    entry.path() == completion
+                        || entry
+                            .file_name()
+                            .to_string_lossy()
+                            .starts_with(&abandoned_temp_prefix)
+                })
     }
 
     #[test]
