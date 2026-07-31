@@ -15,7 +15,10 @@
       {
         "title": "EveryFile",
         "width": 800,
-        "height": 600
+        "height": 600,
+        "minWidth": 720,
+        "minHeight": 520,
+        "devtools": false
       }
     ],
     "security": {
@@ -24,9 +27,24 @@
   },
   "bundle": {
     "active": true,
+    "publisher": "Lebi_Cybereun",
     "copyright": "\u00A9 2026 Lebi_Cybereun",
     "externalBin": ["binaries/everyfile-parser"],
-    "targets": "all",
+    "targets": ["nsis"],
+    "category": "Productivity",
+    "shortDescription": "Local-first document search for Windows",
+    "longDescription": "EveryFile indexes and searches user-selected folders on this PC. Core indexing and search do not upload documents.",
+    "windows": {
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper",
+        "silent": true
+      },
+      "nsis": {
+        "installMode": "currentUser",
+        "languages": ["Korean", "English"],
+        "displayLanguageSelector": false
+      }
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

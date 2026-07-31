@@ -15,6 +15,8 @@ dist-ssr
 *.local
 /sidecar/parser-host/everyfile-parser.exe
 /src-tauri/binaries/everyfile-parser-*.exe
+/artifacts/
+/test-results/
 
 # Editor directories and files
 .vscode/*

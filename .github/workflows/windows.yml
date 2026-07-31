@@ -1,0 +1,64 @@
+name: Windows release gate
+
+on:
+  push:
+    branches: [main, codex/phase-1-core-search]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-and-package:
+    runs-on: windows-latest
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install complete Perl runtime for OpenSSL
+        shell: pwsh
+        run: |
+          choco install strawberryperl --no-progress -y
+          "C:\Strawberry\perl\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - run: npm ci
+      - run: npm test -- --run
+      - run: npm run build
+      - run: cargo fmt --manifest-path src-tauri\Cargo.toml -- --check
+      - run: cargo clippy --manifest-path src-tauri\Cargo.toml --all-targets -- -D warnings
+      - run: cargo test --manifest-path src-tauri\Cargo.toml
+      - run: node scripts/build-parser-sidecar.mjs
+      - run: npm run tauri build
+      - run: powershell -ExecutionPolicy Bypass -File scripts/build-portable.ps1
+      - run: powershell -ExecutionPolicy Bypass -File scripts/verify-no-console.ps1
+
+      - shell: pwsh
+        run: |
+          Get-FileHash artifacts\release\* -Algorithm SHA256 |
+            Select-Object Hash, Path |
+            ConvertTo-Json |
+            Set-Content artifacts\release\checksums.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: EveryFile-Windows-v1.0.0
+          path: artifacts/release/*
+          if-no-files-found: error
