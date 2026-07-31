@@ -38,6 +38,10 @@ pub fn run_with_reset_completion(reset_completion: Option<diagnostics::ResetComp
     let builder = builder.plugin(tauri_plugin_wdio_webdriver::init());
     builder
         .setup(move |app| {
+            #[cfg(feature = "e2e")]
+            if let Some(window) = app.get_webview_window("main") {
+                window.set_size(tauri::LogicalSize::new(1440.0, 900.0))?;
+            }
             let app_data_dir = app.path().app_local_data_dir()?;
             let key = SecureKeyStore::load_or_create(&app_data_dir)?;
             let database = Arc::new(Database::open(&app_data_dir.join("everyfile.db"), &key)?);
@@ -52,15 +56,20 @@ pub fn run_with_reset_completion(reset_completion: Option<diagnostics::ResetComp
                 parser_executable_path(),
                 Duration::from_secs(30),
             ));
+            let ocr = Arc::new(ocr::OcrClient::new(
+                ocr_executable_path(),
+                Duration::from_secs(300),
+            ));
             let app_handle = app.handle().clone();
             let status_sink = Arc::new(move |status| {
                 app_handle
                     .emit("index-status://changed", status)
                     .map_err(|error| error.to_string())
             });
-            let indexing = Arc::new(IndexCoordinator::with_parser_and_sink(
+            let indexing = Arc::new(IndexCoordinator::with_parser_ocr_and_sink(
                 Arc::clone(&database),
                 parser,
+                ocr,
                 persisted_settings.max_file_size_bytes,
                 Some(status_sink),
             ));
@@ -166,6 +175,28 @@ fn parser_executable_path() -> PathBuf {
         .join("binaries")
         .join(format!(
             "everyfile-parser-{target}{}",
+            if cfg!(windows) { ".exe" } else { "" }
+        ))
+}
+
+fn ocr_executable_path() -> PathBuf {
+    let file_name = if cfg!(windows) {
+        "everyfile-ocr.exe"
+    } else {
+        "everyfile-ocr"
+    };
+    let packaged = std::env::current_exe()
+        .ok()
+        .and_then(|executable| executable.parent().map(|parent| parent.join(file_name)));
+    if let Some(path) = packaged.filter(|path| path.is_file()) {
+        return path;
+    }
+
+    let target = option_env!("TAURI_ENV_TARGET_TRIPLE").unwrap_or("x86_64-pc-windows-msvc");
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("binaries")
+        .join(format!(
+            "everyfile-ocr-{target}{}",
             if cfg!(windows) { ".exe" } else { "" }
         ))
 }

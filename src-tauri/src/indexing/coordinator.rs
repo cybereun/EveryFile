@@ -14,6 +14,8 @@ use tokio::task::JoinHandle;
 use crate::domain::models::{AppSettings, FolderRecord, IndexFailure, IndexStatus, JobState};
 use crate::folders::discovery::{discover, DiscoveryOptions, DiscoveryPoll, FileCandidate};
 use crate::infrastructure::database::Database;
+use crate::ocr::eligibility::{decide as decide_ocr, OcrDecision};
+use crate::ocr::{OcrClient, OcrError, OcrMode};
 use crate::parsing::{ParseErrorCode, ParsedDocument, ParserClient, ParserError};
 
 const PIPELINE_CAPACITY: usize = 16;
@@ -52,6 +54,15 @@ pub trait DocumentParser: Send + Sync + 'static {
     fn parse(&self, path: &Path, max_bytes: u64) -> Result<ParsedDocument, ParserError>;
 }
 
+pub trait DocumentOcr: Send + Sync + 'static {
+    fn recognize(
+        &self,
+        path: &Path,
+        mode: OcrMode,
+        max_bytes: u64,
+    ) -> Result<ParsedDocument, OcrError>;
+}
+
 pub trait ParseAttemptTokenGenerator: Send + Sync + 'static {
     fn generate(&self) -> String;
 }
@@ -84,6 +95,17 @@ impl ParseAttemptTokenGenerator for SecureParseAttemptTokenGenerator {
 impl DocumentParser for ParserClient {
     fn parse(&self, path: &Path, max_bytes: u64) -> Result<ParsedDocument, ParserError> {
         ParserClient::parse(self, path, max_bytes)
+    }
+}
+
+impl DocumentOcr for OcrClient {
+    fn recognize(
+        &self,
+        path: &Path,
+        mode: OcrMode,
+        max_bytes: u64,
+    ) -> Result<ParsedDocument, OcrError> {
+        OcrClient::recognize(self, path, mode, max_bytes)
     }
 }
 
@@ -142,6 +164,7 @@ type StatusSink = dyn Fn(IndexStatus) -> Result<(), String> + Send + Sync;
 pub struct IndexCoordinator {
     database: Arc<Database>,
     parser: Arc<dyn DocumentParser>,
+    ocr: Option<Arc<dyn DocumentOcr>>,
     runtime_settings: Arc<RwLock<RuntimeIndexSettings>>,
     limiter: ActivityLimiter,
     runtimes: Arc<tokio::sync::Mutex<HashMap<JobId, Arc<JobRuntime>>>>,
@@ -155,6 +178,14 @@ struct RuntimeIndexSettings {
     max_file_size_bytes: u64,
     excluded_path_patterns: Vec<String>,
     indexing_intensity: String,
+    ocr_enabled: bool,
+    math_ocr_enabled: bool,
+}
+
+enum ExtractionError {
+    Parser(ParserError),
+    Ocr(OcrError),
+    OcrUnavailable,
 }
 
 struct JobRuntime {
@@ -256,6 +287,7 @@ impl IndexCoordinator {
         Self::with_parser_probe_and_sink(
             database,
             parser,
+            None,
             max_file_size_bytes,
             Arc::new(NoopDiscoveryProbe),
             None,
@@ -275,6 +307,29 @@ impl IndexCoordinator {
         Self::with_parser_probe_and_sink(
             database,
             parser,
+            None,
+            max_file_size_bytes,
+            Arc::new(NoopDiscoveryProbe),
+            status_sink,
+            Arc::new(SecureParseAttemptTokenGenerator),
+        )
+    }
+
+    pub fn with_parser_ocr_and_sink<P, O>(
+        database: Arc<Database>,
+        parser: Arc<P>,
+        ocr: Arc<O>,
+        max_file_size_bytes: u64,
+        status_sink: Option<Arc<StatusSink>>,
+    ) -> Self
+    where
+        P: DocumentParser,
+        O: DocumentOcr,
+    {
+        Self::with_parser_probe_and_sink(
+            database,
+            parser,
+            Some(ocr),
             max_file_size_bytes,
             Arc::new(NoopDiscoveryProbe),
             status_sink,
@@ -295,6 +350,7 @@ impl IndexCoordinator {
         Self::with_parser_probe_and_sink(
             database,
             parser,
+            None,
             max_file_size_bytes,
             discovery_probe,
             None,
@@ -315,6 +371,7 @@ impl IndexCoordinator {
         Self::with_parser_probe_and_sink(
             database,
             parser,
+            None,
             max_file_size_bytes,
             Arc::new(NoopDiscoveryProbe),
             None,
@@ -325,6 +382,7 @@ impl IndexCoordinator {
     fn with_parser_probe_and_sink<P>(
         database: Arc<Database>,
         parser: Arc<P>,
+        ocr: Option<Arc<dyn DocumentOcr>>,
         max_file_size_bytes: u64,
         discovery_probe: Arc<dyn DiscoveryProbe>,
         status_sink: Option<Arc<StatusSink>>,
@@ -336,10 +394,13 @@ impl IndexCoordinator {
         Self {
             database,
             parser,
+            ocr,
             runtime_settings: Arc::new(RwLock::new(RuntimeIndexSettings {
                 max_file_size_bytes,
                 excluded_path_patterns: Vec::new(),
                 indexing_intensity: "balanced".into(),
+                ocr_enabled: false,
+                math_ocr_enabled: false,
             })),
             limiter: ActivityLimiter::default(),
             runtimes: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
@@ -358,6 +419,8 @@ impl IndexCoordinator {
             max_file_size_bytes: settings.max_file_size_bytes,
             excluded_path_patterns: settings.excluded_path_patterns.clone(),
             indexing_intensity: settings.indexing_intensity.clone(),
+            ocr_enabled: settings.ocr_enabled,
+            math_ocr_enabled: settings.math_ocr_enabled,
         };
         *self
             .runtime_settings
@@ -1111,14 +1174,17 @@ impl IndexCoordinator {
             runtime.begin_parser_operation(|| self.mark_document_parsing(&candidate))?;
 
         let parser = Arc::clone(&self.parser);
+        let ocr = self.ocr.clone();
         let parse_path = trusted_path.clone();
-        let max_bytes = self
+        let runtime_settings = self
             .runtime_settings
             .read()
             .map_err(|_| IndexingError::RuntimeSettingsUnavailable)?
-            .max_file_size_bytes;
-        let parsed =
-            tokio::task::spawn_blocking(move || parser.parse(&parse_path, max_bytes)).await;
+            .clone();
+        let parsed = tokio::task::spawn_blocking(move || {
+            extract_document(parser, ocr, &parse_path, &runtime_settings)
+        })
+        .await;
         let attempt_result = runtime.finish_parser_operation(
             parser_operation,
             || match parsed {
@@ -1129,7 +1195,7 @@ impl IndexCoordinator {
                     document,
                 ),
                 Ok(Err(error)) => {
-                    let (code, message) = parser_failure(&error);
+                    let (code, message) = extraction_failure(&error);
                     self.complete_parser_failure(
                         job_id,
                         &candidate,
@@ -2388,6 +2454,110 @@ fn is_parse_attempt_token_collision(error: &IndexingError) -> bool {
             if code.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE
                 && message == "UNIQUE constraint failed: documents.parse_attempt_token"
     )
+}
+
+fn extract_document(
+    parser: Arc<dyn DocumentParser>,
+    ocr: Option<Arc<dyn DocumentOcr>>,
+    path: &Path,
+    settings: &RuntimeIndexSettings,
+) -> Result<ParsedDocument, ExtractionError> {
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let initial_decision = decide_ocr(
+        &extension,
+        "",
+        settings.ocr_enabled,
+        settings.math_ocr_enabled,
+        settings.math_ocr_enabled && extension == "pdf",
+    );
+    if matches!(
+        initial_decision,
+        OcrDecision::TextOcr | OcrDecision::MathOcr
+    ) && extension != "pdf"
+    {
+        return run_ocr(ocr, path, initial_decision, settings.max_file_size_bytes);
+    }
+
+    match parser.parse(path, settings.max_file_size_bytes) {
+        Ok(document) => {
+            let decision = decide_ocr(
+                &extension,
+                &document.plain_text,
+                settings.ocr_enabled,
+                settings.math_ocr_enabled,
+                settings.math_ocr_enabled && extension == "pdf",
+            );
+            match decision {
+                OcrDecision::TextOcr | OcrDecision::MathOcr => {
+                    run_ocr(ocr, path, decision, settings.max_file_size_bytes)
+                }
+                _ => Ok(document),
+            }
+        }
+        Err(ParserError::Protocol {
+            code: ParseErrorCode::ImageBasedPdf,
+            ..
+        }) if settings.ocr_enabled => {
+            let decision = if settings.math_ocr_enabled {
+                OcrDecision::MathOcr
+            } else {
+                OcrDecision::TextOcr
+            };
+            run_ocr(ocr, path, decision, settings.max_file_size_bytes)
+        }
+        Err(error) => Err(ExtractionError::Parser(error)),
+    }
+}
+
+fn run_ocr(
+    ocr: Option<Arc<dyn DocumentOcr>>,
+    path: &Path,
+    decision: OcrDecision,
+    max_bytes: u64,
+) -> Result<ParsedDocument, ExtractionError> {
+    let ocr = ocr.ok_or(ExtractionError::OcrUnavailable)?;
+    let mode = if decision == OcrDecision::MathOcr {
+        OcrMode::Math
+    } else {
+        OcrMode::Text
+    };
+    ocr.recognize(path, mode, max_bytes)
+        .map_err(ExtractionError::Ocr)
+}
+
+fn extraction_failure(error: &ExtractionError) -> (&'static str, String) {
+    match error {
+        ExtractionError::Parser(error) => parser_failure(error),
+        ExtractionError::Ocr(error) => match error {
+            OcrError::Protocol { code, message } => (ocr_error_code(code), message.clone()),
+            OcrError::Start => ("OCR_START", error.to_string()),
+            OcrError::Io => ("OCR_IO", error.to_string()),
+            OcrError::UnexpectedExit => ("OCR_EXIT", error.to_string()),
+            OcrError::InvalidResponse => ("OCR_INVALID_RESPONSE", error.to_string()),
+            OcrError::Timeout => ("OCR_TIMEOUT", error.to_string()),
+        },
+        ExtractionError::OcrUnavailable => (
+            "OCR_UNAVAILABLE",
+            "Local OCR is enabled but its bundled engine is unavailable".into(),
+        ),
+    }
+}
+
+fn ocr_error_code(code: &crate::ocr::OcrErrorCode) -> &'static str {
+    use crate::ocr::OcrErrorCode;
+    match code {
+        OcrErrorCode::InvalidRequest => "OCR_INVALID_REQUEST",
+        OcrErrorCode::FileUnavailable => "OCR_FILE_UNAVAILABLE",
+        OcrErrorCode::Unsupported => "OCR_UNSUPPORTED",
+        OcrErrorCode::TooLarge => "OCR_TOO_LARGE",
+        OcrErrorCode::ModelMissing => "OCR_MODEL_MISSING",
+        OcrErrorCode::InvalidEngineResult => "OCR_INVALID_ENGINE_RESULT",
+        OcrErrorCode::Internal => "OCR_INTERNAL",
+    }
 }
 
 fn parser_failure(error: &ParserError) -> (&'static str, String) {

@@ -33,7 +33,7 @@ checked only after its packaged independent test passes.
 - [x] T013 [US1] Make folder callbacks required in production and add empty-panel add/remove actions in `src/app/App.tsx`
 - [x] T014 [US1] Refresh folder counts and queue state from index events in `src/app/DesktopApp.tsx`
 - [x] T015 [US1] Surface selection, registration, indexing, and refresh failures in `src/components/CommandStatus.tsx`
-- [ ] T016 [US1] Pass the packaged folder-index-search acceptance in `tests/e2e/folder-search.spec.ts`
+- [x] T016 [US1] Pass the packaged folder-index-search acceptance in `tests/e2e/folder-search.e2e.ts`
 
 ## Phase 4: User Story 2 - Control Workspace and Inspect Documents (P1)
 
@@ -56,10 +56,10 @@ PDF, JPG, PNG, WebP, BMP, and TIFF fixtures; verify skip/recognition behavior.
 
 - [ ] T025 [P] [US3] Pin OCR runtime/model licenses and manifests in `sidecar/ocr-host/` and `THIRD_PARTY_NOTICES.md`
 - [ ] T026 [P] [US3] Add OCR settings/model state migration in `src-tauri/migrations/0008_ocr.sql`
-- [ ] T027 [P] [US3] Add OCR eligibility and protocol contract tests in `src-tauri/tests/ocr_flow.rs`
-- [ ] T028 [US3] Implement bounded local OCR sidecar protocol in `sidecar/ocr-host/`
+- [x] T027 [P] [US3] Add OCR eligibility and protocol contract tests in `src-tauri/tests/ocr_flow.rs`
+- [x] T028 [US3] Implement bounded local OCR sidecar protocol in `sidecar/ocr-host/`
 - [ ] T029 [US3] Build GUI-subsystem OCR executable and verify model hashes in `scripts/build-ocr-sidecar.ps1`
-- [ ] T030 [US3] Implement embedded-text quality and scan eligibility in `src-tauri/src/ocr/eligibility.rs`
+- [x] T030 [US3] Implement embedded-text quality and scan eligibility in `src-tauri/src/ocr/eligibility.rs`
 - [ ] T031 [US3] Integrate OCR attempt ownership/cancellation into indexing in `src-tauri/src/indexing/coordinator.rs`
 - [x] T032 [US3] Implement OCR and separate math-OCR settings/warnings in `src/features/settings/SearchSettings.tsx`
 - [ ] T033 [US3] Add zero-egress, timeout, crash, and resource-bound tests in `src-tauri/tests/ocr_privacy.rs`

@@ -74,13 +74,7 @@ mod tests {
 
     #[test]
     fn separates_math_ocr_and_respects_the_master_switch() {
-        assert_eq!(
-            decide("pdf", "", true, true, true),
-            OcrDecision::MathOcr
-        );
-        assert_eq!(
-            decide("pdf", "", false, true, true),
-            OcrDecision::Disabled
-        );
+        assert_eq!(decide("pdf", "", true, true, true), OcrDecision::MathOcr);
+        assert_eq!(decide("pdf", "", false, true, true), OcrDecision::Disabled);
     }
 }

@@ -262,7 +262,8 @@ export function App({
   const [workspaceRef, workspaceWidth] = useWorkspaceWidth();
   const { tagline } = productTranslations[locale];
   const previewRequested =
-    rightPanelOpen && workspaceWidth > PREVIEW_BREAKPOINT;
+    rightPanelOpen &&
+    (workspaceWidth > PREVIEW_BREAKPOINT || !leftPanelOpen);
   const leftCanFit = workspaceWidth >= LEFT_PANE_MIN + CENTER_PANE_MIN;
   const previewCanFit =
     previewRequested &&

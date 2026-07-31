@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "text": {
+    "detection": "PP-OCRv5_mobile_det",
+    "recognition": "korean_PP-OCRv5_mobile_rec"
+  },
+  "math": {
+    "layout": "PP-DocLayout-S",
+    "formula": "PP-FormulaNet-S"
+  },
+  "runtimeDownloadAllowed": false
+}

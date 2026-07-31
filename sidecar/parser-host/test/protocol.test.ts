@@ -14,6 +14,7 @@ import {
   type ParseDependencies,
   type ParseRequest,
 } from "../src/protocol.js";
+import { parseWithKordoc } from "../src/kordoc-adapter.js";
 
 const MAX_BYTES = 20_000_000;
 let fixtureDirectory = "";
@@ -190,6 +191,19 @@ async function parseFixture(
 }
 
 describe("parser protocol", () => {
+  it("parses TXT and Markdown documents entirely on this PC", async () => {
+    for (const fileName of ["local-note.txt", "local-note.md"]) {
+      const path = fixturePath(fileName);
+      await writeFile(path, "고유한 로컬 본문 검색어", "utf8");
+      const result = await parseWithKordoc(path);
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.document.plainText).toContain("로컬 본문");
+        expect(result.document.metadata.localText).toBe(true);
+      }
+    }
+  });
+
   it("normalizes a successful Kordoc result", async () => {
     const response = await handleRequest(request(fixturePath("simple.hwpx")));
     expect(response).toMatchObject({

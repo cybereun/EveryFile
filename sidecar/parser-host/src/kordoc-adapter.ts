@@ -4,6 +4,8 @@ import {
   type IRBlock,
   type ParseWarning,
 } from "../../../vendor/kordoc/dist/index.js";
+import { readFile } from "node:fs/promises";
+import { basename, extname } from "node:path";
 
 import type {
   AdapterResult,
@@ -86,6 +88,25 @@ function normalizeWarning(warning: ParseWarning): Record<string, unknown> {
 }
 
 export async function parseWithKordoc(path: string): Promise<AdapterResult> {
+  const extension = extname(path).toLocaleLowerCase();
+  if (extension === ".txt" || extension === ".md" || extension === ".markdown") {
+    const plainText = await readFile(path, "utf8");
+    return {
+      ok: true,
+      document: {
+        parserKind: "kordoc",
+        title: basename(path, extension),
+        markdown: plainText,
+        plainText,
+        blocks: plainText.trim()
+          ? [{ type: "paragraph", text: plainText }]
+          : [],
+        metadata: { sourceFormat: extension.slice(1), localText: true },
+        warnings: [],
+      },
+    };
+  }
+
   const result = await parse(path, {
     removeHeaderFooter: true,
     formulaOcr: false,
