@@ -22,6 +22,9 @@ dist-ssr
 *.local
 /sidecar/parser-host/everyfile-parser.exe
 /src-tauri/binaries/everyfile-parser-*.exe
+/sidecar/ocr-host/models/
+/src-tauri/binaries/everyfile-ocr-*.exe
+/.cache/
 /artifacts/
 /test-results/
 

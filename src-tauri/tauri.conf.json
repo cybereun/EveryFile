@@ -29,7 +29,10 @@
     "active": true,
     "publisher": "Lebi_Cybereun",
     "copyright": "\u00A9 2026 Lebi_Cybereun",
-    "externalBin": ["binaries/everyfile-parser"],
+    "externalBin": [
+      "binaries/everyfile-parser",
+      "binaries/everyfile-ocr"
+    ],
     "targets": ["nsis"],
     "category": "Productivity",
     "shortDescription": "Local-first document search for Windows",

@@ -58,11 +58,13 @@ files are retained under `vendor/kordoc/`.
 
 ## Local OCR components
 
-- PaddleOCR — local OCR pipeline; Apache License 2.0.
-- PaddlePaddle — local inference runtime; Apache License 2.0.
-- PP-OCRv5 models, PP-DocLayout-S, and PP-FormulaNet-S — distributed by the
-  PaddlePaddle/PaddleOCR project. Model provenance and file hashes are produced
-  during the OCR-sidecar build and shipped beside release artifacts.
+- PaddleOCR 3.7.0 — local OCR pipeline; Apache License 2.0.
+- PaddlePaddle 3.3.1 — local CPU inference runtime; Apache License 2.0.
+- PP-OCRv5 mobile detection, Korean PP-OCRv5 mobile recognition,
+  PP-DocLayout-S, and PP-FormulaNet-S (Paddle 3.0.0 model series) — distributed
+  by the PaddlePaddle/PaddleOCR project under Apache License 2.0. Exact source
+  URLs, archive hashes, and per-file hashes are pinned in
+  `sidecar/ocr-host/model-manifest.json`.
 
 EveryFile does not remove or replace upstream copyright notices. See each
 component's bundled license files for the complete legal text.

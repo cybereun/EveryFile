@@ -1,0 +1,165 @@
+{
+    "schemaVersion":  1,
+    "generatedFrom":  [
+                          {
+                              "name":  "PP-OCRv5_mobile_det",
+                              "version":  "Paddle3.0.0",
+                              "license":  "Apache-2.0",
+                              "source":  "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-OCRv5_mobile_det_infer.tar",
+                              "archiveSha256":  "50446e5d01ac2a73d5319c89513281f6578414c888c602f9af13f93feefffc58"
+                          },
+                          {
+                              "name":  "korean_PP-OCRv5_mobile_rec",
+                              "version":  "Paddle3.0.0",
+                              "license":  "Apache-2.0",
+                              "source":  "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0//korean_PP-OCRv5_mobile_rec_infer.tar",
+                              "archiveSha256":  "a6261f800ad335aa6ef77b6f7c4dcedfd5e11b95f4d70982d41ee31c2ace5e66"
+                          },
+                          {
+                              "name":  "PP-DocLayout-S",
+                              "version":  "Paddle3.0.0",
+                              "license":  "Apache-2.0",
+                              "source":  "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-DocLayout-S_infer.tar",
+                              "archiveSha256":  "3f589aa473a5305a626705d94762fcb4ab3e43e6e48983c9b34b011a6c9d0394"
+                          },
+                          {
+                              "name":  "PP-FormulaNet-S",
+                              "version":  "Paddle3.0.0",
+                              "license":  "Apache-2.0",
+                              "source":  "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-FormulaNet-S_infer.tar",
+                              "archiveSha256":  "a3ea2c005abdbe525d9e46c1e2e96021d900b0dd45535a112260d46dd437612e"
+                          }
+                      ],
+    "files":  [
+                  {
+                      "path":  "korean_PP-OCRv5_mobile_rec/.cache/huggingface/.gitignore",
+                      "size":  1,
+                      "sha256":  "684888c0ebb17f374298b65ee2807526c066094c701bcc7ebbe1c1095f494fc1"
+                  },
+                  {
+                      "path":  "korean_PP-OCRv5_mobile_rec/.cache/huggingface/download/.gitattributes.lock",
+                      "size":  0,
+                      "sha256":  "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                      "path":  "korean_PP-OCRv5_mobile_rec/.cache/huggingface/download/.gitattributes.metadata",
+                      "size":  101,
+                      "sha256":  "9b8115680bc1f7a2098b1ffc4cc8c599abf61e1140204ae84640cdc4d05cec0d"
+                  },
+                  {
+                      "path":  "korean_PP-OCRv5_mobile_rec/.cache/huggingface/download/config.json.lock",
+                      "size":  0,
+                      "sha256":  "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                      "path":  "korean_PP-OCRv5_mobile_rec/.cache/huggingface/download/config.json.metadata",
+                      "size":  100,
+                      "sha256":  "b8abe88ca3dd89bbf7d2fba39289d294e8e04efbdd6584209a15699c9618a738"
+                  },
+                  {
+                      "path":  "korean_PP-OCRv5_mobile_rec/.cache/huggingface/download/inference.json.lock",
+                      "size":  0,
+                      "sha256":  "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                      "path":  "korean_PP-OCRv5_mobile_rec/.cache/huggingface/download/inference.json.metadata",
+                      "size":  101,
+                      "sha256":  "4670d2006da89e7ec3447b10a7ea62e61649bfa9954d5ea4e58d76a75c4403ed"
+                  },
+                  {
+                      "path":  "korean_PP-OCRv5_mobile_rec/.cache/huggingface/download/inference.pdiparams.lock",
+                      "size":  0,
+                      "sha256":  "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                      "path":  "korean_PP-OCRv5_mobile_rec/.cache/huggingface/download/inference.pdiparams.metadata",
+                      "size":  125,
+                      "sha256":  "c9b16e60a6cb89b507c2bc317b7471ea562ac5be724c446f2e003028977503e3"
+                  },
+                  {
+                      "path":  "korean_PP-OCRv5_mobile_rec/.cache/huggingface/download/inference.yml.lock",
+                      "size":  0,
+                      "sha256":  "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                      "path":  "korean_PP-OCRv5_mobile_rec/.cache/huggingface/download/inference.yml.metadata",
+                      "size":  101,
+                      "sha256":  "948a9e6da14df7fccf9b51aec7b0b948d215dbf1313b0621172ca45e22aebb1c"
+                  },
+                  {
+                      "path":  "korean_PP-OCRv5_mobile_rec/.cache/huggingface/download/README.md.lock",
+                      "size":  0,
+                      "sha256":  "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                      "path":  "korean_PP-OCRv5_mobile_rec/.cache/huggingface/download/README.md.metadata",
+                      "size":  101,
+                      "sha256":  "304a42d15b7b7782a3f13b9266ffe46f99f51e0b1b37f47bbe49dad248707d3a"
+                  },
+                  {
+                      "path":  "korean_PP-OCRv5_mobile_rec/.gitattributes",
+                      "size":  1575,
+                      "sha256":  "a3a43406012ee8c7b9b38dfab1b11610f33e8245cd864a9a9302d042616a859e"
+                  },
+                  {
+                      "path":  "korean_PP-OCRv5_mobile_rec/inference.json",
+                      "size":  217724,
+                      "sha256":  "562404e3c590c50c93778d5f0a94df21b47b5ab8f3ea6d47c7f8a7930c3bc844"
+                  },
+                  {
+                      "path":  "korean_PP-OCRv5_mobile_rec/inference.pdiparams",
+                      "size":  13342671,
+                      "sha256":  "cac3e5f12cf04aaa77f6a5bc704e4e736ef2908476551891d84b41b4e9090462"
+                  },
+                  {
+                      "path":  "korean_PP-OCRv5_mobile_rec/inference.yml",
+                      "size":  96039,
+                      "sha256":  "f757fa1c40e99edcf27e9cce879b93eb2a51fa46f5ef39095689b8c37dd75998"
+                  },
+                  {
+                      "path":  "PP-DocLayout-S/inference.json",
+                      "size":  339876,
+                      "sha256":  "ac09e931895d4c442e5379ab3b7e9b583baf288e816ab7675ca519da9eb2a9d7"
+                  },
+                  {
+                      "path":  "PP-DocLayout-S/inference.pdiparams",
+                      "size":  4804904,
+                      "sha256":  "491c3382d84ca04d2033afbee0c105942ed82fea392bb4a19170646adebe088a"
+                  },
+                  {
+                      "path":  "PP-DocLayout-S/inference.yml",
+                      "size":  1579,
+                      "sha256":  "6f690098c438214c67822239a568f0bc2bbe97a8f02fba93e492d4f2c47523c3"
+                  },
+                  {
+                      "path":  "PP-FormulaNet-S/inference.json",
+                      "size":  504505,
+                      "sha256":  "2c8fc31a94d461a7325fe06e8cbaa5db6c5658c490f74d3d6116defe8c859d6f"
+                  },
+                  {
+                      "path":  "PP-FormulaNet-S/inference.pdiparams",
+                      "size":  231675001,
+                      "sha256":  "b6392296d16e2a9f414c0a751d7ccbd1bd9d8272b68aab72df1d3875f35a7489"
+                  },
+                  {
+                      "path":  "PP-FormulaNet-S/inference.yml",
+                      "size":  2244559,
+                      "sha256":  "08b21c2d255041008266b8fb947758e9731eafff191568af21da5a4b9c9dd5a0"
+                  },
+                  {
+                      "path":  "PP-OCRv5_mobile_det/inference.json",
+                      "size":  229777,
+                      "sha256":  "05feef1acb00aa4cd7362b15f7f501fc4f99d7b1fa73c1c871e0c7b1504b0f5c"
+                  },
+                  {
+                      "path":  "PP-OCRv5_mobile_det/inference.pdiparams",
+                      "size":  4692937,
+                      "sha256":  "afa1820cb16c1fd0dad589d0f8b389139061c1ef6d68019685fd07be997dda5b"
+                  },
+                  {
+                      "path":  "PP-OCRv5_mobile_det/inference.yml",
+                      "size":  903,
+                      "sha256":  "98069072e1b6b37d727fd9d9f11725faa46d6ea0de012f2ed26caea011c37699"
+                  }
+              ]
+}

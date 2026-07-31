@@ -60,6 +60,7 @@ pub trait DocumentOcr: Send + Sync + 'static {
         path: &Path,
         mode: OcrMode,
         max_bytes: u64,
+        cancelled: Arc<AtomicBool>,
     ) -> Result<ParsedDocument, OcrError>;
 }
 
@@ -104,8 +105,9 @@ impl DocumentOcr for OcrClient {
         path: &Path,
         mode: OcrMode,
         max_bytes: u64,
+        cancelled: Arc<AtomicBool>,
     ) -> Result<ParsedDocument, OcrError> {
-        OcrClient::recognize(self, path, mode, max_bytes)
+        OcrClient::recognize(self, path, mode, max_bytes, cancelled)
     }
 }
 
@@ -189,7 +191,7 @@ enum ExtractionError {
 }
 
 struct JobRuntime {
-    stop: AtomicBool,
+    stop: Arc<AtomicBool>,
     ownership: tokio::sync::Mutex<()>,
     gate: tokio::sync::Mutex<()>,
     commit_gate: parking_lot::Mutex<()>,
@@ -210,7 +212,7 @@ impl JobRuntime {
         reconciliation_gate: Option<Arc<ReconciliationMutationGate>>,
     ) -> Self {
         Self {
-            stop: AtomicBool::new(false),
+            stop: Arc::new(AtomicBool::new(false)),
             ownership: tokio::sync::Mutex::new(()),
             gate: tokio::sync::Mutex::new(()),
             commit_gate: parking_lot::Mutex::new(()),
@@ -270,7 +272,13 @@ impl JobRuntime {
         if let Some(operation) = operation.reconciliation {
             operation.finish(commit, compensate)
         } else {
-            self.with_mutation(commit)
+            let _commit = self.commit_gate.lock();
+            if self.stop.load(Ordering::Acquire) {
+                compensate()?;
+                Err(IndexingError::StateChanged)
+            } else {
+                commit()
+            }
         }
     }
 }
@@ -510,10 +518,10 @@ impl IndexCoordinator {
 
     pub async fn cancel(&self, job_id: &str) -> Result<(), IndexingError> {
         let runtime = self.runtime(job_id).await;
-        let ownership = runtime.ownership.lock().await;
-        let gate = runtime.gate.lock().await;
         self.cas_cancellable_state(job_id)?;
         runtime.stop.store(true, Ordering::Release);
+        let ownership = runtime.ownership.lock().await;
+        let gate = runtime.gate.lock().await;
         drop(gate);
         self.await_worker(&runtime).await;
         Self::remove_runtime_if_same(&self.runtimes, job_id, &runtime).await;
@@ -1181,21 +1189,65 @@ impl IndexCoordinator {
             .read()
             .map_err(|_| IndexingError::RuntimeSettingsUnavailable)?
             .clone();
+        let tracks_ocr = should_track_ocr(&trusted_path, &runtime_settings);
+        if tracks_ocr {
+            self.begin_ocr_attempt(
+                &parsing_checkpoint.document_id,
+                &parsing_checkpoint.attempt_token,
+                if runtime_settings.math_ocr_enabled
+                    && trusted_path
+                        .extension()
+                        .and_then(|value| value.to_str())
+                        .is_some_and(|value| value.eq_ignore_ascii_case("pdf"))
+                {
+                    "math"
+                } else {
+                    "text"
+                },
+            )?;
+        }
+        let cancelled = Arc::clone(&runtime.stop);
         let parsed = tokio::task::spawn_blocking(move || {
-            extract_document(parser, ocr, &parse_path, &runtime_settings)
+            extract_document(parser, ocr, &parse_path, &runtime_settings, cancelled)
         })
         .await;
         let attempt_result = runtime.finish_parser_operation(
             parser_operation,
             || match parsed {
-                Ok(Ok(document)) => self.complete_success(
-                    job_id,
-                    &candidate,
-                    &parsing_checkpoint.attempt_token,
-                    document,
-                ),
+                Ok(Ok(document)) => {
+                    if tracks_ocr {
+                        self.finish_ocr_attempt(
+                            &parsing_checkpoint.document_id,
+                            &parsing_checkpoint.attempt_token,
+                            if document_was_ocr(&document) {
+                                "completed"
+                            } else {
+                                "skipped"
+                            },
+                            None,
+                        )?;
+                    }
+                    self.complete_success(
+                        job_id,
+                        &candidate,
+                        &parsing_checkpoint.attempt_token,
+                        document,
+                    )
+                }
                 Ok(Err(error)) => {
                     let (code, message) = extraction_failure(&error);
+                    if tracks_ocr {
+                        self.finish_ocr_attempt(
+                            &parsing_checkpoint.document_id,
+                            &parsing_checkpoint.attempt_token,
+                            if matches!(error, ExtractionError::Ocr(OcrError::Cancelled)) {
+                                "cancelled"
+                            } else {
+                                "failed"
+                            },
+                            Some(code),
+                        )?;
+                    }
                     self.complete_parser_failure(
                         job_id,
                         &candidate,
@@ -1204,15 +1256,33 @@ impl IndexCoordinator {
                         &message,
                     )
                 }
-                Err(_) => self.complete_parser_failure(
-                    job_id,
-                    &candidate,
-                    &parsing_checkpoint.attempt_token,
-                    "PARSER_WORKER_STOPPED",
-                    "parser worker stopped unexpectedly",
-                ),
+                Err(_) => {
+                    if tracks_ocr {
+                        self.finish_ocr_attempt(
+                            &parsing_checkpoint.document_id,
+                            &parsing_checkpoint.attempt_token,
+                            "failed",
+                            Some("PARSER_WORKER_STOPPED"),
+                        )?;
+                    }
+                    self.complete_parser_failure(
+                        job_id,
+                        &candidate,
+                        &parsing_checkpoint.attempt_token,
+                        "PARSER_WORKER_STOPPED",
+                        "parser worker stopped unexpectedly",
+                    )
+                }
             },
             || {
+                if tracks_ocr {
+                    self.finish_ocr_attempt(
+                        &parsing_checkpoint.document_id,
+                        &parsing_checkpoint.attempt_token,
+                        "cancelled",
+                        Some("OCR_CANCELLED"),
+                    )?;
+                }
                 self.compensate_cancelled_parse(&candidate, &parsing_checkpoint)
                     .map(|_| ())
             },
@@ -1513,6 +1583,57 @@ impl IndexCoordinator {
         }
         transaction.commit()?;
         Ok(ParseAttemptMutation::Applied)
+    }
+
+    fn begin_ocr_attempt(
+        &self,
+        document_id: &str,
+        attempt_token: &str,
+        model_kind: &str,
+    ) -> Result<(), IndexingError> {
+        self.database.connection().execute(
+            "INSERT INTO ocr_attempts (
+               document_id, attempt_token, state, engine, model_kind, started_at, finished_at
+             ) VALUES (
+               ?1, ?2, 'running', 'paddleocr', ?3,
+               strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), NULL
+             )
+             ON CONFLICT(document_id) DO UPDATE SET
+               attempt_token = excluded.attempt_token,
+               state = 'running',
+               engine = excluded.engine,
+               model_kind = excluded.model_kind,
+               error_code = NULL,
+               started_at = excluded.started_at,
+               finished_at = NULL
+             WHERE ocr_attempts.attempt_token IS NULL
+                OR ocr_attempts.state IN ('completed', 'skipped', 'failed', 'cancelled')",
+            params![document_id, attempt_token, model_kind],
+        )?;
+        Ok(())
+    }
+
+    fn finish_ocr_attempt(
+        &self,
+        document_id: &str,
+        attempt_token: &str,
+        state: &str,
+        error_code: Option<&str>,
+    ) -> Result<(), IndexingError> {
+        let changed = self.database.connection().execute(
+            "UPDATE ocr_attempts
+             SET state = ?3,
+                 error_code = ?4,
+                 finished_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+                 attempt_token = NULL
+             WHERE document_id = ?1 AND attempt_token = ?2",
+            params![document_id, attempt_token, state, error_code],
+        )?;
+        if changed == 1 {
+            Ok(())
+        } else {
+            Err(IndexingError::StateChanged)
+        }
     }
 
     fn complete_metadata_only(
@@ -2456,11 +2577,35 @@ fn is_parse_attempt_token_collision(error: &IndexingError) -> bool {
     )
 }
 
+fn should_track_ocr(path: &Path, settings: &RuntimeIndexSettings) -> bool {
+    if !settings.ocr_enabled {
+        return false;
+    }
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    matches!(
+        extension.as_str(),
+        "pdf" | "jpg" | "jpeg" | "png" | "webp" | "bmp" | "tif" | "tiff"
+    )
+}
+
+fn document_was_ocr(document: &ParsedDocument) -> bool {
+    document
+        .metadata
+        .get("engine")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|engine| engine.eq_ignore_ascii_case("paddleocr"))
+}
+
 fn extract_document(
     parser: Arc<dyn DocumentParser>,
     ocr: Option<Arc<dyn DocumentOcr>>,
     path: &Path,
     settings: &RuntimeIndexSettings,
+    cancelled: Arc<AtomicBool>,
 ) -> Result<ParsedDocument, ExtractionError> {
     let extension = path
         .extension()
@@ -2479,7 +2624,13 @@ fn extract_document(
         OcrDecision::TextOcr | OcrDecision::MathOcr
     ) && extension != "pdf"
     {
-        return run_ocr(ocr, path, initial_decision, settings.max_file_size_bytes);
+        return run_ocr(
+            ocr,
+            path,
+            initial_decision,
+            settings.max_file_size_bytes,
+            cancelled,
+        );
     }
 
     match parser.parse(path, settings.max_file_size_bytes) {
@@ -2493,7 +2644,7 @@ fn extract_document(
             );
             match decision {
                 OcrDecision::TextOcr | OcrDecision::MathOcr => {
-                    run_ocr(ocr, path, decision, settings.max_file_size_bytes)
+                    run_ocr(ocr, path, decision, settings.max_file_size_bytes, cancelled)
                 }
                 _ => Ok(document),
             }
@@ -2507,7 +2658,7 @@ fn extract_document(
             } else {
                 OcrDecision::TextOcr
             };
-            run_ocr(ocr, path, decision, settings.max_file_size_bytes)
+            run_ocr(ocr, path, decision, settings.max_file_size_bytes, cancelled)
         }
         Err(error) => Err(ExtractionError::Parser(error)),
     }
@@ -2518,6 +2669,7 @@ fn run_ocr(
     path: &Path,
     decision: OcrDecision,
     max_bytes: u64,
+    cancelled: Arc<AtomicBool>,
 ) -> Result<ParsedDocument, ExtractionError> {
     let ocr = ocr.ok_or(ExtractionError::OcrUnavailable)?;
     let mode = if decision == OcrDecision::MathOcr {
@@ -2525,7 +2677,7 @@ fn run_ocr(
     } else {
         OcrMode::Text
     };
-    ocr.recognize(path, mode, max_bytes)
+    ocr.recognize(path, mode, max_bytes, cancelled)
         .map_err(ExtractionError::Ocr)
 }
 
@@ -2539,6 +2691,7 @@ fn extraction_failure(error: &ExtractionError) -> (&'static str, String) {
             OcrError::UnexpectedExit => ("OCR_EXIT", error.to_string()),
             OcrError::InvalidResponse => ("OCR_INVALID_RESPONSE", error.to_string()),
             OcrError::Timeout => ("OCR_TIMEOUT", error.to_string()),
+            OcrError::Cancelled => ("OCR_CANCELLED", error.to_string()),
         },
         ExtractionError::OcrUnavailable => (
             "OCR_UNAVAILABLE",

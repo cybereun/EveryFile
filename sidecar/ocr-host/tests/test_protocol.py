@@ -24,6 +24,22 @@ class FakeEngine:
 
 
 class ProtocolTests(unittest.TestCase):
+    def test_unwraps_current_paddle_result_shape(self) -> None:
+        document = text_document(
+            [
+                {
+                    "res": {
+                        "page_index": None,
+                        "rec_texts": ["EveryFile OCR"],
+                        "rec_scores": [0.99],
+                        "rec_polys": [[[0, 0], [1, 0], [1, 1], [0, 1]]],
+                    }
+                }
+            ]
+        )
+        self.assertEqual(document["plainText"], "EveryFile OCR")
+        self.assertEqual(document["blocks"][0]["page"], 1)
+
     def test_accepts_supported_local_file_and_math_mode(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "scan.png"

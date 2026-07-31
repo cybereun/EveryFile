@@ -2,11 +2,11 @@ use std::ffi::{OsStr, OsString};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -55,6 +55,8 @@ pub enum OcrError {
     InvalidResponse,
     #[error("OCR request timed out")]
     Timeout,
+    #[error("OCR request was cancelled")]
+    Cancelled,
     #[error("OCR rejected the document: {code:?}")]
     Protocol { code: OcrErrorCode, message: String },
 }
@@ -140,11 +142,12 @@ impl OcrClient {
         path: impl AsRef<Path>,
         mode: OcrMode,
         max_bytes: u64,
+        cancelled: Arc<AtomicBool>,
     ) -> Result<ParsedDocument, OcrError> {
         let id = format!("ocr-{}", self.sequence.fetch_add(1, Ordering::Relaxed));
         let path = path.as_ref().to_string_lossy().into_owned();
         for attempt in 0..=1 {
-            match self.send_and_wait(&id, &path, mode, max_bytes) {
+            match self.send_and_wait(&id, &path, mode, max_bytes, Arc::clone(&cancelled)) {
                 Err(OcrError::UnexpectedExit) if attempt == 0 => continue,
                 result => return result,
             }
@@ -164,6 +167,7 @@ impl OcrClient {
         path: &str,
         mode: OcrMode,
         max_bytes: u64,
+        cancelled: Arc<AtomicBool>,
     ) -> Result<ParsedDocument, OcrError> {
         let mut slot = self.process.lock().map_err(|_| OcrError::Io)?;
         if slot
@@ -192,15 +196,27 @@ impl OcrClient {
             stop_process(&mut slot);
             return Err(OcrError::UnexpectedExit);
         }
-        let response = match process.responses.recv_timeout(self.timeout) {
-            Ok(response) => response?,
-            Err(mpsc::RecvTimeoutError::Timeout) => {
+        let deadline = Instant::now() + self.timeout;
+        let response = loop {
+            if cancelled.load(Ordering::Acquire) {
+                stop_process(&mut slot);
+                return Err(OcrError::Cancelled);
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
                 stop_process(&mut slot);
                 return Err(OcrError::Timeout);
             }
-            Err(mpsc::RecvTimeoutError::Disconnected) => {
-                stop_process(&mut slot);
-                return Err(OcrError::UnexpectedExit);
+            match process
+                .responses
+                .recv_timeout(remaining.min(Duration::from_millis(100)))
+            {
+                Ok(response) => break response?,
+                Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    stop_process(&mut slot);
+                    return Err(OcrError::UnexpectedExit);
+                }
             }
         };
         if response.id.as_deref() != Some(id) {

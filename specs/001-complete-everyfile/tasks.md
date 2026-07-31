@@ -54,15 +54,15 @@ preview a result and exercise all non-AI document actions.
 **Independent Test**: With a network sentinel active, index text PDF, scanned
 PDF, JPG, PNG, WebP, BMP, and TIFF fixtures; verify skip/recognition behavior.
 
-- [ ] T025 [P] [US3] Pin OCR runtime/model licenses and manifests in `sidecar/ocr-host/` and `THIRD_PARTY_NOTICES.md`
-- [ ] T026 [P] [US3] Add OCR settings/model state migration in `src-tauri/migrations/0008_ocr.sql`
+- [x] T025 [P] [US3] Pin OCR runtime/model licenses and manifests in `sidecar/ocr-host/` and `THIRD_PARTY_NOTICES.md`
+- [x] T026 [P] [US3] Add OCR settings/model state migration in `src-tauri/migrations/0008_ocr.sql`
 - [x] T027 [P] [US3] Add OCR eligibility and protocol contract tests in `src-tauri/tests/ocr_flow.rs`
 - [x] T028 [US3] Implement bounded local OCR sidecar protocol in `sidecar/ocr-host/`
-- [ ] T029 [US3] Build GUI-subsystem OCR executable and verify model hashes in `scripts/build-ocr-sidecar.ps1`
+- [x] T029 [US3] Build GUI-subsystem OCR executable and verify model hashes in `scripts/build-ocr-sidecar.ps1`
 - [x] T030 [US3] Implement embedded-text quality and scan eligibility in `src-tauri/src/ocr/eligibility.rs`
-- [ ] T031 [US3] Integrate OCR attempt ownership/cancellation into indexing in `src-tauri/src/indexing/coordinator.rs`
+- [x] T031 [US3] Integrate OCR attempt ownership/cancellation into indexing in `src-tauri/src/indexing/coordinator.rs`
 - [x] T032 [US3] Implement OCR and separate math-OCR settings/warnings in `src/features/settings/SearchSettings.tsx`
-- [ ] T033 [US3] Add zero-egress, timeout, crash, and resource-bound tests in `src-tauri/tests/ocr_privacy.rs`
+- [x] T033 [US3] Add zero-egress, timeout, crash, and resource-bound tests in `src-tauri/tests/ocr_privacy.rs`
 - [ ] T034 [US3] Pass packaged OCR acceptance for every supported format in `tests/e2e/ocr.spec.ts`
 
 ## Phase 6: User Story 4 - Choose and Use AI Explicitly (P2)

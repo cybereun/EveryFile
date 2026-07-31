@@ -59,6 +59,8 @@ def json_value(result: Any) -> dict[str, Any]:
         value = value()
     if not isinstance(value, dict):
         raise ProtocolError("INVALID_ENGINE_RESULT", "OCR engine returned an invalid result")
+    if isinstance(value.get("res"), dict):
+        value = value["res"]
     return value
 
 
@@ -83,7 +85,8 @@ def text_document(results: Iterable[Any]) -> dict[str, Any]:
             score = float(scores[index]) if index < len(scores) else None
             box = normalise_box(boxes[index]) if index < len(boxes) else None
             lines.append({"text": text, "score": score, "box": box})
-        page = int(value.get("page_index", page_number - 1)) + 1
+        raw_page = value.get("page_index")
+        page = (raw_page if isinstance(raw_page, int) else page_number - 1) + 1
         pages.append({"page": page, "lines": lines})
         all_text.extend(texts)
     plain_text = "\n".join(all_text)[:MAX_RESPONSE_TEXT]
@@ -109,7 +112,12 @@ def merge_formulae(document: dict[str, Any], results: Iterable[Any]) -> dict[str
                     {
                         "latex": latex,
                         "region": item.get("dt_polys"),
-                        "page": int(value.get("page_index", 0)) + 1,
+                        "page": (
+                            value["page_index"]
+                            if isinstance(value.get("page_index"), int)
+                            else 0
+                        )
+                        + 1,
                     }
                 )
     if formulae:
@@ -157,6 +165,7 @@ class PaddleEngine:
                     ocr_version="PP-OCRv5",
                     device="cpu",
                     cpu_threads=max(1, min(4, os.cpu_count() or 1)),
+                    enable_mkldnn=False,
                 )
             return self._text
 
@@ -178,6 +187,7 @@ class PaddleEngine:
                     use_layout_detection=True,
                     device="cpu",
                     cpu_threads=max(1, min(4, os.cpu_count() or 1)),
+                    enable_mkldnn=False,
                 )
             return self._formula
 
@@ -233,6 +243,10 @@ def handle_request(request: Any, engine: Any) -> dict[str, Any]:
             "error": {"code": error.code, "message": str(error)},
         }
     except Exception:
+        if os.environ.get("EVERYFILE_OCR_DIAGNOSTICS") == "1":
+            import traceback
+
+            traceback.print_exc(file=sys.stderr)
         return {
             "id": request_id if isinstance(request_id, str) else None,
             "ok": False,

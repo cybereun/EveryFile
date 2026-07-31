@@ -1,5 +1,10 @@
 {
   "schemaVersion": 1,
+  "runtime": {
+    "paddleocr": "3.7.0",
+    "paddlepaddle": "3.3.1",
+    "license": "Apache-2.0"
+  },
   "text": {
     "detection": "PP-OCRv5_mobile_det",
     "recognition": "korean_PP-OCRv5_mobile_rec"

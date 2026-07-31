@@ -1,6 +1,6 @@
 use std::fs;
 use std::path::Path;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -48,6 +48,7 @@ impl DocumentOcr for FakeLocalOcr {
         _path: &Path,
         mode: OcrMode,
         _max_bytes: u64,
+        _cancelled: Arc<std::sync::atomic::AtomicBool>,
     ) -> Result<ParsedDocument, OcrError> {
         self.calls.fetch_add(1, Ordering::AcqRel);
         Ok(ParsedDocument {
@@ -62,6 +63,32 @@ impl DocumentOcr for FakeLocalOcr {
             }),
             warnings: vec![],
         })
+    }
+}
+
+#[derive(Default)]
+struct CancellableOcr {
+    started: AtomicBool,
+}
+
+impl DocumentOcr for CancellableOcr {
+    fn recognize(
+        &self,
+        _path: &Path,
+        _mode: OcrMode,
+        _max_bytes: u64,
+        cancelled: Arc<AtomicBool>,
+    ) -> Result<ParsedDocument, OcrError> {
+        self.started.store(true, Ordering::Release);
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while !cancelled.load(Ordering::Acquire) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        if cancelled.load(Ordering::Acquire) {
+            Err(OcrError::Cancelled)
+        } else {
+            Err(OcrError::Timeout)
+        }
     }
 }
 
@@ -135,4 +162,92 @@ async fn indexes_images_with_local_ocr_and_skips_text_pdf_ocr() {
         .unwrap();
     assert!(image_body.contains("스캔 이미지"));
     assert!(pdf_body.contains("embedded text layer"));
+    let states = connection
+        .prepare(
+            "SELECT d.file_name, o.state
+             FROM ocr_attempts o
+             JOIN documents d ON d.id = o.document_id
+             ORDER BY d.file_name",
+        )
+        .unwrap()
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(
+        states,
+        vec![
+            ("normal.pdf".into(), "skipped".into()),
+            ("scan.png".into(), "completed".into())
+        ]
+    );
+    let model_state_table: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master
+             WHERE type = 'table' AND name = 'ocr_model_state'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(model_state_table, 1);
+}
+
+#[tokio::test]
+async fn cancellation_stops_an_owned_ocr_attempt_and_compensates_the_document() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path().join("registered");
+    fs::create_dir(&root).unwrap();
+    fs::write(root.join("scan.png"), b"local image fixture").unwrap();
+
+    let key = SecretKey::from_bytes(Zeroizing::new([42_u8; 32]));
+    let database = Arc::new(Database::open(&temp.path().join("ocr-cancel.db"), &key).unwrap());
+    database.migrate().unwrap();
+    let folder = FolderRepository::new(Arc::clone(&database))
+        .register(&root)
+        .unwrap();
+    let ocr = Arc::new(CancellableOcr::default());
+    let coordinator = IndexCoordinator::with_parser_ocr_and_sink(
+        Arc::clone(&database),
+        Arc::new(ScanAwareParser),
+        Arc::clone(&ocr),
+        10 * 1024 * 1024,
+        None,
+    );
+    coordinator
+        .apply_runtime_settings(&AppSettings {
+            ocr_enabled: true,
+            ..AppSettings::default()
+        })
+        .unwrap();
+
+    let job = coordinator.start(&folder.id).await.unwrap();
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while !ocr.started.load(Ordering::Acquire) {
+        assert!(Instant::now() < deadline, "OCR did not start");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let cancel_started = Instant::now();
+    coordinator.cancel(&job).await.unwrap();
+    assert!(cancel_started.elapsed() < Duration::from_secs(1));
+    assert_eq!(
+        coordinator.status(&job).await.unwrap().state,
+        JobState::Cancelled
+    );
+
+    let connection = database.connection();
+    let owned_attempts: i64 = connection
+        .query_row("SELECT COUNT(*) FROM ocr_attempts", [], |row| row.get(0))
+        .unwrap();
+    let parsing_documents: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM documents
+             WHERE parse_state = 'parsing' OR parse_attempt_token IS NOT NULL",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(owned_attempts, 0);
+    assert_eq!(parsing_documents, 0);
 }
