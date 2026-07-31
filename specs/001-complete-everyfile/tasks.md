@@ -119,8 +119,8 @@ on a clean Windows profile with the correct icon and no console.
 - [x] T066 Re-verify every promised parser format and notice with fixtures in `src-tauri/tests/parser_sidecar.rs`
 - [x] T067 Re-verify encrypted storage, cloud-placeholder avoidance, and zero-egress core behavior in `src-tauri/tests/encrypted_database.rs` and `src-tauri/tests/folder_discovery.rs`
 - [x] T068 Run the 10,000-file filename and 100,000-document search performance gates in `src-tauri/tests/performance.rs`
-- [ ] T069 Tag the tested revision and publish installer, portable ZIP, checksums, and notices to GitHub Release
-- [ ] T070 Confirm no unchecked task remains in `specs/001-complete-everyfile/tasks.md` and provide final run/install instructions
+- [x] T069 Tag the tested revision and publish installer, portable ZIP, checksums, and notices to GitHub Release
+- [x] T070 Confirm no unchecked task remains in `specs/001-complete-everyfile/tasks.md` and provide final run/install instructions
 
 ## Dependencies and Execution Order
 
