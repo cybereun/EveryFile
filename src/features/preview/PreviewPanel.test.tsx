@@ -61,6 +61,19 @@ describe("secure document preview", () => {
     expect(screen.getByText("2 / 2")).toBeVisible();
   });
 
+  it("preserves line breaks and spacing for plain-text documents", () => {
+    render(
+      <DocumentTextView
+        blocks={paragraphs("첫 줄\n\n둘째 줄\n  들여쓰기")}
+        preserveWhitespace
+      />,
+    );
+
+    const view = screen.getByRole("region", { name: "문서 텍스트" });
+    expect(view).toHaveClass("document-text-view--plain");
+    expect(view.textContent).toContain("첫 줄\n\n둘째 줄\n  들여쓰기");
+  });
+
   it("renders structured source as text, preserves tables, and allowlists links", () => {
     const blocks: PreviewBlock[] = [
       {

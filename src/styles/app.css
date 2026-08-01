@@ -452,29 +452,29 @@ select:focus-visible,
 .sidebar-trash-icon {
   position: relative;
   display: inline-block;
-  width: 0.78rem;
-  height: 0.86rem;
-  margin-top: 0.18rem;
-  border: 1.5px solid currentColor;
+  width: 0.56rem;
+  height: 0.64rem;
+  margin-top: 0.12rem;
+  border: 1px solid currentColor;
   border-top: 0;
   border-radius: 0 0 2px 2px;
 }
 .sidebar-trash-icon::before {
   position: absolute;
-  top: -0.22rem;
-  left: -0.16rem;
-  width: 1.02rem;
-  height: 1.5px;
+  top: -0.18rem;
+  left: -0.12rem;
+  width: 0.78rem;
+  height: 1px;
   border-radius: 2px;
   background: currentColor;
   content: "";
 }
 .sidebar-trash-icon::after {
   position: absolute;
-  top: -0.34rem;
-  left: 0.18rem;
-  width: 0.32rem;
-  height: 1.5px;
+  top: -0.28rem;
+  left: 0.14rem;
+  width: 0.26rem;
+  height: 1px;
   border-radius: 2px 2px 0 0;
   background: currentColor;
   content: "";
@@ -1437,6 +1437,10 @@ select:focus-visible,
   padding: 1rem 1.15rem 3rem;
   line-height: 1.72;
   overflow-wrap: anywhere;
+}
+
+.document-text-view--plain .document-blocks {
+  white-space: pre-wrap;
 }
 
 .document-blocks h1,

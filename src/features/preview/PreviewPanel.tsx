@@ -399,7 +399,14 @@ export function PreviewPanel({
             getBytesApi={imageBytesApi}
           />
         ) : tab === "text" ? (
-          <DocumentTextView blocks={preview.blocks} findRequest={findRequest} initialQuery={searchQuery} />
+          <DocumentTextView
+            blocks={preview.blocks}
+            findRequest={findRequest}
+            initialQuery={searchQuery}
+            preserveWhitespace={["txt", "md", "markdown"].includes(
+              preview.extension.toLocaleLowerCase(),
+            )}
+          />
         ) : preview.extension.toLocaleLowerCase() === "pdf" ? (
           <PdfLayoutView
             documentId={preview.documentId}

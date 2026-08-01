@@ -12,6 +12,7 @@ interface DocumentTextViewProps {
   blocks: PreviewBlock[];
   findRequest?: number;
   initialQuery?: string;
+  preserveWhitespace?: boolean;
 }
 
 function safeHref(href: string | null | undefined) {
@@ -71,6 +72,7 @@ export function DocumentTextView({
   blocks,
   findRequest = 0,
   initialQuery = "",
+  preserveWhitespace = false,
 }: DocumentTextViewProps) {
   const [findOpen, setFindOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -235,7 +237,10 @@ export function DocumentTextView({
   };
 
   return (
-    <section className="document-text-view" aria-label="문서 텍스트">
+    <section
+      className={`document-text-view${preserveWhitespace ? " document-text-view--plain" : ""}`}
+      aria-label="문서 텍스트"
+    >
       {findOpen && (
         <div className="document-find">
           <input
