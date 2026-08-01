@@ -9,7 +9,8 @@ use zeroize::Zeroizing;
 
 use crate::ai::AiService;
 use crate::application::source_open::{
-    open_indexed_location, open_indexed_source, read_indexed_pdf_cancellable, SourceOpenError,
+    open_indexed_location, open_indexed_source, open_registered_folder,
+    read_indexed_layout_cancellable, read_indexed_pdf_cancellable, SourceOpenError,
 };
 use crate::diagnostics::{
     require_reset_confirmation, start_reset_worker, DiagnosticError, DiagnosticsLogger,
@@ -326,6 +327,14 @@ pub fn open_source_location(
 }
 
 #[tauri::command]
+pub fn open_folder_location(
+    folder_id: String,
+    state: State<'_, AppState>,
+) -> Result<(), CommandError> {
+    open_registered_folder(&state.database, &folder_id).map_err(CommandError::from)
+}
+
+#[tauri::command]
 pub fn get_preview(
     document_id: String,
     state: State<'_, AppState>,
@@ -356,6 +365,30 @@ pub async fn get_pdf_bytes(
     })
     .await
     .map_err(|error| CommandError::new("PDF_READ_WORKER_FAILED", error.to_string()))?
+}
+
+#[tauri::command]
+pub async fn get_layout_bytes(
+    document_id: String,
+    request_id: String,
+    state: State<'_, AppState>,
+) -> Result<tauri::ipc::Response, CommandError> {
+    let lease = state
+        .pdf_reads
+        .begin(&request_id)
+        .map_err(CommandError::from)?;
+    let database = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let bytes =
+            read_indexed_layout_cancellable(&database, &document_id, || lease.is_cancelled())
+                .map_err(CommandError::from)?;
+        lease
+            .finish(bytes)
+            .map(tauri::ipc::Response::new)
+            .map_err(CommandError::from)
+    })
+    .await
+    .map_err(|error| CommandError::new("LAYOUT_READ_WORKER_FAILED", error.to_string()))?
 }
 
 #[tauri::command]

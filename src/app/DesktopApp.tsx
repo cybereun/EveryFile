@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type { CommandStatusMessage } from "../components/CommandStatus";
 import {
   listFolders,
+  openFolderLocation,
   registerFolder,
   removeFolder,
   startIndexing,
@@ -104,6 +105,25 @@ export function DesktopApp() {
     }
   };
 
+  const reindexFolder = async (folderId: string) => {
+    try {
+      setQueueState("indexing");
+      await startIndexing(folderId);
+      setStatus({ kind: "info", text: "폴더를 다시 색인합니다." });
+    } catch (error) {
+      setQueueState("error");
+      setStatus({ kind: "error", text: `재인덱싱을 시작하지 못했습니다: ${errorText(error)}` });
+    }
+  };
+
+  const showFolder = async (folderId: string) => {
+    try {
+      await openFolderLocation(folderId);
+    } catch (error) {
+      setStatus({ kind: "error", text: `폴더를 열지 못했습니다: ${errorText(error)}` });
+    }
+  };
+
   return (
     <App
       folders={folders}
@@ -113,6 +133,8 @@ export function DesktopApp() {
       onDismissCommandStatus={() => setStatus(null)}
       onAddFolder={() => void addFolder()}
       onRemoveFolder={(folderId) => void deleteFolder(folderId)}
+      onOpenFolder={(folderId) => void showFolder(folderId)}
+      onReindexFolder={(folderId) => void reindexFolder(folderId)}
     />
   );
 }

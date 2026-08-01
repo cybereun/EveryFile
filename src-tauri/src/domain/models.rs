@@ -177,6 +177,7 @@ pub struct IndexStatus {
     pub total_files: u64,
     pub completed_files: u64,
     pub current_path: Option<String>,
+    pub error_count: u64,
     pub errors: Vec<IndexFailure>,
 }
 

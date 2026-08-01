@@ -8,9 +8,9 @@ $repoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $manifest = Join-Path $repoRoot 'src-tauri\Cargo.toml'
 
 $env:CARGO_BUILD_JOBS = '1'
-$env:CARGO_INCREMENTAL = '0'
-$env:CARGO_PROFILE_DEV_DEBUG = '0'
-$env:CARGO_PROFILE_TEST_DEBUG = '0'
+# Reuse the normal test profile and its native SQLCipher/OpenSSL artifacts.
+# The final Tauri package is built with `--release`, so test debug symbols do
+# not affect the shipped executable.
 
 if (-not $NoReleaseOpenSsl) {
     $releaseBuild = Join-Path $repoRoot 'src-tauri\target\release\build'
@@ -35,7 +35,9 @@ if (-not $NoReleaseOpenSsl) {
 
 Push-Location -LiteralPath $repoRoot
 try {
-    & cargo test --manifest-path $manifest -j1
+    # SQLCipher performs process-wide initialization on the first connection;
+    # serialize test threads so the performance fixture is deterministic.
+    & cargo test --manifest-path $manifest -j1 -- --test-threads=1
     if ($LASTEXITCODE -ne 0) {
         throw "Rust tests failed with exit code $LASTEXITCODE."
     }

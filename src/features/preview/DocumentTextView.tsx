@@ -11,6 +11,7 @@ import type { PreviewBlock } from "../../lib/types";
 interface DocumentTextViewProps {
   blocks: PreviewBlock[];
   findRequest?: number;
+  initialQuery?: string;
 }
 
 function safeHref(href: string | null | undefined) {
@@ -46,9 +47,30 @@ function countOccurrences(text: string, query: string) {
   return count;
 }
 
+function renderableTableRows(table: NonNullable<PreviewBlock["table"]>) {
+  const occupied = new Set<string>();
+  return table.cells.map((row, rowIndex) =>
+    row.flatMap((cell, columnIndex) => {
+      const key = `${rowIndex}:${columnIndex}`;
+      if (occupied.has(key)) return [];
+      const colSpan = Math.max(1, cell.colSpan);
+      const rowSpan = Math.max(1, cell.rowSpan);
+      for (let rowOffset = 0; rowOffset < rowSpan; rowOffset += 1) {
+        for (let columnOffset = 0; columnOffset < colSpan; columnOffset += 1) {
+          if (rowOffset || columnOffset) {
+            occupied.add(`${rowIndex + rowOffset}:${columnIndex + columnOffset}`);
+          }
+        }
+      }
+      return [{ cell, columnIndex, colSpan, rowSpan }];
+    }),
+  );
+}
+
 export function DocumentTextView({
   blocks,
   findRequest = 0,
+  initialQuery = "",
 }: DocumentTextViewProps) {
   const [findOpen, setFindOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -64,6 +86,12 @@ export function DocumentTextView({
         : 0,
     [blocks, query],
   );
+
+  useEffect(() => {
+    setQuery(initialQuery);
+    setFindOpen(Boolean(initialQuery.trim()));
+    setActiveMatch(0);
+  }, [initialQuery, blocks]);
 
   useEffect(() => {
     const handleFind = (event: KeyboardEvent) => {
@@ -144,20 +172,27 @@ export function DocumentTextView({
         const level = Math.min(6, Math.max(1, block.level ?? 2));
         return createElement(`h${level}`, { key }, linkedText(block));
       }
-      case "table":
+      case "table": {
+        const table = block.table;
+        if (!table) return null;
         return (
           <div className="document-table-scroll" key={key}>
             <table>
+              <colgroup>
+                {Array.from({ length: Math.max(1, table.cols) }, (_, index) => (
+                  <col key={index} style={{ width: `${100 / Math.max(1, table.cols)}%` }} />
+                ))}
+              </colgroup>
               <tbody>
-                {block.table?.cells.map((row, rowIndex) => (
+                {renderableTableRows(table).map((row, rowIndex) => (
                   <tr key={rowIndex}>
-                    {row.map((cell, cellIndex) => {
-                      const Tag = block.table?.hasHeader && rowIndex === 0 ? "th" : "td";
+                    {row.map(({ cell, columnIndex, colSpan, rowSpan }) => {
+                      const Tag = table.hasHeader && rowIndex === 0 ? "th" : "td";
                       return (
                         <Tag
-                          colSpan={Math.max(1, cell.colSpan)}
-                          key={cellIndex}
-                          rowSpan={Math.max(1, cell.rowSpan)}
+                          colSpan={colSpan}
+                          key={columnIndex}
+                          rowSpan={rowSpan}
                           scope={Tag === "th" ? "col" : undefined}
                         >
                           {renderText(cell.text)}
@@ -170,6 +205,7 @@ export function DocumentTextView({
             </table>
           </div>
         );
+      }
       case "list": {
         const List = block.listType === "ordered" ? "ol" : "ul";
         return (

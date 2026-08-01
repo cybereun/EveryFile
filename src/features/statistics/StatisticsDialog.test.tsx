@@ -64,6 +64,7 @@ describe("StatisticsDialog", () => {
       />,
     );
     fireEvent.click(await screen.findByRole("tab", { name: "검색 히스토리" }));
+    fireEvent.click(screen.getByRole("tab", { name: "최근 검색" }));
     expect(await screen.findByText("report")).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "report 기록 삭제" }));
     expect(remove).toHaveBeenCalledWith("history-1");
@@ -127,7 +128,7 @@ describe("StatisticsDialog", () => {
       />,
     );
     fireEvent.click(await screen.findByRole("tab", { name: "검색 히스토리" }));
-    expect(await screen.findByText("자주 검색")).toBeVisible();
+    expect(await screen.findByRole("tab", { name: "자주 검색" })).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "전체 삭제" }));
 
     expect(clear).toHaveBeenCalledOnce();

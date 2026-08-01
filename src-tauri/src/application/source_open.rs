@@ -129,6 +129,25 @@ pub fn open_indexed_location(
     launch_location(&source)
 }
 
+pub fn open_registered_folder(database: &Database, folder_id: &str) -> Result<(), SourceOpenError> {
+    let path: String = database
+        .connection()
+        .query_row(
+            "SELECT canonical_path FROM folders WHERE id = ?1 AND enabled = 1",
+            [folder_id],
+            |row| row.get(0),
+        )
+        .optional()?
+        .ok_or(SourceOpenError::NotFound)?;
+    let path = PathBuf::from(path)
+        .canonicalize()
+        .map_err(SourceOpenError::Unavailable)?;
+    if !path.is_dir() {
+        return Err(SourceOpenError::NotFile);
+    }
+    launch_source(&path)
+}
+
 pub fn read_indexed_pdf(
     database: &Database,
     document_id: &str,
@@ -179,6 +198,56 @@ pub fn read_indexed_pdf_cancellable(
     }
     if !bytes.starts_with(b"%PDF-") {
         return Err(SourceOpenError::NotPdf);
+    }
+    Ok(bytes)
+}
+
+pub fn read_indexed_layout_cancellable(
+    database: &Database,
+    document_id: &str,
+    cancelled: impl Fn() -> bool,
+) -> Result<Vec<u8>, SourceOpenError> {
+    const MAX_LAYOUT_BYTES: u64 = 128 * 1024 * 1024;
+    let verified = verify_indexed_source(database, document_id)?;
+    let source = verified.current_path()?;
+    let extension = source
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if !matches!(extension.as_str(), "hwp" | "hwpx" | "pdf") {
+        return Err(SourceOpenError::NotLayoutPreview);
+    }
+    let metadata = std::fs::metadata(&source).map_err(SourceOpenError::Unavailable)?;
+    if metadata.len() > MAX_LAYOUT_BYTES {
+        return Err(SourceOpenError::TooLarge);
+    }
+    if cancelled() {
+        return Err(SourceOpenError::Cancelled);
+    }
+    let mut file = std::fs::File::open(&source).map_err(SourceOpenError::Unavailable)?;
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    let mut chunk = vec![0_u8; 1024 * 1024];
+    loop {
+        if cancelled() {
+            return Err(SourceOpenError::Cancelled);
+        }
+        let read = file
+            .read(&mut chunk)
+            .map_err(SourceOpenError::Unavailable)?;
+        if read == 0 {
+            break;
+        }
+        bytes.extend_from_slice(&chunk[..read]);
+    }
+    let valid_magic = match extension.as_str() {
+        "pdf" => bytes.starts_with(b"%PDF-"),
+        "hwp" => bytes.starts_with(&[0xD0, 0xCF, 0x11, 0xE0]),
+        "hwpx" => bytes.starts_with(b"PK"),
+        _ => false,
+    };
+    if !valid_magic {
+        return Err(SourceOpenError::NotLayoutPreview);
     }
     Ok(bytes)
 }
@@ -412,6 +481,8 @@ pub enum SourceOpenError {
     NotFile,
     #[error("indexed source is not a PDF")]
     NotPdf,
+    #[error("indexed source does not support original-layout preview")]
+    NotLayoutPreview,
     #[error("indexed PDF exceeds the preview size limit")]
     TooLarge,
     #[error("indexed PDF read was cancelled")]
@@ -436,6 +507,7 @@ impl SourceOpenError {
             Self::Unavailable(_) => "SOURCE_UNAVAILABLE",
             Self::NotFile => "SOURCE_NOT_FILE",
             Self::NotPdf => "SOURCE_NOT_PDF",
+            Self::NotLayoutPreview => "SOURCE_LAYOUT_UNSUPPORTED",
             Self::TooLarge => "SOURCE_PDF_TOO_LARGE",
             Self::Cancelled => "SOURCE_PDF_READ_CANCELLED",
             Self::OutsideRegisteredRoot => "SOURCE_OUTSIDE_REGISTERED_ROOT",

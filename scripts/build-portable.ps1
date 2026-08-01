@@ -17,6 +17,7 @@ $ocrRequirements = Join-Path $repoRoot 'sidecar\ocr-host\requirements.lock'
 $license = Join-Path $repoRoot 'LICENSE'
 $kordocLicense = Join-Path $repoRoot 'vendor\kordoc\LICENSE'
 $kordocNotice = Join-Path $repoRoot 'vendor\kordoc\NOTICE'
+$rhwpLicense = Join-Path $repoRoot 'node_modules\@rhwp\core\LICENSE'
 $notice = Join-Path $repoRoot 'THIRD_PARTY_NOTICES.md'
 $readme = Join-Path $repoRoot 'README.md'
 $releaseNotes = Join-Path $repoRoot 'RELEASE_NOTES.md'
@@ -27,7 +28,7 @@ $zipPath = Join-Path $releaseRoot "EveryFile-Portable-v$version.zip"
 
 $required = @(
     $appExe, $sidecarSource, $ocrSource, $modelManifest, $modelConfig,
-    $ocrRequirements, $license, $kordocLicense, $kordocNotice, $notice, $readme,
+    $ocrRequirements, $license, $kordocLicense, $kordocNotice, $rhwpLicense, $notice, $readme,
     $releaseNotes
 )
 foreach ($path in $required) {
@@ -64,6 +65,7 @@ $licenseRoot = Join-Path $resolvedStageRoot 'licenses'
 [System.IO.Directory]::CreateDirectory($licenseRoot) | Out-Null
 Copy-Item -LiteralPath $kordocLicense -Destination (Join-Path $licenseRoot 'KORDOC-LICENSE')
 Copy-Item -LiteralPath $kordocNotice -Destination (Join-Path $licenseRoot 'KORDOC-NOTICE')
+Copy-Item -LiteralPath $rhwpLicense -Destination (Join-Path $licenseRoot 'RHWP-LICENSE')
 Copy-Item -LiteralPath $modelManifest -Destination $licenseRoot
 Copy-Item -LiteralPath $modelConfig -Destination $licenseRoot
 Copy-Item -LiteralPath $ocrRequirements -Destination $licenseRoot
@@ -86,7 +88,7 @@ if ($requirements.Count -eq 0 -or
     throw 'OCR runtime requirements must be fully pinned.'
 }
 $noticeText = Get-Content -Raw -LiteralPath $notice
-foreach ($requiredNotice in @('Kordoc license', 'PaddleOCR 3.7.0', 'PaddlePaddle 3.3.1')) {
+foreach ($requiredNotice in @('Kordoc license', 'rhwp / @rhwp/core license', 'PaddleOCR 3.7.0', 'PaddlePaddle 3.3.1')) {
     if (-not $noticeText.Contains($requiredNotice)) {
         throw "Third-party notice is missing: $requiredNotice"
     }

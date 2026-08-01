@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import { cancelPdfRead, getPdfBytes } from "../../lib/ipc";
 
@@ -11,6 +11,9 @@ let requestSequence = 0;
 
 interface PdfPageLike {
   getViewport(options: { scale: number }): { width: number; height: number };
+  getTextContent?(): Promise<{
+    items: Array<{ str?: string; transform?: number[]; width?: number; height?: number }>;
+  }>;
   render(options: {
     canvas: HTMLCanvasElement;
     canvasContext: CanvasRenderingContext2D;
@@ -98,6 +101,8 @@ function safePdfError(caught: unknown) {
 
 interface PdfLayoutViewProps {
   documentId: string;
+  initialQuery?: string;
+  findRequest?: number;
   getBytesApi?: typeof getPdfBytes;
   cancelReadApi?: typeof cancelPdfRead;
   loader?: PdfLoader;
@@ -105,6 +110,8 @@ interface PdfLayoutViewProps {
 
 export function PdfLayoutView({
   documentId,
+  initialQuery = "",
+  findRequest = 0,
   getBytesApi = getPdfBytes,
   cancelReadApi = cancelPdfRead,
   loader = loadLocalPdf,
@@ -120,6 +127,26 @@ export function PdfLayoutView({
   const [containerWidth, setContainerWidth] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [findOpen, setFindOpen] = useState(Boolean(initialQuery.trim()));
+  const [query, setQuery] = useState(initialQuery);
+  const [activeMatch, setActiveMatch] = useState(0);
+  const [textItems, setTextItems] = useState<Array<{
+    text: string;
+    left: number;
+    top: number;
+    width: number;
+    fontSize: number;
+  }>>([]);
+
+  useEffect(() => {
+    if (findRequest > 0) setFindOpen(true);
+  }, [findRequest]);
+
+  useEffect(() => {
+    setQuery(initialQuery);
+    setFindOpen(Boolean(initialQuery.trim()));
+    setActiveMatch(0);
+  }, [documentId, initialQuery]);
 
   useEffect(() => {
     const requestId = nextRequestId();
@@ -260,6 +287,27 @@ export function PdfLayoutView({
         context.setTransform(ratio, 0, 0, ratio, 0, 0);
         renderTask = page.render({ canvas: target, canvasContext: context, viewport });
         await renderTask.promise;
+        if (page.getTextContent) {
+          const content = await page.getTextContent();
+          if (!active) return;
+          setTextItems(
+            content.items.flatMap((item) => {
+              const transform = item.transform;
+              const text = item.str ?? "";
+              if (!transform || transform.length < 6 || !text) return [];
+              const fontSize = Math.max(6, Math.hypot(transform[2] ?? 0, transform[3] ?? 0) * scale);
+              return [{
+                text,
+                left: (transform[4] ?? 0) * scale,
+                top: viewport.height - (transform[5] ?? 0) * scale - fontSize,
+                width: Math.max(1, (item.width ?? 0) * scale),
+                fontSize,
+              }];
+            }),
+          );
+        } else {
+          setTextItems([]);
+        }
       })
       .catch((caught) => {
         if (!active || (caught as { name?: string }).name === "RenderingCancelledException") {
@@ -282,6 +330,40 @@ export function PdfLayoutView({
   if (error) return <div className="preview-message preview-message--error" role="alert">{error}</div>;
   if (!document) return null;
 
+  const normalizedQuery = query.trim().toLocaleLowerCase();
+  const totalMatches = textItems.reduce((total, item) => {
+    if (!normalizedQuery) return total;
+    const source = item.text.toLocaleLowerCase();
+    let offset = 0;
+    let count = 0;
+    while ((offset = source.indexOf(normalizedQuery, offset)) !== -1) {
+      count += 1;
+      offset += Math.max(1, normalizedQuery.length);
+    }
+    return total + count;
+  }, 0);
+  let matchIndex = 0;
+  const highlightText = (text: string) => {
+    if (!normalizedQuery) return text;
+    const source = text.toLocaleLowerCase();
+    const output: ReactNode[] = [];
+    let cursor = 0;
+    let found = source.indexOf(normalizedQuery);
+    while (found !== -1) {
+      if (found > cursor) output.push(text.slice(cursor, found));
+      const current = matchIndex++;
+      output.push(<mark className={current === activeMatch ? "is-active" : undefined} key={`${found}-${current}`}>{text.slice(found, found + query.trim().length)}</mark>);
+      cursor = found + query.trim().length;
+      found = source.indexOf(normalizedQuery, cursor);
+    }
+    output.push(text.slice(cursor));
+    return output;
+  };
+  const moveMatch = (direction: number) => {
+    if (!totalMatches) return;
+    setActiveMatch((current) => (current + direction + totalMatches) % totalMatches);
+  };
+
   return (
     <section className="pdf-layout-view" ref={container}>
       <div className="pdf-controls" aria-label="PDF 보기 도구">
@@ -302,8 +384,24 @@ export function PdfLayoutView({
         </button>
         <button aria-label="전체 화면" onClick={() => void container.current?.requestFullscreen?.()} type="button">⛶</button>
       </div>
+      {findOpen && (
+        <div className="document-find pdf-layout-find">
+          <input aria-label="원본에서 찾기" onChange={(event) => { setQuery(event.target.value); setActiveMatch(0); }} placeholder="원본에서 찾기" type="search" value={query} />
+          <span aria-live="polite">{totalMatches ? `${activeMatch + 1} / ${totalMatches}` : "0 / 0"}</span>
+          <button aria-label="이전 일치" onClick={() => moveMatch(-1)} type="button">↑</button>
+          <button aria-label="다음 일치" onClick={() => moveMatch(1)} type="button">↓</button>
+          <button aria-label="찾기 닫기" onClick={() => setFindOpen(false)} type="button">×</button>
+        </div>
+      )}
       <div className="pdf-canvas-wrap">
-        <canvas aria-label={`PDF ${pageNumber}페이지`} ref={canvas} />
+        <div className="pdf-page-surface">
+          <canvas aria-label={`PDF ${pageNumber}페이지`} ref={canvas} />
+          <div className="pdf-text-layer" aria-hidden="true">
+            {textItems.map((item, index) => (
+              <span key={index} style={{ left: item.left, top: item.top, width: item.width, fontSize: item.fontSize }}>{highlightText(item.text)}</span>
+            ))}
+          </div>
+        </div>
       </div>
     </section>
   );

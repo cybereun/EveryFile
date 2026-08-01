@@ -2,7 +2,8 @@ use std::fs;
 use std::sync::Arc;
 
 use everyfile_lib::application::source_open::{
-    read_indexed_pdf_cancellable, resolve_indexed_source, verify_indexed_source, SourceOpenError,
+    read_indexed_layout_cancellable, read_indexed_pdf_cancellable, resolve_indexed_source,
+    verify_indexed_source, SourceOpenError,
 };
 use everyfile_lib::infrastructure::database::Database;
 use everyfile_lib::infrastructure::secure_key::SecretKey;
@@ -19,6 +20,34 @@ fn resolves_only_an_existing_indexed_file_under_its_registered_root() {
     let resolved = resolve_indexed_source(&fixture.database, "doc-1").unwrap();
 
     assert_eq!(resolved, source.canonicalize().unwrap());
+}
+
+#[test]
+fn layout_read_accepts_hwp_hwpx_and_pdf_but_rejects_other_extensions() {
+    let fixture = Fixture::new();
+    let cases: [(&str, &[u8]); 3] = [
+        ("form.hwp", &[0xD0, 0xCF, 0x11, 0xE0, 0x00]),
+        ("form.hwpx", b"PK\x03\x04fixture"),
+        ("form.pdf", b"%PDF-1.7\nfixture"),
+    ];
+    for (index, (name, bytes)) in cases.into_iter().enumerate() {
+        let source = fixture.root.join(name);
+        fs::write(&source, bytes).unwrap();
+        let id = format!("layout-{index}");
+        fixture.insert(&id, &source, &fixture.root);
+        assert_eq!(
+            read_indexed_layout_cancellable(&fixture.database, &id, || false).unwrap(),
+            bytes
+        );
+    }
+
+    let source = fixture.root.join("setup.exe");
+    fs::write(&source, b"MZfixture").unwrap();
+    fixture.insert("layout-unsupported", &source, &fixture.root);
+    assert!(matches!(
+        read_indexed_layout_cancellable(&fixture.database, "layout-unsupported", || false),
+        Err(SourceOpenError::NotLayoutPreview)
+    ));
 }
 
 #[test]

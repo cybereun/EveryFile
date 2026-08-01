@@ -3,6 +3,7 @@ import { BookmarkButton } from "../library/BookmarkButton";
 import { TagEditor } from "../library/TagEditor";
 import {
   getPdfBytes,
+  getLayoutBytes,
   getPreview,
   openSourceFile,
   openSourceLocation,
@@ -17,6 +18,7 @@ import {
 import type { PreviewBlock, PreviewDocument } from "../../lib/types";
 import { DocumentTextView } from "./DocumentTextView";
 import { PdfLayoutView, type PdfLoader } from "./PdfLayoutView";
+import { HwpLayoutView, type HwpLoader } from "./HwpLayoutView";
 import { PreviewToolbar } from "./PreviewToolbar";
 import { DocumentAiPanel } from "./DocumentAiPanel";
 
@@ -45,6 +47,8 @@ interface PreviewPanelProps {
   pdfBytesApi?: typeof getPdfBytes;
   saveMarkdownApi?: typeof saveMarkdown;
   pdfLoader?: PdfLoader;
+  hwpBytesApi?: typeof getLayoutBytes;
+  hwpLoader?: HwpLoader;
   createTagApi?: typeof createTag;
   setBookmarkApi?: typeof setBookmark;
   setTagsApi?: typeof setDocumentTags;
@@ -52,6 +56,7 @@ interface PreviewPanelProps {
   aiProvider?: "ollama" | "gemini" | "openai";
   runAiApi?: typeof runDocumentAi;
   cancelAiApi?: typeof cancelDocumentAi;
+  searchQuery?: string;
 }
 
 export function PreviewPanel({
@@ -62,6 +67,8 @@ export function PreviewPanel({
   pdfBytesApi = getPdfBytes,
   saveMarkdownApi = saveMarkdown,
   pdfLoader,
+  hwpBytesApi = getLayoutBytes,
+  hwpLoader,
   createTagApi = createTag,
   setBookmarkApi = setBookmark,
   setTagsApi = setDocumentTags,
@@ -69,6 +76,7 @@ export function PreviewPanel({
   aiProvider = "ollama",
   runAiApi = runDocumentAi,
   cancelAiApi = cancelDocumentAi,
+  searchQuery = "",
 }: PreviewPanelProps) {
   const [preview, setPreview] = useState<PreviewDocument | null>(null);
   const [tab, setTab] = useState<"text" | "layout">("text");
@@ -177,7 +185,6 @@ export function PreviewPanel({
         onCopyPath={() => void copy(preview.documentId, preview.path)}
         onCopyText={() => void copy(preview.documentId, plainText)}
         onFind={() => {
-          setTab("text");
           setFindRequest((request) => request + 1);
         }}
         onAiSummary={
@@ -268,12 +275,22 @@ export function PreviewPanel({
       {error && <div className="preview-inline-error" role="alert">{error}</div>}
       <div className="preview-content" role="tabpanel">
         {tab === "text" ? (
-          <DocumentTextView blocks={preview.blocks} findRequest={findRequest} />
+          <DocumentTextView blocks={preview.blocks} findRequest={findRequest} initialQuery={searchQuery} />
         ) : preview.extension.toLocaleLowerCase() === "pdf" ? (
           <PdfLayoutView
             documentId={preview.documentId}
+            findRequest={findRequest}
             getBytesApi={pdfBytesApi}
+            initialQuery={searchQuery}
             loader={pdfLoader}
+          />
+        ) : ["hwp", "hwpx"].includes(preview.extension.toLocaleLowerCase()) ? (
+          <HwpLayoutView
+            documentId={preview.documentId}
+            findRequest={findRequest}
+            getBytesApi={hwpBytesApi}
+            initialQuery={searchQuery}
+            loader={hwpLoader}
           />
         ) : (
           <div className="preview-layout-unavailable">
