@@ -106,6 +106,7 @@ export function IndexStatusController({ idleContent = null }: { idleContent?: Re
   const [status, setStatus] = useState<IndexStatusModel | null>(null);
   const [report, setReport] = useState<IndexStatusModel | null>(null);
   const reportedJobs = useRef(new Set<string>());
+  const activeJobId = useRef<string | null>(null);
 
   useEffect(() => {
     let disposed = false;
@@ -116,14 +117,23 @@ export function IndexStatusController({ idleContent = null }: { idleContent?: Re
         errorCount: event.payload.errorCount ?? event.payload.errors.length,
       };
       if (["completed", "failed"].includes(payload.state)) {
+        // A worker can publish one last progress snapshot after its terminal
+        // event has already reached the webview. Ignore that stale snapshot so
+        // the progress bar cannot reappear behind the completion report.
+        if (activeJobId.current && activeJobId.current !== payload.jobId) return;
         setStatus(null);
+        activeJobId.current = null;
         if (!reportedJobs.current.has(payload.jobId)) {
           reportedJobs.current.add(payload.jobId);
           setReport(payload);
         }
       } else if (payload.state === "cancelled") {
+        if (activeJobId.current && activeJobId.current !== payload.jobId) return;
+        activeJobId.current = null;
         setStatus(null);
       } else {
+        if (reportedJobs.current.has(payload.jobId)) return;
+        activeJobId.current = payload.jobId;
         setStatus(payload);
       }
     })

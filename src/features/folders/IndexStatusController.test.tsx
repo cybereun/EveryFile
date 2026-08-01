@@ -87,4 +87,55 @@ describe("IndexStatusController", () => {
     view.unmount();
     expect(bridge.unlisten).toHaveBeenCalledOnce();
   });
+
+  it("does not resurrect a progress bar after the terminal report", async () => {
+    let receive: ((event: { payload: IndexStatus }) => void) | undefined;
+    bridge.listen.mockImplementation(
+      (_topic: string, handler: (event: { payload: IndexStatus }) => void) => {
+        receive = handler;
+        return Promise.resolve(bridge.unlisten);
+      },
+    );
+    render(<IndexStatusController />);
+    await waitFor(() => expect(bridge.listen).toHaveBeenCalled());
+
+    act(() => {
+      receive?.({
+        payload: {
+          jobId: "job-terminal",
+          state: "parsing",
+          totalFiles: 1,
+          completedFiles: 1,
+          currentPath: "C:\\Users\\me\\image.png",
+          errorCount: 0,
+          errors: [],
+        },
+      });
+      receive?.({
+        payload: {
+          jobId: "job-terminal",
+          state: "completed",
+          totalFiles: 1,
+          completedFiles: 1,
+          currentPath: "C:\\Users\\me\\image.png",
+          errorCount: 0,
+          errors: [],
+        },
+      });
+      receive?.({
+        payload: {
+          jobId: "job-terminal",
+          state: "parsing",
+          totalFiles: 1,
+          completedFiles: 1,
+          currentPath: "C:\\Users\\me\\image.png",
+          errorCount: 0,
+          errors: [],
+        },
+      });
+    });
+
+    expect(screen.getByRole("dialog")).toBeVisible();
+    expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
+  });
 });
