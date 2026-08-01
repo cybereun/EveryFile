@@ -138,6 +138,17 @@ export function SearchFilters({
   const hasPositiveQuery =
     parseSearchQuery(query).positiveGroups.length > 0;
 
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        "everyfile.search.current",
+        JSON.stringify({ query, filters }),
+      );
+    } catch {
+      // Search remains usable when browser storage is unavailable.
+    }
+  }, [filters, query]);
+
   const toggleExtension = (extension: string) => {
     const extensions = filters.extensions.includes(extension)
       ? filters.extensions.filter((value) => value !== extension)

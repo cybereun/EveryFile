@@ -130,6 +130,7 @@ export function HwpLayoutView({
   const [pageNumber, setPageNumber] = useState(1);
   const [zoom, setZoom] = useState(1);
   const [fitWidth, setFitWidth] = useState(true);
+  const [isFullscreen, setIsFullscreen] = useState(false);
   const [query, setQuery] = useState(initialQuery);
   const [findOpen, setFindOpen] = useState(Boolean(initialQuery.trim()));
   const [activeMatch, setActiveMatch] = useState(0);
@@ -188,6 +189,29 @@ export function HwpLayoutView({
     active?.scrollIntoView?.({ block: "center", inline: "center" });
   }, [activeMatch, pageNumber, query]);
 
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      setIsFullscreen(document.fullscreenElement === container.current);
+    };
+    document.addEventListener("fullscreenchange", handleFullscreenChange);
+    handleFullscreenChange();
+    return () => document.removeEventListener("fullscreenchange", handleFullscreenChange);
+  }, []);
+
+  const toggleFullscreen = async () => {
+    const element = container.current;
+    if (!element) return;
+    try {
+      if (document.fullscreenElement === element) {
+        await document.exitFullscreen();
+      } else {
+        await element.requestFullscreen();
+      }
+    } catch {
+      setIsFullscreen(false);
+    }
+  };
+
   if (loading) return <div className="preview-message">HWP 원본 불러오는 중…</div>;
   const renderError = "error" in rendered ? rendered.error : null;
   if (error || renderError) {
@@ -209,7 +233,14 @@ export function HwpLayoutView({
         <button aria-label="축소" onClick={() => { setFitWidth(false); setZoom((value) => Math.max(0.5, value - 0.1)); }} type="button">−</button>
         <button aria-pressed={fitWidth} onClick={() => setFitWidth(true)} type="button">맞춤</button>
         <button aria-label="확대" onClick={() => { setFitWidth(false); setZoom((value) => Math.min(3, value + 0.1)); }} type="button">+</button>
-        <button aria-label="전체 화면" onClick={() => void container.current?.requestFullscreen?.()} type="button">⛶</button>
+        <button
+          aria-label={isFullscreen ? "원래 크기로" : "전체 화면"}
+          aria-pressed={isFullscreen}
+          onClick={() => void toggleFullscreen()}
+          type="button"
+        >
+          {isFullscreen ? "⤢" : "⛶"}
+        </button>
       </div>
       {findOpen && (
         <div className="document-find hwp-layout-find">

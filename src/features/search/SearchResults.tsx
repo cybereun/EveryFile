@@ -33,9 +33,33 @@ function formatSize(bytes: number) {
   return `${Number.isInteger(value) ? value : value.toFixed(1)} MB`;
 }
 
+function parseDate(value: string) {
+  const trimmed = value.trim();
+  if (/^\d+$/.test(trimmed)) {
+    try {
+      const raw = BigInt(trimmed);
+      // Index records created by older builds used Unix nanoseconds. Accept
+      // seconds/milliseconds too so upgraded libraries render consistently.
+      const milliseconds =
+        trimmed.length >= 16
+          ? raw / 1_000_000n
+          : trimmed.length >= 13
+            ? raw
+            : raw * 1_000n;
+      const parsed = new Date(Number(milliseconds));
+      if (Number.isFinite(parsed.getTime())) return parsed;
+    } catch {
+      // Fall through to the normal ISO parser below.
+    }
+  }
+  const parsed = new Date(trimmed);
+  return Number.isFinite(parsed.getTime()) ? parsed : null;
+}
+
 function relativeDate(value: string) {
-  const elapsed = new Date(value).getTime() - Date.now();
-  if (!Number.isFinite(elapsed)) return value;
+  const parsed = parseDate(value);
+  if (!parsed) return "날짜 없음";
+  const elapsed = parsed.getTime() - Date.now();
   const units = [
     ["year", 365 * 24 * 60 * 60 * 1000],
     ["month", 30 * 24 * 60 * 60 * 1000],
@@ -50,6 +74,10 @@ function relativeDate(value: string) {
     }
   }
   return "방금";
+}
+
+function absoluteDate(value: string) {
+  return parseDate(value)?.toLocaleString("ko-KR") ?? "날짜 없음";
 }
 
 export function highlightedSnippet(text: string): ReactNode[] {
@@ -119,10 +147,10 @@ function ResultRow({
         <span className="result-path" title={parent}>
           {parent}
         </span>
-        <time dateTime={hit.modifiedAt}>
+        <time dateTime={parseDate(hit.modifiedAt)?.toISOString()}>
           {dateDisplay === "relative"
             ? relativeDate(hit.modifiedAt)
-            : new Date(hit.modifiedAt).toLocaleString("ko-KR")}
+            : absoluteDate(hit.modifiedAt)}
         </time>
         <span>{formatSize(hit.sizeBytes)}</span>
       </span>

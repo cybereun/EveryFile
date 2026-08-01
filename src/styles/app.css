@@ -246,10 +246,11 @@ select:focus-visible,
 }
 
 .resizable-pane__content {
+  display: flex;
   width: 100%;
   min-width: 0;
   min-height: 0;
-  overflow: auto;
+  overflow: hidden;
 }
 
 .pane-separator {
@@ -434,6 +435,36 @@ select:focus-visible,
 }
 
 .sidebar-section__action:hover { background: var(--color-surface); color: var(--color-accent); }
+.sidebar-trash-icon {
+  position: relative;
+  display: inline-block;
+  width: 0.78rem;
+  height: 0.86rem;
+  margin-top: 0.18rem;
+  border: 1.5px solid currentColor;
+  border-top: 0;
+  border-radius: 0 0 2px 2px;
+}
+.sidebar-trash-icon::before {
+  position: absolute;
+  top: -0.22rem;
+  left: -0.16rem;
+  width: 1.02rem;
+  height: 1.5px;
+  border-radius: 2px;
+  background: currentColor;
+  content: "";
+}
+.sidebar-trash-icon::after {
+  position: absolute;
+  top: -0.34rem;
+  left: 0.18rem;
+  width: 0.32rem;
+  height: 1.5px;
+  border-radius: 2px 2px 0 0;
+  background: currentColor;
+  content: "";
+}
 .sidebar-section__body { padding-top: 0.2rem; }
 
 .folder-list { gap: 0.12rem; }
@@ -549,7 +580,7 @@ select:focus-visible,
 .sidebar-link-list button {
   display: grid;
   width: 100%;
-  grid-template-columns: 1.1rem minmax(0, 1fr);
+  grid-template-columns: 1.1rem minmax(0, 1fr) auto;
   gap: 0.45rem;
   padding: 0.45rem 0.35rem;
   border: 0;
@@ -564,6 +595,12 @@ select:focus-visible,
 
 .sidebar-link-list button:hover { background: var(--color-surface); }
 .sidebar-link-list button span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sidebar-link-list button time {
+  color: var(--color-text-muted);
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
 
 .sidebar-credit {
   display: grid;
@@ -1113,6 +1150,10 @@ select:focus-visible,
   overflow: hidden;
 }
 
+.preview-pane-container .resizable-pane__content {
+  overflow: hidden;
+}
+
 .preview-empty,
 .preview-message,
 .preview-layout-unavailable {
@@ -1502,6 +1543,19 @@ select:focus-visible,
   stroke-width: 9px;
 }
 
+/* Keep HWP/HWPX text metrics stable when the source font is not installed. */
+.hwp-page svg text[font-family*="함초롬돋움"],
+.hwp-page svg text[font-family*="맑은 고딕"],
+.hwp-page svg text[font-family*="Malgun Gothic"] {
+  font-family: "Malgun Gothic", "맑은 고딕", "Noto Sans KR", sans-serif !important;
+}
+
+.hwp-page svg text[font-family*="함초롬바탕"],
+.hwp-page svg text[font-family*="바탕"],
+.hwp-page svg text[font-family*="Batang"] {
+  font-family: "Batang", "바탕", "Noto Serif KR", serif !important;
+}
+
 .hwp-layout-find,
 .pdf-layout-find {
   flex: 0 0 auto;
@@ -1531,9 +1585,35 @@ select:focus-visible,
 .document-text-view,
 .hwp-layout-pages,
 .pdf-layout-pages {
-  scrollbar-color: color-mix(in srgb, var(--color-text-muted) 58%, transparent)
-    transparent;
-  scrollbar-width: thin;
+  scrollbar-color: #8f7c68 #eee5d7;
+  scrollbar-width: auto;
+}
+
+.preview-content::-webkit-scrollbar,
+.document-text-view::-webkit-scrollbar,
+.hwp-page-wrap::-webkit-scrollbar,
+.pdf-canvas-wrap::-webkit-scrollbar,
+.dialog-body::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+
+.preview-content::-webkit-scrollbar-track,
+.document-text-view::-webkit-scrollbar-track,
+.hwp-page-wrap::-webkit-scrollbar-track,
+.pdf-canvas-wrap::-webkit-scrollbar-track,
+.dialog-body::-webkit-scrollbar-track {
+  background: #eee5d7;
+}
+
+.preview-content::-webkit-scrollbar-thumb,
+.document-text-view::-webkit-scrollbar-thumb,
+.hwp-page-wrap::-webkit-scrollbar-thumb,
+.pdf-canvas-wrap::-webkit-scrollbar-thumb,
+.dialog-body::-webkit-scrollbar-thumb {
+  border: 3px solid #eee5d7;
+  border-radius: 999px;
+  background: #8f7c68;
 }
 
 .status-summary {
@@ -2045,10 +2125,37 @@ select:focus-visible,
 .statistics-dialog {
   width: min(920px, calc(100vw - 2rem));
   height: min(92vh, 980px);
+  min-height: 0;
+}
+
+.settings-dialog {
+  height: min(88vh, 760px);
+  min-height: 0;
+}
+
+.settings-dialog .dialog-tabs {
+  /* Keep all settings tabs visible while the selected panel scrolls. */
+  flex: 0 0 auto;
+  min-height: 3.1rem;
+  overflow-y: hidden;
+}
+
+.settings-dialog .dialog-body {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.statistics-dialog .dialog-tabs {
+  /* Keep tab labels from being vertically squeezed when the body is tall. */
+  flex: 0 0 auto;
+  min-height: 3.1rem;
+  overflow-y: hidden;
 }
 
 .statistics-body {
   padding: 1.45rem 2rem 2rem;
+  flex: 1 1 auto;
+  min-height: 0;
   scrollbar-color: color-mix(in srgb, var(--color-text-muted) 58%, transparent) transparent;
   scrollbar-width: thin;
 }

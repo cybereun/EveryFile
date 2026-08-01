@@ -80,4 +80,24 @@ describe("SearchResults", () => {
 
     expect(await screen.findByRole("alert")).toHaveTextContent("cannot open");
   });
+
+  it("formats legacy Unix-nanosecond modification times", () => {
+    render(
+      <SearchResults
+        hits={[{ ...hit("legacy", "filename"), modifiedAt: "1756473860000000000" }]}
+        total={1}
+        elapsedMs={1}
+        loading={false}
+        error={null}
+        hasMore={false}
+        onLoadMore={vi.fn()}
+        onOpen={vi.fn().mockResolvedValue(undefined)}
+        onSelect={vi.fn()}
+        dateDisplay="absolute"
+      />,
+    );
+
+    expect(screen.getByRole("option")).toHaveTextContent("2025. 8. 29.");
+    expect(screen.getByRole("option")).not.toHaveTextContent("1756473860000000000");
+  });
 });

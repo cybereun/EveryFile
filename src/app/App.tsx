@@ -15,7 +15,12 @@ import type {
   SearchHistoryRecord,
   StatisticsSearchFilter,
 } from "../lib/types";
-import { getSettings, listSearchHistory, saveSettings } from "../lib/ipc";
+import {
+  clearSearchHistory,
+  getSettings,
+  listSearchHistory,
+  saveSettings,
+} from "../lib/ipc";
 import "../styles/app.css";
 import { Header } from "./Header";
 import { defaultLocale, productTranslations, type Locale } from "./translations";
@@ -33,6 +38,40 @@ const CENTER_PANE_MIN = 520;
 const PREVIEW_BREAKPOINT = 1100;
 const COMPACT_HEADER_BREAKPOINT = 560;
 const APP_VERSION = "v1.0.0";
+
+function relativeSearchTime(value: string) {
+  const timestamp = new Date(value).getTime();
+  if (!Number.isFinite(timestamp)) return "날짜 없음";
+  const elapsed = Math.max(0, Date.now() - timestamp);
+  if (elapsed < 60_000) return "방금";
+  if (elapsed < 60 * 60_000) return `${Math.floor(elapsed / 60_000)}분 전`;
+  if (elapsed < 24 * 60 * 60_000) return `${Math.floor(elapsed / (60 * 60_000))}시간 전`;
+  return `${Math.floor(elapsed / (24 * 60 * 60_000))}일 전`;
+}
+
+interface SmartFolderRecord {
+  id: string;
+  name: string;
+  query: string;
+}
+
+const SMART_FOLDERS_KEY = "everyfile.smart-folders";
+
+function readSmartFolders() {
+  try {
+    const stored = JSON.parse(window.localStorage.getItem(SMART_FOLDERS_KEY) ?? "[]");
+    if (!Array.isArray(stored)) return [];
+    return stored.filter(
+      (item): item is SmartFolderRecord =>
+        Boolean(item) &&
+        typeof item.id === "string" &&
+        typeof item.name === "string" &&
+        typeof item.query === "string",
+    );
+  } catch {
+    return [];
+  }
+}
 
 export interface AppProps {
   folders?: FolderRecord[];
@@ -177,6 +216,7 @@ function FolderPane({
   onSearchHistory?: (query: string) => void;
 }) {
   const [history, setHistory] = useState<SearchHistoryRecord[]>([]);
+  const [smartFolders, setSmartFolders] = useState<SmartFolderRecord[]>(readSmartFolders);
   const [folderMenu, setFolderMenu] = useState<string | null>(null);
   const [removeCandidate, setRemoveCandidate] = useState<FolderRecord | null>(null);
   const [favoriteFolders, setFavoriteFolders] = useState<Set<string>>(() => {
@@ -195,6 +235,37 @@ function FolderPane({
       .catch(() => undefined);
     return () => { active = false; };
   }, []);
+
+  const clearRecentHistory = async () => {
+    try {
+      await clearSearchHistory();
+      setHistory([]);
+    } catch {
+      // Keep the current list visible when the history store is unavailable.
+    }
+  };
+
+  const addSmartFolder = () => {
+    try {
+      const preset = JSON.parse(
+        window.localStorage.getItem("everyfile.search.preset") ??
+          window.localStorage.getItem("everyfile.search.current") ??
+          "null",
+      ) as { query?: unknown } | null;
+      const query = typeof preset?.query === "string" ? preset.query.trim() : "";
+      if (!query) return;
+      const existing = smartFolders.find((item) => item.query === query);
+      if (existing) return;
+      const next = [
+        ...smartFolders,
+        { id: `smart-${Date.now()}`, name: query, query },
+      ];
+      setSmartFolders(next);
+      window.localStorage.setItem(SMART_FOLDERS_KEY, JSON.stringify(next));
+    } catch {
+      // Keep the sidebar usable when browser storage is unavailable.
+    }
+  };
 
   useEffect(() => {
     if (!folderMenu) return;
@@ -293,8 +364,21 @@ function FolderPane({
         )}
         {section(
           "스마트 폴더",
-          0,
-          <p className="sidebar-helper"><span aria-hidden="true">⌕</span> 자주 쓰는 검색 조건을 저장하면 여기서 한 번에 다시 실행할 수 있어요.</p>,
+          smartFolders.length,
+          smartFolders.length === 0 ? (
+            <p className="sidebar-helper"><span aria-hidden="true">⌕</span> 자주 쓰는 검색 조건을 저장하면 여기서 한 번에 다시 실행할 수 있어요.</p>
+          ) : (
+            <ul className="sidebar-link-list">
+              {smartFolders.map((item) => (
+                <li key={item.id}>
+                  <button type="button" title={item.query} onClick={() => onSearchHistory?.(item.query)}>
+                    <span aria-hidden="true">⌕</span><span>{item.name}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ),
+          <button type="button" className="sidebar-section__action" aria-label="스마트 폴더 추가" onClick={(event) => { event.preventDefault(); event.stopPropagation(); addSmartFolder(); }}>＋</button>,
         )}
         {section(
           "최근 검색",
@@ -305,11 +389,12 @@ function FolderPane({
             <ul className="sidebar-link-list">
               {history.map((item) => (
                 <li key={item.id}>
-                  <button type="button" title={item.query} onClick={() => onSearchHistory?.(item.query)}><span aria-hidden="true">⌕</span><span>{item.query}</span></button>
+                  <button type="button" title={item.query} onClick={() => onSearchHistory?.(item.query)}><span aria-hidden="true">⌕</span><span>{item.query}</span><time dateTime={item.searchedAt}>{relativeSearchTime(item.searchedAt)}</time></button>
                 </li>
               ))}
             </ul>
           ),
+          <button type="button" className="sidebar-section__action" aria-label="최근 검색 삭제" onClick={(event) => { event.preventDefault(); event.stopPropagation(); void clearRecentHistory(); }}><span className="sidebar-trash-icon" aria-hidden="true" /></button>,
         )}
         {section("북마크", 0, <p className="sidebar-empty">북마크가 없습니다.</p>)}
       </div>

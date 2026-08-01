@@ -123,6 +123,7 @@ export function PdfLayoutView({
   const [pageNumber, setPageNumber] = useState(1);
   const [zoom, setZoom] = useState(1);
   const [fitWidth, setFitWidth] = useState(true);
+  const [isFullscreen, setIsFullscreen] = useState(false);
   const [fitRevision, setFitRevision] = useState(0);
   const [containerWidth, setContainerWidth] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -326,6 +327,29 @@ export function PdfLayoutView({
     };
   }, [containerWidth, document, fitRevision, fitWidth, pageNumber, zoom]);
 
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      setIsFullscreen(globalThis.document.fullscreenElement === container.current);
+    };
+    globalThis.document.addEventListener("fullscreenchange", handleFullscreenChange);
+    handleFullscreenChange();
+    return () => globalThis.document.removeEventListener("fullscreenchange", handleFullscreenChange);
+  }, []);
+
+  const toggleFullscreen = async () => {
+    const element = container.current;
+    if (!element) return;
+    try {
+      if (globalThis.document.fullscreenElement === element) {
+        await globalThis.document.exitFullscreen();
+      } else {
+        await element.requestFullscreen();
+      }
+    } catch {
+      setIsFullscreen(false);
+    }
+  };
+
   if (loading) return <div className="preview-message">PDF 불러오는 중…</div>;
   if (error) return <div className="preview-message preview-message--error" role="alert">{error}</div>;
   if (!document) return null;
@@ -382,7 +406,14 @@ export function PdfLayoutView({
         >
           너비 맞춤
         </button>
-        <button aria-label="전체 화면" onClick={() => void container.current?.requestFullscreen?.()} type="button">⛶</button>
+        <button
+          aria-label={isFullscreen ? "원래 크기로" : "전체 화면"}
+          aria-pressed={isFullscreen}
+          onClick={() => void toggleFullscreen()}
+          type="button"
+        >
+          {isFullscreen ? "⤢" : "⛶"}
+        </button>
       </div>
       {findOpen && (
         <div className="document-find pdf-layout-find">
