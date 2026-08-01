@@ -224,7 +224,14 @@ pub async fn remove_folder(
         .cancel_for_folder(&folder_id)
         .await
         .map_err(CommandError::from)?;
-    state.folders.remove(&folder_id).map_err(CommandError::from)
+    // Folder removal can delete thousands of documents, FTS rows, and
+    // cascading library records. Keep that synchronous SQLite transaction off
+    // the async/Tauri runtime thread so the window remains responsive.
+    let repository = state.folders.clone();
+    tokio::task::spawn_blocking(move || repository.remove(&folder_id))
+        .await
+        .map_err(|error| CommandError::new("FOLDER_REMOVE_WORKER_FAILED", error.to_string()))?
+        .map_err(CommandError::from)
 }
 
 #[tauri::command]

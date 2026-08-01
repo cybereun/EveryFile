@@ -99,6 +99,7 @@ export function DesktopApp() {
   };
 
   const deleteFolder = async (folderId: string) => {
+    setStatus({ kind: "info", text: "등록 폴더와 색인 데이터를 삭제하는 중입니다…" });
     try {
       await removeFolder(folderId);
       await refreshFolders();
