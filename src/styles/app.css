@@ -1338,7 +1338,10 @@ select:focus-visible,
 }
 
 .preview-tabs {
+  position: relative;
+  z-index: 4;
   display: flex;
+  flex: 0 0 auto;
   overflow-x: auto;
   gap: 0.25rem;
   padding: 0.45rem 0.65rem 0;
@@ -1375,7 +1378,7 @@ select:focus-visible,
 
 .preview-content {
   min-height: 0;
-  flex: 1 1 auto;
+  flex: 1 1 0;
   overflow-y: auto;
   overflow-x: hidden;
 }
@@ -1401,8 +1404,7 @@ select:focus-visible,
 
 .document-text-view {
   position: relative;
-  height: 100%;
-  overflow: auto;
+  min-height: 100%;
 }
 
 .document-find {
