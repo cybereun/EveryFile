@@ -25,8 +25,8 @@ export interface StatisticsDialogProps {
   onClose: () => void;
   loadStatistics?: () => Promise<DocumentStatistics>;
   loadHistory?: () => Promise<SearchHistoryRecord[]>;
-  deleteHistory?: (id: string) => Promise<void>;
-  clearHistory?: () => Promise<void>;
+  deleteHistory?: (id: string) => Promise<boolean | void>;
+  clearHistory?: () => Promise<number | void>;
   onApplyFilter?: (filter: StatisticsSearchFilter) => void;
   onSearchHistory?: (query: string) => void;
   registeredFolderIds?: string[];

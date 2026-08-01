@@ -107,8 +107,17 @@ impl FolderRepository {
             )
             .map_err(FolderError::Database)?;
         transaction
+            .execute("DELETE FROM documents WHERE folder_id = ?1", [folder_id])
+            .map_err(FolderError::Database)?;
+        transaction
+            .execute("DELETE FROM index_jobs WHERE folder_id = ?1", [folder_id])
+            .map_err(FolderError::Database)?;
+        let removed = transaction
             .execute("DELETE FROM folders WHERE id = ?1", [folder_id])
             .map_err(FolderError::Database)?;
+        if removed == 0 {
+            return Err(FolderError::NotFound(folder_id.to_owned()));
+        }
         transaction.commit().map_err(FolderError::Database)
     }
 }
@@ -138,6 +147,8 @@ pub enum FolderError {
     NotDirectory(String),
     #[error("folder is already registered: {0}")]
     AlreadyRegistered(String),
+    #[error("registered folder was not found: {0}")]
+    NotFound(String),
     #[error("folder database operation failed")]
     Database(#[source] rusqlite::Error),
 }
@@ -148,6 +159,7 @@ impl FolderError {
             Self::InvalidRoot { .. } => "FOLDER_INVALID_ROOT",
             Self::NotDirectory(_) => "FOLDER_NOT_DIRECTORY",
             Self::AlreadyRegistered(_) => "FOLDER_ALREADY_REGISTERED",
+            Self::NotFound(_) => "FOLDER_NOT_FOUND",
             Self::Database(_) => "FOLDER_DATABASE_ERROR",
         }
     }

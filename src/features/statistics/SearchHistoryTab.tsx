@@ -25,8 +25,8 @@ function relativeTime(iso: string) {
 
 interface SearchHistoryTabProps {
   loadHistory?: () => Promise<SearchHistoryRecord[]>;
-  deleteHistory?: (id: string) => Promise<void>;
-  clearHistory?: () => Promise<void>;
+  deleteHistory?: (id: string) => Promise<boolean | void>;
+  clearHistory?: () => Promise<number | void>;
   onSearch?: (query: string) => void;
   frequentSearches?: SearchFrequency[];
 }
@@ -113,7 +113,11 @@ export function SearchHistoryTab({
               <button type="button" aria-label={`${record.query} 기록 삭제`} onClick={async () => {
                 setMessage("");
                 try {
-                  await deleteHistory(record.id);
+                  const deleted = await deleteHistory(record.id);
+                  if (deleted === false) {
+                    setMessage("검색 기록이 이미 없습니다.");
+                    return;
+                  }
                   setHistory((records) => records.filter((item) => item.id !== record.id));
                 } catch {
                   setMessage("검색 기록을 삭제하지 못했습니다.");

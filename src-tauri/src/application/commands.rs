@@ -219,6 +219,11 @@ pub async fn remove_folder(
     state: State<'_, AppState>,
 ) -> Result<(), CommandError> {
     state.watchers.lock().await.remove(&folder_id);
+    state
+        .indexing
+        .cancel_for_folder(&folder_id)
+        .await
+        .map_err(CommandError::from)?;
     state.folders.remove(&folder_id).map_err(CommandError::from)
 }
 

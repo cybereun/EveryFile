@@ -216,6 +216,7 @@ function FolderPane({
   onSearchHistory?: (query: string) => void;
 }) {
   const [history, setHistory] = useState<SearchHistoryRecord[]>([]);
+  const [historyError, setHistoryError] = useState("");
   const [smartFolders, setSmartFolders] = useState<SmartFolderRecord[]>(readSmartFolders);
   const [folderMenu, setFolderMenu] = useState<string | null>(null);
   const [removeCandidate, setRemoveCandidate] = useState<FolderRecord | null>(null);
@@ -237,11 +238,24 @@ function FolderPane({
   }, []);
 
   const clearRecentHistory = async () => {
+    const previous = history;
+    setHistoryError("");
+    // Reflect the action immediately while the encrypted database operation
+    // completes. If it fails, restore the current records below.
+    setHistory([]);
     try {
-      await clearSearchHistory();
-      setHistory([]);
+      const deleted = await clearSearchHistory();
+      if (deleted === 0 && previous.length > 0) {
+        const current = await listSearchHistory(3, 0);
+        if (current.length > 0) {
+          setHistory(current);
+          setHistoryError("최근 검색을 삭제하지 못했습니다.");
+        }
+      }
     } catch {
-      // Keep the current list visible when the history store is unavailable.
+      const current = await listSearchHistory(3, 0).catch(() => previous);
+      setHistory(current);
+      setHistoryError("최근 검색을 삭제하지 못했습니다.");
     }
   };
 
@@ -398,6 +412,7 @@ function FolderPane({
         )}
         {section("북마크", 0, <p className="sidebar-empty">북마크가 없습니다.</p>)}
       </div>
+      {historyError && <p className="sidebar-error" role="alert">{historyError}</p>}
       <div className="sidebar-credit">
         <span>© 2026 Lebi_Cybereun</span>
         <a href="mailto:cybereunny@gmail.com">cybereunny@gmail.com</a>

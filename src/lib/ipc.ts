@@ -118,10 +118,10 @@ export const listSearchHistory = (limit = 100, offset = 0) =>
   invoke<SearchHistoryRecord[]>("list_search_history", { limit, offset });
 
 export const deleteSearchHistory = (id: string) =>
-  invoke<void>("delete_search_history", { id });
+  invoke<boolean>("delete_search_history", { id });
 
 export const clearSearchHistory = () =>
-  invoke<void>("clear_search_history");
+  invoke<number>("clear_search_history");
 
 export const exportResults = (request: ExportRequest, format: ExportFormat) =>
   invoke<ExportOutcome>("export_results", { request, format });

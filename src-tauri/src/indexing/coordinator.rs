@@ -561,6 +561,38 @@ impl IndexCoordinator {
         }
     }
 
+    /// Stop every active indexing job for a folder before its database rows are
+    /// removed.  A watcher can be dropped while a worker is still parsing; in
+    /// that case the worker may otherwise write a document back while the
+    /// folder-removal transaction is running.
+    pub async fn cancel_for_folder(&self, folder_id: &str) -> Result<(), IndexingError> {
+        let job_ids = {
+            let connection = self.database.connection();
+            let mut statement = connection.prepare(
+                "SELECT id FROM index_jobs
+                 WHERE folder_id = ?1
+                   AND state IN ('queued', 'discovering', 'parsing', 'paused')
+                 ORDER BY updated_at, id",
+            )?;
+            let rows = statement
+                .query_map([folder_id], |row| row.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, _>>()?;
+            rows
+        };
+
+        for job_id in job_ids {
+            // The worker can finish between the query above and cancel(). A
+            // terminal transition is harmless because the folder deletion is
+            // still the final source of truth, so only propagate real errors.
+            match self.cancel(&job_id).await {
+                Ok(()) => {}
+                Err(IndexingError::Transition { .. }) | Err(IndexingError::JobNotFound(_)) => {}
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(())
+    }
+
     pub async fn recover(&self) -> Result<Vec<JobId>, IndexingError> {
         let jobs = {
             let connection = self.database.connection();

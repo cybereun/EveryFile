@@ -589,6 +589,13 @@ select:focus-visible,
   line-height: 1.55;
 }
 
+.sidebar-error {
+  margin: 0.35rem 0.7rem;
+  color: var(--color-danger, #c53f31);
+  font-size: 0.7rem;
+  line-height: 1.4;
+}
+
 .sidebar-helper { display: flex; gap: 0.5rem; }
 .sidebar-link-list { display: grid; gap: 0.1rem; margin: 0; padding: 0; list-style: none; }
 .sidebar-link-list button {
