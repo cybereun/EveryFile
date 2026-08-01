@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ResizablePane } from "../components/ResizablePane";
 import {
   CommandStatus,
@@ -12,9 +12,10 @@ import { StatisticsDialog } from "../features/statistics/StatisticsDialog";
 import type {
   AppSettings,
   FolderRecord,
+  SearchHistoryRecord,
   StatisticsSearchFilter,
 } from "../lib/types";
-import { getSettings, saveSettings } from "../lib/ipc";
+import { getSettings, listSearchHistory, saveSettings } from "../lib/ipc";
 import "../styles/app.css";
 import { Header } from "./Header";
 import { defaultLocale, productTranslations, type Locale } from "./translations";
@@ -40,6 +41,8 @@ export interface AppProps {
   selectedDocumentId?: string | null;
   onAddFolder?: () => void;
   onRemoveFolder?: (folderId: string) => void;
+  onOpenFolder?: (folderId: string) => void;
+  onReindexFolder?: (folderId: string) => void;
   onSettings?: () => void;
   onStatistics?: () => void;
   onDocumentSelect?: (documentId: string) => void;
@@ -162,47 +165,168 @@ function FolderPane({
   folders,
   onAddFolder,
   onRemoveFolder,
+  onOpenFolder,
+  onReindexFolder,
+  onSearchHistory,
 }: {
   folders: FolderRecord[];
   onAddFolder?: () => void;
   onRemoveFolder?: (folderId: string) => void;
+  onOpenFolder?: (folderId: string) => void;
+  onReindexFolder?: (folderId: string) => void;
+  onSearchHistory?: (query: string) => void;
 }) {
+  const [history, setHistory] = useState<SearchHistoryRecord[]>([]);
+  const [folderMenu, setFolderMenu] = useState<string | null>(null);
+  const [removeCandidate, setRemoveCandidate] = useState<FolderRecord | null>(null);
+  const [favoriteFolders, setFavoriteFolders] = useState<Set<string>>(() => {
+    try {
+      const stored = JSON.parse(window.localStorage.getItem("everyfile.favorite-folders") ?? "[]");
+      return new Set(Array.isArray(stored) ? stored.filter((id): id is string => typeof id === "string") : []);
+    } catch {
+      return new Set();
+    }
+  });
+
+  useEffect(() => {
+    let active = true;
+    void listSearchHistory(3, 0)
+      .then((records) => { if (active) setHistory(records); })
+      .catch(() => undefined);
+    return () => { active = false; };
+  }, []);
+
+  useEffect(() => {
+    if (!folderMenu) return;
+    const close = (event: MouseEvent) => {
+      if (!(event.target as Element | null)?.closest(".folder-item__menu-wrap")) setFolderMenu(null);
+    };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setFolderMenu(null);
+    };
+    window.addEventListener("mousedown", close);
+    window.addEventListener("keydown", escape);
+    return () => {
+      window.removeEventListener("mousedown", close);
+      window.removeEventListener("keydown", escape);
+    };
+  }, [folderMenu]);
+
+  const toggleFavorite = (folderId: string) => {
+    setFavoriteFolders((current) => {
+      const next = new Set(current);
+      if (next.has(folderId)) next.delete(folderId);
+      else next.add(folderId);
+      try {
+        window.localStorage.setItem("everyfile.favorite-folders", JSON.stringify([...next]));
+      } catch {
+        // Keep the session preference when local storage is unavailable.
+      }
+      return next;
+    });
+    setFolderMenu(null);
+  };
+
+  const section = (
+    title: string,
+    count: number,
+    children: ReactNode,
+    action?: ReactNode,
+  ) => (
+    <details className="sidebar-section" open>
+      <summary>
+        <span>{title}</span>
+        <small>({count.toLocaleString()})</small>
+        {action}
+      </summary>
+      <div className="sidebar-section__body">{children}</div>
+    </details>
+  );
+
   return (
     <aside className="folder-pane" aria-label="등록 폴더 / Indexed folders">
-      <div className="pane-heading">
-        <h2>등록 폴더</h2>
-        <span className="folder-count">{folders.length}</span>
-      </div>
-      {folders.length === 0 ? (
-        <div className="folder-empty">
-          <button type="button" onClick={onAddFolder} disabled={!onAddFolder}>
-            폴더 추가
-          </button>
-          <br />
-          선택한 폴더만 이 PC에서 색인됩니다.
-          <br />
-          폴더 추가 버튼으로 시작하세요.
-        </div>
-      ) : (
-        <div className="folder-list">
-          {folders.map((folder) => (
-            <div className="folder-item" key={folder.id}>
-              <span title={folder.canonicalPath}>{folder.displayName}</span>
-              <span className="folder-count">
-                {folder.documentCount.toLocaleString()}
-              </span>
-              {onRemoveFolder && (
-                <button
-                  type="button"
-                  className="folder-remove"
-                  aria-label={`${folder.displayName} 등록 해제`}
-                  onClick={() => onRemoveFolder(folder.id)}
-                >
-                  ×
-                </button>
-              )}
+      <div className="sidebar-scroll">
+        {section(
+          "색인된 폴더",
+          folders.length,
+          folders.length === 0 ? (
+            <p className="sidebar-empty">선택한 폴더만 이 PC에서 색인합니다.</p>
+          ) : (
+            <div className="folder-list">
+              {folders.map((folder) => (
+                <div className="folder-item" key={folder.id}>
+                  <span className="sidebar-item__icon" aria-hidden="true">▰</span>
+                  <span className="sidebar-item__label" title={folder.canonicalPath}>{folder.displayName}</span>
+                  <span className="folder-count">{folder.documentCount.toLocaleString()}</span>
+                  <div className="folder-item__menu-wrap">
+                    <button
+                      type="button"
+                      className="folder-menu-trigger"
+                      aria-label={`${folder.displayName} 폴더 메뉴`}
+                      aria-expanded={folderMenu === folder.id}
+                      aria-haspopup="menu"
+                      onClick={() => setFolderMenu((current) => current === folder.id ? null : folder.id)}
+                    >⋯</button>
+                    {folderMenu === folder.id && (
+                      <div className="folder-context-menu" role="menu">
+                        <button role="menuitem" type="button" onClick={() => toggleFavorite(folder.id)}>
+                          <span aria-hidden="true">☆</span>{favoriteFolders.has(folder.id) ? "즐겨찾기 해제" : "즐겨찾기 추가"}
+                        </button>
+                        <button role="menuitem" type="button" onClick={() => { setFolderMenu(null); onOpenFolder?.(folder.id); }} disabled={!onOpenFolder}>
+                          <span aria-hidden="true">▱</span>탐색기에서 열기
+                        </button>
+                        <button role="menuitem" type="button" onClick={() => { setFolderMenu(null); onReindexFolder?.(folder.id); }} disabled={!onReindexFolder}>
+                          <span aria-hidden="true">↻</span>재인덱싱
+                        </button>
+                        <div className="folder-context-menu__separator" role="separator" />
+                        <button className="is-danger" role="menuitem" type="button" onClick={() => { setFolderMenu(null); setRemoveCandidate(folder); }} disabled={!onRemoveFolder}>
+                          <span aria-hidden="true">♲</span>폴더 제거
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ))}
             </div>
-          ))}
+          ),
+          <button type="button" className="sidebar-section__action" aria-label="폴더 추가" onClick={(event) => { event.preventDefault(); onAddFolder?.(); }} disabled={!onAddFolder}>＋</button>,
+        )}
+        {section(
+          "스마트 폴더",
+          0,
+          <p className="sidebar-helper"><span aria-hidden="true">⌕</span> 자주 쓰는 검색 조건을 저장하면 여기서 한 번에 다시 실행할 수 있어요.</p>,
+        )}
+        {section(
+          "최근 검색",
+          history.length,
+          history.length === 0 ? (
+            <p className="sidebar-empty">최근 검색이 없습니다.</p>
+          ) : (
+            <ul className="sidebar-link-list">
+              {history.map((item) => (
+                <li key={item.id}>
+                  <button type="button" title={item.query} onClick={() => onSearchHistory?.(item.query)}><span aria-hidden="true">⌕</span><span>{item.query}</span></button>
+                </li>
+              ))}
+            </ul>
+          ),
+        )}
+        {section("북마크", 0, <p className="sidebar-empty">북마크가 없습니다.</p>)}
+      </div>
+      <div className="sidebar-credit">
+        <span>© 2026 Lebi_Cybereun</span>
+        <a href="mailto:cybereunny@gmail.com">cybereunny@gmail.com</a>
+      </div>
+      {removeCandidate && (
+        <div className="confirmation-backdrop" role="presentation">
+          <section className="folder-remove-dialog" role="alertdialog" aria-modal="true" aria-labelledby="folder-remove-title">
+            <h2 id="folder-remove-title">색인 폴더를 제거할까요?</h2>
+            <p><strong>{removeCandidate.displayName}</strong> 폴더의 색인 정보만 제거하며 원본 파일은 삭제하지 않습니다.</p>
+            <div>
+              <button type="button" onClick={() => setRemoveCandidate(null)}>취소</button>
+              <button className="is-danger" type="button" onClick={() => { onRemoveFolder?.(removeCandidate.id); setRemoveCandidate(null); }}>폴더 제거</button>
+            </div>
+          </section>
         </div>
       )}
     </aside>
@@ -223,6 +347,8 @@ export function App({
   selectedDocumentId = null,
   onAddFolder,
   onRemoveFolder,
+  onOpenFolder,
+  onReindexFolder,
   onSettings,
   onStatistics,
   onDocumentSelect,
@@ -240,6 +366,7 @@ export function App({
   );
   const [workspaceSelectedDocumentId, setWorkspaceSelectedDocumentId] =
     useState(selectedDocumentId);
+  const [previewSearchQuery, setPreviewSearchQuery] = useState("");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [statisticsOpen, setStatisticsOpen] = useState(false);
   const [statisticsFilter, setStatisticsFilter] =
@@ -408,6 +535,12 @@ export function App({
             folders={folders}
             onAddFolder={onAddFolder}
             onRemoveFolder={onRemoveFolder}
+            onOpenFolder={onOpenFolder}
+            onReindexFolder={onReindexFolder}
+            onSearchHistory={(query) => {
+              setHistoryQuery(query);
+              setStatisticsFilter(null);
+            }}
           />
         </ResizablePane>
 
@@ -419,13 +552,13 @@ export function App({
             pageSize={appSettings?.resultPageSize}
             fileClickBehavior={appSettings?.fileClickBehavior}
             dateDisplay={appSettings?.dateDisplay}
-            onSelectDocument={(documentId) => {
+            onSelectDocument={(documentId, query) => {
               setWorkspaceSelectedDocumentId(documentId);
+              setPreviewSearchQuery(query);
               onDocumentSelect?.(documentId);
             }}
             ref={searchInput}
           />
-          <IndexStatusController />
         </section>
 
         <ResizablePane
@@ -440,6 +573,7 @@ export function App({
         >
           <PreviewPanel
             documentId={workspaceSelectedDocumentId}
+            searchQuery={previewSearchQuery}
             aiEnabled={appSettings?.aiEnabled ?? false}
             aiProvider={appSettings?.aiProvider ?? "ollama"}
           />
@@ -471,12 +605,16 @@ export function App({
         }}
       />
       <footer className="app-status">
-        <div className="status-summary" role="status" aria-live="polite">
-          <span>색인 문서 {indexedDocumentCount.toLocaleString()}개</span>
-          <span>폴더 {folders.length.toLocaleString()}개</span>
-          <span>대기열 {queueLabels[queueState]}</span>
-          <span className="app-version">{APP_VERSION}</span>
-        </div>
+        <IndexStatusController
+          idleContent={
+            <div className="status-summary" role="status" aria-live="polite">
+              <span>색인 문서 {indexedDocumentCount.toLocaleString()}개</span>
+              <span>폴더 {folders.length.toLocaleString()}개</span>
+              <span>대기열 {queueLabels[queueState]}</span>
+              <span className="app-version">{APP_VERSION}</span>
+            </div>
+          }
+        />
       </footer>
     </div>
   );

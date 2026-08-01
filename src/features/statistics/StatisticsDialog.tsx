@@ -15,6 +15,11 @@ import { SearchHistoryTab } from "./SearchHistoryTab";
 
 type StatisticsTab = "documents" | "history";
 
+const CHART_COLORS = [
+  "#df8f7c", "#327ab8", "#d8ab3e", "#6f9f77", "#7257ad",
+  "#49a7b5", "#c96d55", "#87964c", "#9a6c91", "#7a6042",
+];
+
 export interface StatisticsDialogProps {
   open: boolean;
   onClose: () => void;
@@ -57,6 +62,19 @@ function ratioPercent(value: string, total: bigint) {
   return total === 0n ? 0 : Number((count * 10_000n) / total) / 100;
 }
 
+function donutGradient(buckets: StatisticsBucket[]) {
+  const total = buckets.reduce((sum, bucket) => sum + decimal(bucket.count), 0n);
+  if (total === 0n) return "conic-gradient(#e8dfd1 0 100%)";
+  let cursor = 0;
+  const segments = buckets.slice(0, 10).map((bucket, index) => {
+    const start = cursor;
+    cursor += ratioPercent(bucket.count, total);
+    return `${CHART_COLORS[index % CHART_COLORS.length]} ${start}% ${cursor}%`;
+  });
+  if (cursor < 100) segments.push(`#c9bba7 ${cursor}% 100%`);
+  return `conic-gradient(${segments.join(", ")})`;
+}
+
 function DistributionTable({
   buckets,
   label,
@@ -68,34 +86,25 @@ function DistributionTable({
 }) {
   const total = buckets.reduce((sum, bucket) => sum + decimal(bucket.count), 0n);
   return (
-    <table className="data-table distribution-table" aria-label={label}>
-      <thead>
-        <tr>
-          <th scope="col">구분</th>
-          <th scope="col">문서 수</th>
-          <th scope="col">비율</th>
-        </tr>
-      </thead>
-      <tbody>
-        {buckets.map((bucket) => (
-          <tr key={bucket.label}>
-            <th scope="row">
-              <button
-                type="button"
-                className="chart-segment"
-                aria-label={`${bucket.label.toUpperCase()} 문서 ${bucket.count}개 검색`}
-                onClick={() => onSelect(bucket)}
-              >
-                <span className="chart-swatch" aria-hidden="true" />
-                {bucket.label.toUpperCase()}
-              </button>
-            </th>
-            <td>{formatInteger(bucket.count)}</td>
-            <td>{Math.round(ratioPercent(bucket.count, total))}%</td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
+    <div className="extension-distribution">
+      <div className="donut-chart" style={{ background: donutGradient(buckets) }} aria-hidden="true">
+        <div><strong>{total.toLocaleString("ko-KR")}</strong><span>총 문서</span></div>
+      </div>
+      <table className="data-table distribution-table" aria-label={label}>
+        <thead className="sr-only"><tr><th scope="col">구분</th><th scope="col">문서 수</th><th scope="col">비율</th></tr></thead>
+        <tbody>
+          {buckets.slice(0, 10).map((bucket, index) => (
+            <tr key={bucket.label}>
+              <th scope="row"><button type="button" className="chart-segment" aria-label={`${bucket.label.toUpperCase()} 문서 ${bucket.count}개 검색`} onClick={() => onSelect(bucket)}>
+                <span className="chart-swatch" style={{ background: CHART_COLORS[index % CHART_COLORS.length] }} aria-hidden="true" />{bucket.label.toUpperCase()}
+              </button></th>
+              <td>{formatInteger(bucket.count)}</td>
+              <td className="sr-only">{Math.round(ratioPercent(bucket.count, total))}%</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }
 
@@ -184,13 +193,21 @@ export function StatisticsDialog({
           tabIndex={0}
         >
           {activeTab === "history" ? (
-            <SearchHistoryTab
-              loadHistory={loadHistory}
-              deleteHistory={deleteHistory}
-              clearHistory={clearHistory}
-              onSearch={onSearchHistory}
-              frequentSearches={statistics?.frequentSearches}
-            />
+            <>
+              {statistics && (
+                <section className="search-statistics-summary" aria-label="검색 통계 요약">
+                  <div><strong>{formatInteger(statistics.totalSearches)}</strong><span>총 검색 횟수</span></div>
+                  <div><strong>{formatInteger(statistics.uniqueSearchTerms)}</strong><span>고유 검색어</span></div>
+                </section>
+              )}
+              <SearchHistoryTab
+                loadHistory={loadHistory}
+                deleteHistory={deleteHistory}
+                clearHistory={clearHistory}
+                onSearch={onSearchHistory}
+                frequentSearches={statistics?.frequentSearches}
+              />
+            </>
           ) : !statistics ? (
             <p role="status">{error || "문서 통계를 계산하는 중…"}</p>
           ) : (
@@ -200,7 +217,7 @@ export function StatisticsDialog({
                 <div><strong>{formatInteger(statistics.indexedDocuments)}</strong><span>색인 완료</span></div>
                 <div><strong>{formatBytes(statistics.totalBytes)}</strong><span>총 크기</span></div>
               </section>
-              <div className="statistics-grid">
+              <div className="statistics-grid statistics-grid--stacked">
                 <section>
                   <h3>파일 유형별 분포</h3>
                   <DistributionTable
@@ -241,7 +258,22 @@ export function StatisticsDialog({
                               {bucket.label}
                             </button>
                           </th>
-                          <td>{formatInteger(bucket.count)}</td>
+                          <td>
+                            <span
+                              className="statistics-bar"
+                              style={{
+                                width: `${Math.max(3, Math.round(ratioPercent(
+                                  bucket.count,
+                                  statistics.byFolder.reduce(
+                                    (largest, item) => decimal(item.count) > largest ? decimal(item.count) : largest,
+                                    1n,
+                                  ),
+                                )))}%`,
+                              }}
+                              aria-hidden="true"
+                            />
+                            {formatInteger(bucket.count)}
+                          </td>
                         </tr>
                         ))}
                     </tbody>
@@ -327,10 +359,6 @@ export function StatisticsDialog({
                   </ol>
                 </section>
               </div>
-              <section className="search-statistics-summary" aria-label="검색 통계 요약">
-                <div><strong>{formatInteger(statistics.totalSearches)}</strong><span>총 검색 횟수</span></div>
-                <div><strong>{formatInteger(statistics.uniqueSearchTerms)}</strong><span>고유 검색어</span></div>
-              </section>
             </>
           )}
         </div>

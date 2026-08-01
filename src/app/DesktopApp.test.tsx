@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   listFolders: vi.fn(),
   registerFolder: vi.fn(),
   removeFolder: vi.fn(),
+  openFolderLocation: vi.fn(),
   startIndexing: vi.fn(),
   listen: vi.fn(),
 }));
@@ -15,6 +16,7 @@ vi.mock("../lib/ipc", () => ({
   listFolders: mocks.listFolders,
   registerFolder: mocks.registerFolder,
   removeFolder: mocks.removeFolder,
+  openFolderLocation: mocks.openFolderLocation,
   startIndexing: mocks.startIndexing,
 }));
 vi.mock("./App", () => ({
@@ -45,6 +47,7 @@ describe("DesktopApp", () => {
     mocks.listFolders.mockReset().mockResolvedValue([]);
     mocks.registerFolder.mockReset().mockResolvedValue(folder);
     mocks.removeFolder.mockReset().mockResolvedValue(undefined);
+    mocks.openFolderLocation.mockReset().mockResolvedValue(undefined);
     mocks.startIndexing.mockReset().mockResolvedValue("job-1");
     mocks.listen.mockReset().mockResolvedValue(() => undefined);
   });

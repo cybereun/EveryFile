@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 
@@ -63,6 +63,30 @@ describe("App", () => {
     expect(screen.getByRole("status")).toHaveTextContent("42");
     expect(screen.getByRole("status")).toHaveTextContent("1");
     expect(screen.getByRole("status")).toHaveTextContent("v1.0.0");
+  });
+
+  it("removes an indexed folder only through its three-dot menu and confirmation", () => {
+    const remove = vi.fn();
+    render(
+      <App
+        folders={[{
+          id: "documents",
+          canonicalPath: "C:\\Users\\Lebi\\Documents",
+          displayName: "Documents",
+          documentCount: 42,
+          indexState: "completed",
+        }]}
+        onRemoveFolder={remove}
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: "Documents 제거" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Documents 폴더 메뉴" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /폴더 제거/ }));
+    const dialog = screen.getByRole("alertdialog", { name: "색인 폴더를 제거할까요?" });
+    expect(dialog).toHaveTextContent("원본 파일은 삭제하지 않습니다");
+    fireEvent.click(within(dialog).getByRole("button", { name: "폴더 제거" }));
+    expect(remove).toHaveBeenCalledWith("documents");
   });
 
   it("toggles the sidebar with Ctrl+B and focuses search with slash", () => {

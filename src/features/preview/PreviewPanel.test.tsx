@@ -214,7 +214,14 @@ describe("secure document preview", () => {
     );
   });
 
-  it("explains that non-PDF original layout is unavailable without conversion", async () => {
+  it("renders HWP original layout with the local document renderer", async () => {
+    const free = vi.fn();
+    const hwpLoader = vi.fn().mockResolvedValue({
+      pageCount: () => 1,
+      renderPageSvg: () =>
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 800"><text x="20" y="40">시험 문서</text></svg>',
+      free,
+    });
     render(
       <PreviewPanel
         documentId="doc-1"
@@ -223,14 +230,14 @@ describe("secure document preview", () => {
           fileName: "report.hwp",
           extension: "hwp",
         })}
+        hwpBytesApi={vi.fn().mockResolvedValue([1, 2, 3])}
+        hwpLoader={hwpLoader}
       />,
     );
     await screen.findByText("report.hwp");
     fireEvent.click(screen.getByRole("tab", { name: "원본 레이아웃" }));
-    expect(
-      screen.getByText("이 형식은 문서 텍스트로만 미리볼 수 있습니다."),
-    ).toBeVisible();
-    expect(screen.getAllByRole("button", { name: "파일 열기" })[0]).toBeVisible();
+    await screen.findByLabelText("HWP 1페이지");
+    expect(hwpLoader).toHaveBeenCalledWith(new Uint8Array([1, 2, 3]));
   });
 
   it("renders one PDF canvas while prefetching only the adjacent page window", async () => {

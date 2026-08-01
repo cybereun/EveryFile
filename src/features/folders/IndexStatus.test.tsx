@@ -9,13 +9,14 @@ const parsing: IndexStatusModel = {
   totalFiles: 10,
   completedFiles: 4,
   currentPath: "C:\\Users\\me\\Private\\quarterly-report.pdf",
+  errorCount: 1,
   errors: [{ code: "DAMAGED", fileName: "broken.pdf", message: "damaged" }],
 };
 
 describe("IndexStatus", () => {
   afterEach(cleanup);
 
-  it("shows progress and only the current filename until details are expanded", () => {
+  it("shows compact progress, percentage, and only the current filename", () => {
     render(
       <IndexStatus
         status={parsing}
@@ -28,10 +29,8 @@ describe("IndexStatus", () => {
     expect(screen.getByRole("progressbar")).toHaveAttribute("value", "4");
     expect(screen.getByText("quarterly-report.pdf")).toBeVisible();
     expect(screen.queryByText(parsing.currentPath!)).not.toBeInTheDocument();
-    expect(screen.getByText("오류 1개")).toBeVisible();
-
-    fireEvent.click(screen.getByRole("button", { name: "경로 세부정보 보기" }));
-    expect(screen.getByText(parsing.currentPath!)).toBeVisible();
+    expect(screen.getByText("실패 1건")).toBeVisible();
+    expect(screen.getByText("40%")).toBeVisible();
   });
 
   it("routes pause, resume, and cancel using the job identifier", () => {

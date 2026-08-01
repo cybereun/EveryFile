@@ -125,6 +125,7 @@ export interface IndexStatus {
   totalFiles: number;
   completedFiles: number;
   currentPath: string | null;
+  errorCount: number;
   errors: IndexFailure[];
 }
 

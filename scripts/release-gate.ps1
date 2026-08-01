@@ -5,15 +5,18 @@ $ErrorActionPreference = 'Stop'
 $repoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $manifest = Join-Path $repoRoot 'src-tauri\Cargo.toml'
 $env:CARGO_BUILD_JOBS = '1'
-$env:CARGO_INCREMENTAL = '0'
-$env:CARGO_PROFILE_DEV_DEBUG = '0'
-$env:CARGO_PROFILE_TEST_DEBUG = '0'
+# Keep the normal dev/test profile so the gate can reuse the already-verified
+# native SQLCipher/OpenSSL build. The final Tauri release build uses `--release`
+# and is unaffected by these profile settings.
 
 Push-Location -LiteralPath $repoRoot
 try {
     & npm run build
     if ($LASTEXITCODE -ne 0) { throw 'Frontend build failed.' }
-    & npm test -- --run
+    # The release gate runs on constrained Windows builders. Serial workers
+    # keep the short per-test timeouts deterministic instead of competing for
+    # the WebView/jsdom initialization pool.
+    & npm test -- --run --maxWorkers=1
     if ($LASTEXITCODE -ne 0) { throw 'Frontend tests failed.' }
     & cargo fmt --manifest-path $manifest -- --check
     if ($LASTEXITCODE -ne 0) { throw 'Rust formatting check failed.' }

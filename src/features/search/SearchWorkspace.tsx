@@ -23,7 +23,7 @@ import { useImmediateSearch } from "./useImmediateSearch";
 
 export interface SearchWorkspaceProps {
   folders: FolderRecord[];
-  onSelectDocument?: (documentId: string) => void;
+  onSelectDocument?: (documentId: string, query: string) => void;
   searchApi?: (request: SearchRequest) => Promise<SearchResponse>;
   cancelApi?: (requestId: string) => Promise<boolean>;
   openApi?: (documentId: string) => Promise<void>;
@@ -107,7 +107,7 @@ export const SearchWorkspace = forwardRef<HTMLInputElement, SearchWorkspaceProps
           loading={search.loading}
           onLoadMore={() => void search.loadMore()}
           onOpen={openApi}
-          onSelect={onSelectDocument}
+          onSelect={(documentId) => onSelectDocument(documentId, search.query)}
           total={within ? visibleHits.length : search.total}
         />
       </section>

@@ -48,6 +48,7 @@ describe("IndexStatusController", () => {
           totalFiles: 3,
           completedFiles: 1,
           currentPath: "C:\\Users\\me\\Secret\\budget.xlsx",
+          errorCount: 0,
           errors: [],
         },
       });
@@ -73,6 +74,7 @@ describe("IndexStatusController", () => {
           totalFiles: 3,
           completedFiles: 1,
           currentPath: null,
+          errorCount: 0,
           errors: [],
         },
       });

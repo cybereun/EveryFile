@@ -66,11 +66,17 @@ export const getPreview = (documentId: string) =>
 export const getPdfBytes = (documentId: string, requestId: string) =>
   invoke<ArrayBuffer>("get_pdf_bytes", { documentId, requestId });
 
+export const getLayoutBytes = (documentId: string, requestId: string) =>
+  invoke<ArrayBuffer>("get_layout_bytes", { documentId, requestId });
+
 export const cancelPdfRead = (requestId: string) =>
   invoke<boolean>("cancel_pdf_read", { requestId });
 
 export const openSourceLocation = (documentId: string) =>
   invoke<void>("open_source_location", { documentId });
+
+export const openFolderLocation = (folderId: string) =>
+  invoke<void>("open_folder_location", { folderId });
 
 export const setBookmark = (documentId: string, note: string) =>
   invoke<Bookmark>("set_bookmark", { documentId, note });

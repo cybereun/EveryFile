@@ -9,7 +9,7 @@ use rand::RngExt;
 use rusqlite::{params, OptionalExtension};
 use thiserror::Error;
 use tokio::sync::{mpsc, Notify};
-use tokio::task::JoinHandle;
+use tokio::task::{JoinHandle, JoinSet};
 
 use crate::domain::models::{AppSettings, FolderRecord, IndexFailure, IndexStatus, JobState};
 use crate::folders::discovery::{discover, DiscoveryOptions, DiscoveryPoll, FileCandidate};
@@ -19,6 +19,8 @@ use crate::ocr::{OcrClient, OcrError, OcrMode};
 use crate::parsing::{ParseErrorCode, ParsedDocument, ParserClient, ParserError};
 
 const PIPELINE_CAPACITY: usize = 16;
+const MAX_PARSER_CONCURRENCY: usize = 3;
+const MAX_TERMINAL_ERROR_DETAILS: i64 = 100;
 const MAX_PARSE_ATTEMPT_TOKEN_CLAIMS: usize = 4;
 
 pub type JobId = String;
@@ -1057,33 +1059,59 @@ impl IndexCoordinator {
             send_pending_candidates(&database, &producer_job_id, sender)
         });
 
-        while let Some(candidate) = receiver.recv().await {
-            if runtime.stop.load(Ordering::Acquire) {
-                break;
-            }
-            self.limiter.yield_to_foreground().await;
-            let gate = runtime.gate.lock().await;
-            if runtime.stop.load(Ordering::Acquire)
-                || !matches!(self.job_state(&job_id), Ok(JobState::Parsing))
+        let mut workers = JoinSet::new();
+        let mut input_open = true;
+        let mut fatal_error = None;
+        while input_open || !workers.is_empty() {
+            while input_open
+                && workers.len() < MAX_PARSER_CONCURRENCY
+                && !runtime.stop.load(Ordering::Acquire)
             {
-                drop(gate);
-                break;
-            }
-            if let Err(error) = self.process_candidate(&job_id, candidate, &runtime).await {
-                if !runtime.stop.load(Ordering::Acquire) {
-                    let _ = runtime.with_mutation(|| self.fail_active_job(&job_id, &error));
+                match receiver.recv().await {
+                    Some(candidate) => {
+                        let coordinator = self.clone();
+                        let worker_job_id = job_id.clone();
+                        let worker_runtime = Arc::clone(&runtime);
+                        workers.spawn(async move {
+                            coordinator.limiter.yield_to_foreground().await;
+                            coordinator
+                                .process_candidate(&worker_job_id, candidate, &worker_runtime)
+                                .await
+                        });
+                    }
+                    None => input_open = false,
                 }
-                drop(gate);
-                self.emit_status(&job_id);
-                drop(receiver);
-                let _ = producer.await;
-                return;
             }
-            drop(gate);
-            self.emit_status(&job_id);
+
+            if runtime.stop.load(Ordering::Acquire) {
+                input_open = false;
+            }
+            let Some(result) = workers.join_next().await else {
+                break;
+            };
+            let result = result.unwrap_or(Err(IndexingError::WorkerStopped));
+            match result {
+                Ok(()) => self.emit_status(&job_id),
+                Err(IndexingError::StateChanged) if runtime.stop.load(Ordering::Acquire) => {}
+                Err(error) => {
+                    if fatal_error.is_none() {
+                        fatal_error = Some(error);
+                        runtime.stop.store(true, Ordering::Release);
+                        input_open = false;
+                    }
+                }
+            }
         }
         drop(receiver);
         let _ = producer.await;
+
+        if let Some(error) = fatal_error {
+            runtime.stop.store(false, Ordering::Release);
+            let _ = runtime.with_mutation(|| self.fail_active_job(&job_id, &error));
+            runtime.stop.store(true, Ordering::Release);
+            self.emit_status(&job_id);
+            return;
+        }
 
         if !runtime.stop.load(Ordering::Acquire) {
             let _ = runtime
@@ -1151,13 +1179,25 @@ impl IndexCoordinator {
         candidate: PersistedCandidate,
         runtime: &Arc<JobRuntime>,
     ) -> Result<(), IndexingError> {
-        if runtime.stop.load(Ordering::Acquire) {
+        self.apply_intensity_delay().await?;
+        let gate = runtime.gate.lock().await;
+        if runtime.stop.load(Ordering::Acquire)
+            || !matches!(self.job_state(job_id), Ok(JobState::Parsing))
+        {
             return Err(IndexingError::StateChanged);
         }
         runtime.with_mutation(|| {
             self.set_current_path(job_id, &candidate.canonical_path.to_string_lossy())
         })?;
-        if candidate.metadata_only || path_is_metadata_only(&candidate.canonical_path)? {
+        let runtime_settings = self
+            .runtime_settings
+            .read()
+            .map_err(|_| IndexingError::RuntimeSettingsUnavailable)?
+            .clone();
+        if candidate.metadata_only
+            || path_is_metadata_only(&candidate.canonical_path)?
+            || !candidate_requires_extraction(&candidate.canonical_path, &runtime_settings)
+        {
             return runtime.with_mutation(|| self.complete_metadata_only(job_id, &candidate));
         }
         let trusted_path = match self.validate_immediately_before_parse(job_id, &candidate) {
@@ -1177,18 +1217,13 @@ impl IndexCoordinator {
             return Err(IndexingError::StateChanged);
         }
         self.discovery_probe.before_reconciliation_parser_start();
-        self.apply_intensity_delay().await?;
         let (parser_operation, parsing_checkpoint) =
             runtime.begin_parser_operation(|| self.mark_document_parsing(&candidate))?;
+        drop(gate);
 
         let parser = Arc::clone(&self.parser);
         let ocr = self.ocr.clone();
         let parse_path = trusted_path.clone();
-        let runtime_settings = self
-            .runtime_settings
-            .read()
-            .map_err(|_| IndexingError::RuntimeSettingsUnavailable)?
-            .clone();
         let tracks_ocr = should_track_ocr(&trusted_path, &runtime_settings);
         if tracks_ocr {
             self.begin_ocr_attempt(
@@ -1965,25 +2000,40 @@ impl IndexCoordinator {
             .optional()?;
         let (state, total, completed, current_path) =
             row.ok_or_else(|| IndexingError::JobNotFound(job_id.to_owned()))?;
-        let mut statement = connection.prepare(
-            "SELECT code, file_name, message FROM index_job_errors
-             WHERE job_id = ?1 ORDER BY created_at, id",
+        let state = JobState::from_sql(&state)?;
+        let error_count = connection.query_row(
+            "SELECT COUNT(*) FROM index_job_errors WHERE job_id = ?1",
+            [job_id],
+            |row| row.get::<_, i64>(0),
         )?;
-        let errors = statement
-            .query_map([job_id], |row| {
-                Ok(IndexFailure {
-                    code: row.get(0)?,
-                    file_name: row.get(1)?,
-                    message: row.get(2)?,
-                })
-            })?
-            .collect::<Result<Vec<_>, _>>()?;
+        let errors = if matches!(
+            state,
+            JobState::Completed | JobState::Cancelled | JobState::Failed
+        ) {
+            let mut statement = connection.prepare(
+                "SELECT code, file_name, message FROM index_job_errors
+                 WHERE job_id = ?1 ORDER BY created_at, id LIMIT ?2",
+            )?;
+            let details = statement
+                .query_map(params![job_id, MAX_TERMINAL_ERROR_DETAILS], |row| {
+                    Ok(IndexFailure {
+                        code: row.get(0)?,
+                        file_name: row.get(1)?,
+                        message: row.get(2)?,
+                    })
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            details
+        } else {
+            Vec::new()
+        };
         Ok(IndexStatus {
             job_id: job_id.to_owned(),
-            state: JobState::from_sql(&state)?,
+            state,
             total_files: u64::try_from(total).unwrap_or(0),
             completed_files: u64::try_from(completed).unwrap_or(0),
             current_path,
+            error_count: u64::try_from(error_count).unwrap_or(0),
             errors,
         })
     }
@@ -2592,6 +2642,25 @@ fn should_track_ocr(path: &Path, settings: &RuntimeIndexSettings) -> bool {
     )
 }
 
+fn candidate_requires_extraction(path: &Path, settings: &RuntimeIndexSettings) -> bool {
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if matches!(
+        extension.as_str(),
+        "txt" | "md" | "markdown" | "hwp" | "hwpx" | "hml" | "hwpml" | "pdf" | "xlsx" | "docx"
+    ) {
+        return true;
+    }
+    settings.ocr_enabled
+        && matches!(
+            extension.as_str(),
+            "jpg" | "jpeg" | "png" | "webp" | "bmp" | "tif" | "tiff"
+        )
+}
+
 fn document_was_ocr(document: &ParsedDocument) -> bool {
     document
         .metadata
@@ -2899,14 +2968,56 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use super::{
-        advance_file_transaction, trusted_event_identity, DocumentParser, EventPathProvider,
-        IndexCoordinator, JobRuntime, JobState, PersistedCandidate, ReconciliationScratch,
+        advance_file_transaction, candidate_requires_extraction, trusted_event_identity,
+        DocumentParser, EventPathProvider, IndexCoordinator, JobRuntime, JobState,
+        PersistedCandidate, ReconciliationScratch, RuntimeIndexSettings,
     };
     use crate::folders::repository::FolderRepository;
     use crate::infrastructure::database::Database;
     use crate::infrastructure::secure_key::SecretKey;
     use crate::parsing::{ParsedDocument, ParserError};
     use zeroize::Zeroizing;
+
+    #[test]
+    fn mixed_file_candidates_only_extract_supported_content() {
+        let mut settings = RuntimeIndexSettings {
+            max_file_size_bytes: 10_000,
+            excluded_path_patterns: vec![],
+            indexing_intensity: "balanced".into(),
+            ocr_enabled: false,
+            math_ocr_enabled: false,
+        };
+        assert!(candidate_requires_extraction(
+            Path::new("report.pdf"),
+            &settings
+        ));
+        assert!(candidate_requires_extraction(
+            Path::new("notes.hwp"),
+            &settings
+        ));
+        assert!(candidate_requires_extraction(
+            Path::new("sheet.xlsx"),
+            &settings
+        ));
+        assert!(!candidate_requires_extraction(
+            Path::new("setup.exe"),
+            &settings
+        ));
+        assert!(!candidate_requires_extraction(
+            Path::new("scan.png"),
+            &settings
+        ));
+
+        settings.ocr_enabled = true;
+        assert!(candidate_requires_extraction(
+            Path::new("scan.png"),
+            &settings
+        ));
+        assert!(!candidate_requires_extraction(
+            Path::new("archive.zip"),
+            &settings
+        ));
+    }
 
     struct TestParser;
 
@@ -3086,7 +3197,7 @@ mod tests {
         let root = temp.path().join("root");
         fs::create_dir(&root).unwrap();
         fs::write(root.join("included.txt"), "included").unwrap();
-        fs::write(root.join("excluded.skip"), "excluded").unwrap();
+        fs::write(root.join("alternate.md"), "alternate").unwrap();
         let key = SecretKey::from_bytes(Zeroizing::new([92_u8; 32]));
         let database = Arc::new(Database::open(&temp.path().join("index.db"), &key).unwrap());
         database.migrate().unwrap();
@@ -3104,7 +3215,7 @@ mod tests {
         coordinator
             .apply_runtime_settings(&crate::domain::models::AppSettings {
                 max_file_size_bytes: 123,
-                excluded_path_patterns: vec!["*.skip".into()],
+                excluded_path_patterns: vec!["*.md".into()],
                 indexing_intensity: "high".into(),
                 ..Default::default()
             })
