@@ -33,12 +33,12 @@
 - 포터블: `artifacts\\release\\EveryFile-Portable-v1.0.0.zip`
 - 체크섬: `artifacts\\release\\SHA256SUMS.txt`
 
-## 남은 단계
+## 최종 완료
 
-1. 변경 사항을 커밋한다.
-2. `origin`의 `codex/phase-1-core-search` 브랜치에 push한다.
-3. GitHub `v1.0.0` 릴리즈에 설치 파일·포터블 ZIP·SHA256SUMS를 업로드한다.
-4. 완료 후 T023을 체크하고 최종 경로/링크를 보고한다.
+- 변경 사항 커밋: `cd90721` 및 릴리즈 마감 커밋.
+- `origin/codex/phase-1-core-search` push 완료.
+- GitHub `v1.0.0` 릴리즈에 새 설치 파일·포터블 ZIP·SHA256SUMS와 고지 문서 업로드 완료.
+- T001-T023 완료.
 
 ## 주의
 

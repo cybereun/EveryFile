@@ -39,4 +39,4 @@
 
 - [x] T021 Run full frontend and Rust test suites.
 - [x] T022 Build and smoke-test silent Windows installer and portable package.
-- [ ] T023 Commit, push, and replace release artifacts with verified checksums.
+- [x] T023 Commit, push, and replace release artifacts with verified checksums.
