@@ -150,7 +150,7 @@ export function IndexStatusController({ idleContent = null }: { idleContent?: Re
 
   return (
     <>
-      {status ? (
+      {report ? null : status ? (
         <IndexStatus
           status={status}
           onPause={(jobId) => void pauseIndexing(jobId)}

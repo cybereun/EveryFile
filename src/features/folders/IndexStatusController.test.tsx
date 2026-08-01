@@ -138,4 +138,55 @@ describe("IndexStatusController", () => {
     expect(screen.getByRole("dialog")).toBeVisible();
     expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
   });
+
+  it("keeps progress hidden while the indexing report is open", async () => {
+    let receive: ((event: { payload: IndexStatus }) => void) | undefined;
+    bridge.listen.mockImplementation(
+      (_topic: string, handler: (event: { payload: IndexStatus }) => void) => {
+        receive = handler;
+        return Promise.resolve(bridge.unlisten);
+      },
+    );
+    render(<IndexStatusController />);
+    await waitFor(() => expect(bridge.listen).toHaveBeenCalled());
+
+    act(() => {
+      receive?.({
+        payload: {
+          jobId: "job-report",
+          state: "parsing",
+          totalFiles: 1,
+          completedFiles: 1,
+          currentPath: "C:\\Users\\me\\image.png",
+          errorCount: 0,
+          errors: [],
+        },
+      });
+      receive?.({
+        payload: {
+          jobId: "job-report",
+          state: "completed",
+          totalFiles: 1,
+          completedFiles: 1,
+          currentPath: "C:\\Users\\me\\image.png",
+          errorCount: 0,
+          errors: [],
+        },
+      });
+      receive?.({
+        payload: {
+          jobId: "job-next",
+          state: "parsing",
+          totalFiles: 1,
+          completedFiles: 0,
+          currentPath: "C:\\Users\\me\\next.png",
+          errorCount: 0,
+          errors: [],
+        },
+      });
+    });
+
+    expect(screen.getByRole("dialog")).toBeVisible();
+    expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
+  });
 });
