@@ -14,6 +14,11 @@ import { App } from "./App";
 function errorText(error: unknown) {
   if (error instanceof Error) return error.message;
   if (typeof error === "string") return error;
+  if (typeof error === "object" && error !== null) {
+    const value = error as { code?: unknown; message?: unknown };
+    const message = typeof value.message === "string" ? value.message : "알 수 없는 오류가 발생했습니다.";
+    return typeof value.code === "string" ? `${message} (${value.code})` : message;
+  }
   return "알 수 없는 오류가 발생했습니다.";
 }
 

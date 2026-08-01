@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::time::Duration;
 
 use parking_lot::{MappedMutexGuard, Mutex, MutexGuard};
 use rusqlite::{Connection, InterruptHandle};
@@ -43,6 +44,9 @@ impl Database {
             .map_err(DatabaseError::Key)?;
         connection
             .execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;")
+            .map_err(DatabaseError::Configure)?;
+        connection
+            .busy_timeout(Duration::from_secs(5))
             .map_err(DatabaseError::Configure)?;
 
         let interrupt = std::sync::Arc::new(connection.get_interrupt_handle());

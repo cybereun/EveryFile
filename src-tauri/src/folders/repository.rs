@@ -95,6 +95,18 @@ impl FolderRepository {
     }
 
     pub fn remove(&self, folder_id: &str) -> Result<(), FolderError> {
+        for attempt in 0..4 {
+            match self.remove_once(folder_id) {
+                Err(FolderError::Database(error)) if is_busy_or_locked(&error) && attempt < 3 => {
+                    std::thread::sleep(std::time::Duration::from_millis(100 * (attempt + 1)));
+                }
+                result => return result,
+            }
+        }
+        unreachable!("folder removal retry loop always returns");
+    }
+
+    fn remove_once(&self, folder_id: &str) -> Result<(), FolderError> {
         let mut connection = self.database.connection();
         let transaction = connection.transaction().map_err(FolderError::Database)?;
         transaction
@@ -135,6 +147,14 @@ fn is_unique_constraint(error: &rusqlite::Error) -> bool {
     )
 }
 
+fn is_busy_or_locked(error: &rusqlite::Error) -> bool {
+    matches!(
+        error,
+        rusqlite::Error::SqliteFailure(inner, _)
+            if matches!(inner.code, ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked)
+    )
+}
+
 #[derive(Debug, Error)]
 pub enum FolderError {
     #[error("selected folder is unavailable: {path}")]
@@ -149,7 +169,7 @@ pub enum FolderError {
     AlreadyRegistered(String),
     #[error("registered folder was not found: {0}")]
     NotFound(String),
-    #[error("folder database operation failed")]
+    #[error("folder database operation failed: {0}")]
     Database(#[source] rusqlite::Error),
 }
 
