@@ -131,6 +131,27 @@ describe("secure document preview", () => {
     expect(screen.getByRole("menuitem", { name: "태그 추가" })).toBeVisible();
   });
 
+  it("keeps the preview format tabs visible while a newly selected file loads", async () => {
+    const nextPreview = deferred<PreviewDocument>();
+    const getPreviewApi = vi
+      .fn()
+      .mockResolvedValueOnce(preview)
+      .mockReturnValueOnce(nextPreview.promise);
+    const view = render(
+      <PreviewPanel documentId="doc-1" getPreviewApi={getPreviewApi} />,
+    );
+
+    await screen.findByRole("tab", { name: "원본 레이아웃" });
+    view.rerender(<PreviewPanel documentId="doc-2" getPreviewApi={getPreviewApi} />);
+
+    expect(screen.getByRole("tab", { name: "문서 텍스트" })).toBeVisible();
+    expect(screen.getByRole("tab", { name: "원본 레이아웃" })).toBeVisible();
+    expect(screen.getByRole("status")).toHaveTextContent("문서 미리보기를 불러오는 중");
+
+    nextPreview.resolve({ ...preview, documentId: "doc-2", fileName: "다음 문서.pdf" });
+    await screen.findByText("다음 문서.pdf");
+  });
+
   it("supports keyboard navigation and restores focus when the more menu closes", async () => {
     render(
       <PreviewPanel

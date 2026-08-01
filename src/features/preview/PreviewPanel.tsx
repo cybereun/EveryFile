@@ -130,6 +130,35 @@ function ImagePreview({
   );
 }
 
+function PreviewTabs({
+  tab,
+  onTabChange,
+  disabled = false,
+}: {
+  tab: "text" | "layout";
+  onTabChange: (next: "text" | "layout") => void;
+  disabled?: boolean;
+}) {
+  return (
+    <div className="preview-tabs" role="tablist" aria-label="미리보기 형식">
+      <button
+        aria-selected={tab === "text"}
+        disabled={disabled}
+        onClick={() => onTabChange("text")}
+        role="tab"
+        type="button"
+      >문서 텍스트</button>
+      <button
+        aria-selected={tab === "layout"}
+        disabled={disabled}
+        onClick={() => onTabChange("layout")}
+        role="tab"
+        type="button"
+      >원본 레이아웃</button>
+    </div>
+  );
+}
+
 interface PreviewPanelProps {
   documentId: string | null;
   getPreviewApi?: typeof getPreview;
@@ -236,17 +265,21 @@ export function PreviewPanel({
   if (!documentId) {
     return (
       <section className="preview-pane" aria-label="문서 미리보기 / Document preview">
+        <PreviewTabs tab={tab} onTabChange={setTab} disabled />
         <div className="preview-empty">검색 결과에서 파일을 선택하면 내용을 볼 수 있습니다.</div>
       </section>
     );
   }
-  if (loading) {
-    return <section className="preview-pane" aria-label="문서 미리보기 / Document preview">미리보기 불러오는 중…</section>;
-  }
   if (!preview) {
     return (
       <section className="preview-pane" aria-label="문서 미리보기 / Document preview">
-        <div className="preview-message preview-message--error" role="alert">{error ?? "미리보기를 사용할 수 없습니다."}</div>
+        <PreviewTabs tab={tab} onTabChange={setTab} disabled={loading} />
+        <div
+          className={loading ? "preview-message" : "preview-message preview-message--error"}
+          role={loading ? "status" : "alert"}
+        >
+          {loading ? "미리보기 불러오는 중…" : error ?? "미리보기를 사용할 수 없습니다."}
+        </div>
       </section>
     );
   }
@@ -346,28 +379,19 @@ export function PreviewPanel({
           ))}
         </div>
       )}
-      <div className="preview-tabs" role="tablist" aria-label="미리보기 형식">
-        <button
-          aria-selected={tab === "text"}
-          onClick={() => setTab("text")}
-          role="tab"
-          type="button"
-        >문서 텍스트</button>
-        <button
-          aria-selected={tab === "layout"}
-          onClick={() => setTab("layout")}
-          role="tab"
-          type="button"
-        >원본 레이아웃</button>
-      </div>
+      <PreviewTabs tab={tab} onTabChange={setTab} disabled={loading} />
       {preview.truncated && (
         <div className="preview-limit-notice" role="status">
           문서가 커서 안전한 미리보기 한도까지만 표시합니다.
         </div>
       )}
       {error && <div className="preview-inline-error" role="alert">{error}</div>}
-      <div className="preview-content" role="tabpanel">
-        {isImageExtension(preview.extension) ? (
+      <div className="preview-content" aria-busy={loading} role="tabpanel">
+        {loading ? (
+          <div className="preview-message" role="status">
+            문서 미리보기를 불러오는 중…
+          </div>
+        ) : isImageExtension(preview.extension) ? (
           <ImagePreview
             documentId={preview.documentId}
             extension={preview.extension}
