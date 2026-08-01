@@ -74,6 +74,18 @@ export function PreviewToolbar({
 
   return (
     <div className="preview-toolbar" aria-label="미리보기 도구" ref={root}>
+      <button
+        aria-label="파일 위치 열기"
+        className="preview-toolbar-icon"
+        onClick={onOpenLocation}
+        title="파일 위치 열기"
+        type="button"
+      >
+        <svg aria-hidden="true" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.8" viewBox="0 0 24 24">
+          <path d="M3 7h7l2 2h9v10H3z" />
+          <path d="m14 14 3-3m0 0h-3m3 0v3" />
+        </svg>
+      </button>
       <button onClick={onOpen} type="button">파일 열기</button>
       <button onClick={onFind} type="button">찾기</button>
       {onAiSummary && (

@@ -3,6 +3,7 @@ import { BookmarkButton } from "../library/BookmarkButton";
 import { TagEditor } from "../library/TagEditor";
 import {
   getPdfBytes,
+  getImageBytes,
   getLayoutBytes,
   getPreview,
   openSourceFile,
@@ -14,6 +15,7 @@ import {
   exportResults,
   runDocumentAi,
   cancelDocumentAi,
+  cancelPdfRead,
 } from "../../lib/ipc";
 import type { PreviewBlock, PreviewDocument } from "../../lib/types";
 import { DocumentTextView } from "./DocumentTextView";
@@ -39,12 +41,102 @@ function textFromBlocks(blocks: PreviewBlock[]): string {
     .join("\n\n");
 }
 
+function imageMimeType(extension: string) {
+  switch (extension.toLocaleLowerCase()) {
+    case "jpg":
+    case "jpeg":
+      return "image/jpeg";
+    case "png":
+      return "image/png";
+    case "webp":
+      return "image/webp";
+    case "bmp":
+      return "image/bmp";
+    case "gif":
+      return "image/gif";
+    case "tif":
+    case "tiff":
+      return "image/tiff";
+    case "svg":
+      return "image/svg+xml";
+    default:
+      return "application/octet-stream";
+  }
+}
+
+function isImageExtension(extension: string) {
+  return ["jpg", "jpeg", "png", "webp", "bmp", "gif", "tif", "tiff", "svg"].includes(
+    extension.toLocaleLowerCase(),
+  );
+}
+
+let imageRequestSequence = 0;
+
+function nextImageRequestId() {
+  imageRequestSequence += 1;
+  return `image-preview-${Date.now().toString(36)}-${imageRequestSequence.toString(36)}`;
+}
+
+function ImagePreview({
+  documentId,
+  fileName,
+  extension,
+  getBytesApi,
+}: {
+  documentId: string;
+  fileName: string;
+  extension: string;
+  getBytesApi: typeof getImageBytes;
+}) {
+  const [source, setSource] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const sourceRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    const requestId = nextImageRequestId();
+    let active = true;
+    setSource(null);
+    setError(null);
+    void getBytesApi(documentId, requestId)
+      .then((bytes) => {
+        const url = URL.createObjectURL(new Blob([bytes], { type: imageMimeType(extension) }));
+        if (!active) {
+          URL.revokeObjectURL(url);
+          return;
+        }
+        if (sourceRef.current) URL.revokeObjectURL(sourceRef.current);
+        sourceRef.current = url;
+        setSource(url);
+      })
+      .catch((caught) => {
+        if (active) setError(caught instanceof Error ? caught.message : "이미지를 불러오지 못했습니다.");
+      });
+    return () => {
+      active = false;
+      void cancelPdfRead(requestId);
+      if (sourceRef.current) {
+        URL.revokeObjectURL(sourceRef.current);
+        sourceRef.current = null;
+      }
+    };
+  }, [documentId, extension, getBytesApi]);
+
+  if (error) return <div className="preview-message preview-message--error" role="alert">{error}</div>;
+  if (!source) return <div className="preview-message">이미지 미리보기를 불러오는 중…</div>;
+  return (
+    <div className="image-preview" aria-label={`${fileName} 이미지 미리보기`}>
+      <img src={source} alt={fileName} decoding="async" />
+    </div>
+  );
+}
+
 interface PreviewPanelProps {
   documentId: string | null;
   getPreviewApi?: typeof getPreview;
   openApi?: typeof openSourceFile;
   openLocationApi?: typeof openSourceLocation;
   pdfBytesApi?: typeof getPdfBytes;
+  imageBytesApi?: typeof getImageBytes;
   saveMarkdownApi?: typeof saveMarkdown;
   pdfLoader?: PdfLoader;
   hwpBytesApi?: typeof getLayoutBytes;
@@ -65,6 +157,7 @@ export function PreviewPanel({
   openApi = openSourceFile,
   openLocationApi = openSourceLocation,
   pdfBytesApi = getPdfBytes,
+  imageBytesApi = getImageBytes,
   saveMarkdownApi = saveMarkdown,
   pdfLoader,
   hwpBytesApi = getLayoutBytes,
@@ -274,7 +367,14 @@ export function PreviewPanel({
       )}
       {error && <div className="preview-inline-error" role="alert">{error}</div>}
       <div className="preview-content" role="tabpanel">
-        {tab === "text" ? (
+        {isImageExtension(preview.extension) ? (
+          <ImagePreview
+            documentId={preview.documentId}
+            extension={preview.extension}
+            fileName={preview.fileName}
+            getBytesApi={imageBytesApi}
+          />
+        ) : tab === "text" ? (
           <DocumentTextView blocks={preview.blocks} findRequest={findRequest} initialQuery={searchQuery} />
         ) : preview.extension.toLocaleLowerCase() === "pdf" ? (
           <PdfLayoutView

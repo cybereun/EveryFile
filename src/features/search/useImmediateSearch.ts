@@ -195,6 +195,23 @@ export function useImmediateSearch({
     await execute(generation, hits.length, true);
   }, [execute, hasMore, hits.length, loading]);
 
+  const reset = useCallback(() => {
+    latestGeneration.current += 1;
+    if (activeRequestId.current) {
+      void cancel(activeRequestId.current).catch(() => undefined);
+      activeRequestId.current = null;
+    }
+    queryRef.current = "";
+    setRawQuery("");
+    setFilters(DEFAULT_SEARCH_FILTERS);
+    setHits([]);
+    setTotal(0);
+    setElapsedMs(0);
+    setHasMore(false);
+    setLoading(false);
+    setError(null);
+  }, [cancel]);
+
   return {
     query,
     setQuery,
@@ -207,5 +224,6 @@ export function useImmediateSearch({
     loading,
     error,
     loadMore,
+    reset,
   };
 }

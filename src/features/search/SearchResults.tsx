@@ -8,6 +8,7 @@ import {
 } from "react";
 import type { SearchHit } from "../../lib/types";
 import { exportResults } from "../../lib/ipc";
+import { BrandMark } from "../../components/BrandMark";
 
 interface SearchResultsProps {
   hits: SearchHit[];
@@ -21,6 +22,7 @@ interface SearchResultsProps {
   onSelect: (documentId: string) => void;
   clickBehavior?: "preview" | "open";
   dateDisplay?: "relative" | "absolute";
+  workspaceStats?: { documents: number; folders: number };
 }
 
 function formatSize(bytes: number) {
@@ -31,6 +33,14 @@ function formatSize(bytes: number) {
   }
   const value = bytes / (1024 * 1024);
   return `${Number.isInteger(value) ? value : value.toFixed(1)} MB`;
+}
+
+function formatBreadcrumbPath(path: string) {
+  const normalized = path.replace(/^\\\\\?\\/, "");
+  return normalized
+    .split(/[\\/]+/)
+    .filter(Boolean)
+    .join(" / ");
 }
 
 function parseDate(value: string) {
@@ -145,7 +155,7 @@ function ResultRow({
       </span>
       <span className="result-meta">
         <span className="result-path" title={parent}>
-          {parent}
+          {formatBreadcrumbPath(parent)}
         </span>
         <time dateTime={parseDate(hit.modifiedAt)?.toISOString()}>
           {dateDisplay === "relative"
@@ -173,6 +183,7 @@ export function SearchResults({
   onSelect,
   clickBehavior = "preview",
   dateDisplay = "absolute",
+  workspaceStats = { documents: 0, folders: 0 },
 }: SearchResultsProps) {
   const [selectedDocumentId, setSelectedDocumentId] = useState<string | null>(
     hits[0]?.documentId ?? null,
@@ -235,9 +246,13 @@ export function SearchResults({
   if (!loading && hits.length === 0) {
     return (
       <div className="workspace-empty">
-        <div>
-          <strong>Anything in your files.</strong>
-          <p>검색어와 필터를 선택하면 이곳에 결과가 표시됩니다.</p>
+        <div className="workspace-empty__content">
+          <BrandMark className="brand-mark--hero" />
+          <strong>EveryFile<span aria-hidden="true">.</span></strong>
+          <p>내 PC 깊숙이 흩어진 문서들.<br />이제 빠르게 찾아보세요.</p>
+          <span className="workspace-empty__stats">
+            {workspaceStats.documents.toLocaleString()} 문서 · {workspaceStats.folders.toLocaleString()} 폴더
+          </span>
         </div>
       </div>
     );

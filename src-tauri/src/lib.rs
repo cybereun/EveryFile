@@ -151,6 +151,7 @@ pub fn run_with_reset_completion(reset_completion: Option<diagnostics::ResetComp
             application::commands::get_preview,
             application::commands::get_pdf_bytes,
             application::commands::get_layout_bytes,
+            application::commands::get_image_bytes,
             application::commands::cancel_pdf_read,
             application::commands::set_bookmark,
             application::commands::remove_bookmark,

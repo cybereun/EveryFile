@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { IconButton } from "../components/IconButton";
+import { BrandMark } from "../components/BrandMark";
 import type { Locale } from "./translations";
 
 interface HeaderProps {
@@ -143,6 +144,7 @@ export function Header({
   return (
     <header className={`app-header${compact ? " app-header--compact" : ""}`}>
       <div className="brand">
+        <BrandMark />
         <h1>EveryFile</h1>
         {!compact && <p>{tagline}</p>}
       </div>

@@ -85,8 +85,22 @@ select:focus-visible,
   display: flex;
   min-width: 0;
   flex: 1 1 auto;
-  align-items: baseline;
+  align-items: center;
   gap: 0.7rem;
+}
+
+.brand-mark {
+  width: 1.65rem;
+  height: 1.65rem;
+  flex: 0 0 auto;
+  color: var(--color-accent);
+}
+
+.brand-mark--hero {
+  width: 3rem;
+  height: 3rem;
+  margin: 0 auto 0.65rem;
+  color: var(--color-accent);
 }
 
 .brand h1 {
@@ -1123,6 +1137,49 @@ select:focus-visible,
   overflow-wrap: anywhere;
 }
 
+.search-mode-tabs button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.search-mode-tabs button svg {
+  width: 0.9rem;
+  height: 0.9rem;
+}
+
+.search-mode-tabs__ask {
+  border-color: transparent !important;
+  background: var(--color-surface-muted) !important;
+  color: var(--color-text) !important;
+}
+
+.search-scope-toggle {
+  display: inline-flex;
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+}
+
+.search-scope-toggle button {
+  border: 0;
+  border-radius: 0;
+}
+
+.search-scope-toggle button + button {
+  border-left: 1px solid var(--color-border);
+}
+
+.search-scope-toggle button.is-active {
+  background: var(--color-surface-muted);
+  font-weight: 700;
+}
+
+.workspace-empty__content {
+  display: grid;
+  justify-items: center;
+}
+
 .workspace-empty strong {
   display: block;
   margin-bottom: 0.5rem;
@@ -1136,6 +1193,16 @@ select:focus-visible,
   margin: 0;
   color: var(--color-text);
   line-height: 1.65;
+}
+
+.workspace-empty strong span {
+  color: var(--color-accent);
+}
+
+.workspace-empty__stats {
+  margin-top: 1.1rem;
+  color: var(--color-text-muted);
+  font-size: 0.78rem;
 }
 
 .preview-pane {
@@ -1221,6 +1288,26 @@ select:focus-visible,
   white-space: nowrap;
 }
 
+.preview-toolbar .preview-toolbar-icon {
+  display: inline-grid;
+  width: 2rem;
+  min-width: 2rem;
+  padding: 0.35rem;
+  place-items: center;
+  border-color: transparent;
+  background: transparent;
+}
+
+.preview-toolbar-icon svg {
+  width: 1.1rem;
+  height: 1.1rem;
+}
+
+.preview-toolbar .preview-toolbar-icon:hover {
+  border-color: var(--color-border);
+  background: var(--color-surface-muted);
+}
+
 .preview-more {
   position: relative;
   flex: 0 0 auto;
@@ -1291,6 +1378,25 @@ select:focus-visible,
   flex: 1 1 auto;
   overflow-y: auto;
   overflow-x: hidden;
+}
+
+.image-preview {
+  display: grid;
+  min-height: 100%;
+  padding: 1rem;
+  place-items: center;
+  background: #f7f4ee;
+}
+
+.image-preview img {
+  display: block;
+  width: auto;
+  max-width: 100%;
+  height: auto;
+  max-height: calc(100vh - 12rem);
+  object-fit: contain;
+  border-radius: 5px;
+  box-shadow: 0 8px 24px rgb(48 40 32 / 12%);
 }
 
 .document-text-view {

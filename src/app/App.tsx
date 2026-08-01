@@ -457,6 +457,7 @@ export function App({
   const [statisticsFilter, setStatisticsFilter] =
     useState<StatisticsSearchFilter | null>(null);
   const [historyQuery, setHistoryQuery] = useState<string | null>(null);
+  const [homeRequest, setHomeRequest] = useState(0);
   const [appSettings, setAppSettings] = useState<AppSettings | null>(null);
   const searchInput = useRef<HTMLInputElement>(null);
   const [leftWidth, setLeftWidth] = usePersistedWidth(
@@ -588,6 +589,11 @@ export function App({
         }}
         onHome={() => {
           setLeftPanelOpen(true);
+          setWorkspaceSelectedDocumentId(null);
+          setPreviewSearchQuery("");
+          setHistoryQuery(null);
+          setStatisticsFilter(null);
+          setHomeRequest((request) => request + 1);
           searchInput.current?.focus();
         }}
         onSettings={() => {
@@ -633,6 +639,7 @@ export function App({
           <SearchWorkspace
             folders={folders}
             historyQuery={historyQuery}
+            homeRequest={homeRequest}
             statisticsFilter={statisticsFilter}
             pageSize={appSettings?.resultPageSize}
             fileClickBehavior={appSettings?.fileClickBehavior}

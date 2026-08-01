@@ -16,7 +16,10 @@ import {
   type SearchFilters as SearchFilterState,
 } from "./searchStore";
 
-const EXTENSIONS = ["hwpx", "hwp", "docx", "pptx", "xlsx", "pdf", "txt"];
+const EXTENSIONS = [
+  "hwpx", "hwp", "docx", "pptx", "xlsx", "pdf", "txt",
+  "png", "jpg", "jpeg", "webp", "bmp", "gif", "tif", "tiff", "svg",
+];
 
 interface SearchFiltersProps {
   filters: SearchFilterState;
@@ -178,6 +181,24 @@ export function SearchFilters({
         style={{ overflowX: "auto" }}
       >
         <div className="search-filter-row">
+          <div className="search-scope-toggle" role="group" aria-label="검색 대상">
+            <button
+              aria-pressed={filters.mode === "keyword"}
+              className={filters.mode === "keyword" ? "is-active" : ""}
+              onClick={() => onFiltersChange({ mode: "keyword" })}
+              type="button"
+            >
+              키워드
+            </button>
+            <button
+              aria-pressed={filters.mode === "filename"}
+              className={filters.mode === "filename" ? "is-active" : ""}
+              onClick={() => onFiltersChange({ mode: "filename" })}
+              type="button"
+            >
+              파일명
+            </button>
+          </div>
           <label>
             <span className="sr-only">검색 옵션</span>
             <select

@@ -1,10 +1,6 @@
 import { forwardRef } from "react";
-import type { SearchMode } from "../../lib/types";
-
 interface SearchInputProps {
   query: string;
-  mode: SearchMode;
-  onModeChange: (mode: SearchMode) => void;
   onQueryChange: (query: string) => void;
 }
 
@@ -25,25 +21,23 @@ function SearchIcon() {
 }
 
 export const SearchInput = forwardRef<HTMLInputElement, SearchInputProps>(
-  function SearchInput({ query, mode, onModeChange, onQueryChange }, ref) {
+  function SearchInput({ query, onQueryChange }, ref) {
     return (
       <div className="search-input-block">
-        <div className="search-mode-tabs" aria-label="검색 대상">
+        <div className="search-mode-tabs" aria-label="검색 방식">
           <button
-            aria-pressed={mode === "keyword"}
-            className={mode === "keyword" ? "is-active" : ""}
-            onClick={() => onModeChange("keyword")}
+            aria-pressed="true"
+            className="is-active search-mode-tabs__search"
             type="button"
           >
-            키워드
+            <SearchIcon /> 검색
           </button>
           <button
-            aria-pressed={mode === "filename"}
-            className={mode === "filename" ? "is-active" : ""}
-            onClick={() => onModeChange("filename")}
+            aria-label="Ask Everyfile"
+            className="search-mode-tabs__ask"
             type="button"
           >
-            파일명
+            <span aria-hidden="true">✦</span> Ask Everyfile
           </button>
         </div>
         <label className="search-field search-field--workspace">

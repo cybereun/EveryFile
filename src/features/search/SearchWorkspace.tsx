@@ -30,6 +30,7 @@ export interface SearchWorkspaceProps {
   debounceMs?: number;
   statisticsFilter?: StatisticsSearchFilter | null;
   historyQuery?: string | null;
+  homeRequest?: number;
   pageSize?: number;
   fileClickBehavior?: "preview" | "open";
   dateDisplay?: "relative" | "absolute";
@@ -46,6 +47,7 @@ export const SearchWorkspace = forwardRef<HTMLInputElement, SearchWorkspaceProps
       debounceMs,
       statisticsFilter,
       historyQuery,
+      homeRequest = 0,
       pageSize,
       fileClickBehavior,
       dateDisplay,
@@ -60,6 +62,13 @@ export const SearchWorkspace = forwardRef<HTMLInputElement, SearchWorkspaceProps
       pageSize,
     });
     const within = withinResults.trim().toLocaleLowerCase();
+    const workspaceStats = useMemo(
+      () => ({
+        documents: folders.reduce((total, folder) => total + folder.documentCount, 0),
+        folders: folders.length,
+      }),
+      [folders],
+    );
     useEffect(() => {
       if (!statisticsFilter) return;
       search.patchFilters(statisticsFilter);
@@ -69,6 +78,10 @@ export const SearchWorkspace = forwardRef<HTMLInputElement, SearchWorkspaceProps
       if (historyQuery == null) return;
       search.setQuery(historyQuery);
     }, [historyQuery, search.setQuery]);
+
+    useEffect(() => {
+      if (homeRequest > 0) search.reset();
+    }, [homeRequest, search.reset]);
     const visibleHits = useMemo(() => {
       if (!within) return search.hits;
       return search.hits.filter((hit) =>
@@ -82,8 +95,6 @@ export const SearchWorkspace = forwardRef<HTMLInputElement, SearchWorkspaceProps
     return (
       <section className="detailed-search" role="search" aria-label="파일 검색 / File search">
         <SearchInput
-          mode={search.filters.mode}
-          onModeChange={(mode) => search.patchFilters({ mode })}
           onQueryChange={search.setQuery}
           query={search.query}
           ref={ref}
@@ -109,6 +120,7 @@ export const SearchWorkspace = forwardRef<HTMLInputElement, SearchWorkspaceProps
           onOpen={openApi}
           onSelect={(documentId) => onSelectDocument(documentId, search.query)}
           total={within ? visibleHits.length : search.total}
+          workspaceStats={workspaceStats}
         />
       </section>
     );

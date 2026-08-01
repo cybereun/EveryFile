@@ -252,6 +252,53 @@ pub fn read_indexed_layout_cancellable(
     Ok(bytes)
 }
 
+pub fn read_indexed_image_cancellable(
+    database: &Database,
+    document_id: &str,
+    cancelled: impl Fn() -> bool,
+) -> Result<Vec<u8>, SourceOpenError> {
+    const MAX_IMAGE_BYTES: u64 = 64 * 1024 * 1024;
+    let verified = verify_indexed_source(database, document_id)?;
+    let source = verified.current_path()?;
+    let extension = source
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if !matches!(
+        extension.as_str(),
+        "jpg" | "jpeg" | "png" | "webp" | "bmp" | "tif" | "tiff"
+    ) {
+        return Err(SourceOpenError::NotImagePreview);
+    }
+    let metadata = std::fs::metadata(&source).map_err(SourceOpenError::Unavailable)?;
+    if metadata.len() > MAX_IMAGE_BYTES {
+        return Err(SourceOpenError::TooLarge);
+    }
+    if cancelled() {
+        return Err(SourceOpenError::Cancelled);
+    }
+    let mut file = std::fs::File::open(&source).map_err(SourceOpenError::Unavailable)?;
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    let mut chunk = vec![0_u8; 1024 * 1024];
+    loop {
+        if cancelled() {
+            return Err(SourceOpenError::Cancelled);
+        }
+        let read = file
+            .read(&mut chunk)
+            .map_err(SourceOpenError::Unavailable)?;
+        if read == 0 {
+            break;
+        }
+        bytes.extend_from_slice(&chunk[..read]);
+    }
+    if cancelled() {
+        return Err(SourceOpenError::Cancelled);
+    }
+    Ok(bytes)
+}
+
 #[cfg(windows)]
 struct WindowsPathLock(windows::Win32::Foundation::HANDLE);
 
@@ -483,6 +530,8 @@ pub enum SourceOpenError {
     NotPdf,
     #[error("indexed source does not support original-layout preview")]
     NotLayoutPreview,
+    #[error("indexed source is not an image preview")]
+    NotImagePreview,
     #[error("indexed PDF exceeds the preview size limit")]
     TooLarge,
     #[error("indexed PDF read was cancelled")]
@@ -508,6 +557,7 @@ impl SourceOpenError {
             Self::NotFile => "SOURCE_NOT_FILE",
             Self::NotPdf => "SOURCE_NOT_PDF",
             Self::NotLayoutPreview => "SOURCE_LAYOUT_UNSUPPORTED",
+            Self::NotImagePreview => "SOURCE_IMAGE_UNSUPPORTED",
             Self::TooLarge => "SOURCE_PDF_TOO_LARGE",
             Self::Cancelled => "SOURCE_PDF_READ_CANCELLED",
             Self::OutsideRegisteredRoot => "SOURCE_OUTSIDE_REGISTERED_ROOT",

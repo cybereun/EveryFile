@@ -69,6 +69,9 @@ export const getPdfBytes = (documentId: string, requestId: string) =>
 export const getLayoutBytes = (documentId: string, requestId: string) =>
   invoke<ArrayBuffer>("get_layout_bytes", { documentId, requestId });
 
+export const getImageBytes = (documentId: string, requestId: string) =>
+  invoke<ArrayBuffer>("get_image_bytes", { documentId, requestId });
+
 export const cancelPdfRead = (requestId: string) =>
   invoke<boolean>("cancel_pdf_read", { requestId });
 
