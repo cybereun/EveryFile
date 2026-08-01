@@ -282,6 +282,16 @@ function FolderPane({
     }
   };
 
+  const removeSmartFolder = (id: string) => {
+    const next = smartFolders.filter((item) => item.id !== id);
+    setSmartFolders(next);
+    try {
+      window.localStorage.setItem(SMART_FOLDERS_KEY, JSON.stringify(next));
+    } catch {
+      // Keep the in-memory list usable when browser storage is unavailable.
+    }
+  };
+
   useEffect(() => {
     if (!folderMenu) return;
     const close = (event: MouseEvent) => {
@@ -385,10 +395,21 @@ function FolderPane({
           ) : (
             <ul className="sidebar-link-list">
               {smartFolders.map((item) => (
-                <li key={item.id}>
-                  <button type="button" title={item.query} onClick={() => onSearchHistory?.(item.query)}>
+                <li className="sidebar-link-row" key={item.id}>
+                  <button className="sidebar-link-list__item" type="button" title={item.query} onClick={() => onSearchHistory?.(item.query)}>
                     <span aria-hidden="true">⌕</span><span>{item.name}</span>
                   </button>
+                  <button
+                    type="button"
+                    className="sidebar-link-list__remove"
+                    aria-label={`${item.name} 스마트 폴더 삭제`}
+                    title="스마트 폴더 삭제"
+                    onClick={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      removeSmartFolder(item.id);
+                    }}
+                  >×</button>
                 </li>
               ))}
             </ul>
