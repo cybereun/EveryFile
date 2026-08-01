@@ -69,8 +69,23 @@ export function IndexStatus({ status, onPause, onResume, onCancel }: Props) {
 function IndexingReport({ status, onClose }: { status: IndexStatusModel; onClose: () => void }) {
   const failures = status.errorCount;
   const successes = Math.max(0, status.completedFiles - failures);
+
+  useEffect(() => {
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", closeOnEscape);
+    return () => document.removeEventListener("keydown", closeOnEscape);
+  }, [onClose]);
+
   return (
-    <div className="modal-backdrop index-report-backdrop" role="presentation">
+    <div
+      className="modal-backdrop index-report-backdrop"
+      role="presentation"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
       <section className="index-report" role="dialog" aria-modal="true" aria-labelledby="index-report-title">
         <header>
           <h2 id="index-report-title">색인 결과</h2>
@@ -102,11 +117,25 @@ function IndexingReport({ status, onClose }: { status: IndexStatusModel; onClose
   );
 }
 
-export function IndexStatusController({ idleContent = null }: { idleContent?: ReactNode }) {
+interface IndexStatusControllerProps {
+  idleContent?: ReactNode;
+  /** When provided, only explicitly started jobs show a completion dialog. */
+  reportJobIds?: ReadonlySet<string>;
+}
+
+export function IndexStatusController({
+  idleContent = null,
+  reportJobIds,
+}: IndexStatusControllerProps) {
   const [status, setStatus] = useState<IndexStatusModel | null>(null);
   const [report, setReport] = useState<IndexStatusModel | null>(null);
   const reportedJobs = useRef(new Set<string>());
   const activeJobId = useRef<string | null>(null);
+  const reportJobIdsRef = useRef(reportJobIds);
+
+  useEffect(() => {
+    reportJobIdsRef.current = reportJobIds;
+  }, [reportJobIds]);
 
   useEffect(() => {
     let disposed = false;
@@ -123,8 +152,9 @@ export function IndexStatusController({ idleContent = null }: { idleContent?: Re
         if (activeJobId.current && activeJobId.current !== payload.jobId) return;
         setStatus(null);
         activeJobId.current = null;
-        if (!reportedJobs.current.has(payload.jobId)) {
-          reportedJobs.current.add(payload.jobId);
+        if (reportedJobs.current.has(payload.jobId)) return;
+        reportedJobs.current.add(payload.jobId);
+        if (reportJobIdsRef.current === undefined || reportJobIdsRef.current.has(payload.jobId)) {
           setReport(payload);
         }
       } else if (payload.state === "cancelled") {
@@ -158,7 +188,12 @@ export function IndexStatusController({ idleContent = null }: { idleContent?: Re
           onCancel={(jobId) => void cancelIndexing(jobId)}
         />
       ) : idleContent}
-      {report && <IndexingReport status={report} onClose={() => setReport(null)} />}
+      {report && (
+        <IndexingReport
+          status={report}
+          onClose={() => setReport(null)}
+        />
+      )}
     </>
   );
 }

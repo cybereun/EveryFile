@@ -77,6 +77,7 @@ export interface AppProps {
   folders?: FolderRecord[];
   indexedDocumentCount?: number;
   queueState?: "idle" | "indexing" | "paused" | "error";
+  reportJobIds?: ReadonlySet<string>;
   selectedDocumentId?: string | null;
   onAddFolder?: () => void;
   onRemoveFolder?: (folderId: string) => void;
@@ -444,6 +445,7 @@ export function App({
   folders = [],
   indexedDocumentCount = 0,
   queueState = "idle",
+  reportJobIds,
   selectedDocumentId = null,
   onAddFolder,
   onRemoveFolder,
@@ -713,6 +715,7 @@ export function App({
       />
       <footer className="app-status">
         <IndexStatusController
+          reportJobIds={reportJobIds}
           idleContent={
             <div className="status-summary" role="status" aria-live="polite">
               <span>색인 문서 {indexedDocumentCount.toLocaleString()}개</span>

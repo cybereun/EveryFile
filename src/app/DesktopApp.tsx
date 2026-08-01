@@ -22,6 +22,11 @@ export function DesktopApp() {
   const [queueState, setQueueState] =
     useState<"idle" | "indexing" | "paused" | "error">("idle");
   const [status, setStatus] = useState<CommandStatusMessage | null>(null);
+  // Only jobs explicitly started from this window should open a completion
+  // report. File-system watcher jobs are intentionally silent.
+  const [reportJobIds, setReportJobIds] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
 
   const refreshFolders = useCallback(async () => {
     setFolders(await listFolders());
@@ -82,7 +87,8 @@ export function DesktopApp() {
         kind: "success",
         text: `${folder.displayName} 폴더를 등록했습니다. 색인을 시작합니다.`,
       });
-      await startIndexing(folder.id);
+      const jobId = await startIndexing(folder.id);
+      setReportJobIds((current) => new Set(current).add(jobId));
     } catch (error) {
       setQueueState("error");
       setStatus({
@@ -108,7 +114,8 @@ export function DesktopApp() {
   const reindexFolder = async (folderId: string) => {
     try {
       setQueueState("indexing");
-      await startIndexing(folderId);
+      const jobId = await startIndexing(folderId);
+      setReportJobIds((current) => new Set(current).add(jobId));
       setStatus({ kind: "info", text: "폴더를 다시 색인합니다." });
     } catch (error) {
       setQueueState("error");
@@ -129,6 +136,7 @@ export function DesktopApp() {
       folders={folders}
       indexedDocumentCount={indexedDocumentCount}
       queueState={queueState}
+      reportJobIds={reportJobIds}
       commandStatus={status}
       onDismissCommandStatus={() => setStatus(null)}
       onAddFolder={() => void addFolder()}
