@@ -269,7 +269,7 @@ export function SearchResults({
                 <small>다시 검색하려면 항목을 선택하세요</small>
               </div>
               <div className="workspace-empty__recent-list">
-                {recentSearches.slice(0, 5).map((item) => (
+                {recentSearches.slice(0, 3).map((item) => (
                   <button
                     key={item.id}
                     title={item.query}

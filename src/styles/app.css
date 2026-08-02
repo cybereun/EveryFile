@@ -1322,14 +1322,13 @@ select:focus-visible,
 
 .workspace-empty__recent-list {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 0.45rem;
 }
 
 .workspace-empty__recent-list button {
-  display: grid;
+  display: flex;
   min-width: 0;
-  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 0.4rem;
   padding: 0.55rem 0.65rem;
@@ -1348,6 +1347,8 @@ select:focus-visible,
 
 .workspace-empty__recent-list button > span:nth-child(2) {
   overflow: hidden;
+  min-width: 0;
+  flex: 1 1 auto;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1357,9 +1358,16 @@ select:focus-visible,
 }
 
 .workspace-empty__recent-list time {
+  flex: 0 0 auto;
   color: var(--color-text-muted);
   font-size: 0.7rem;
   white-space: nowrap;
+}
+
+@media (max-width: 760px) {
+  .workspace-empty__recent-list {
+    grid-template-columns: 1fr;
+  }
 }
 
 .preview-pane {
