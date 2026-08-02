@@ -25,14 +25,10 @@ describe("App", () => {
     ).toBeVisible();
   });
 
-  it("renders the English identity after language selection", () => {
+  it("does not render a redundant header language chooser", () => {
     render(<App />);
 
-    fireEvent.change(screen.getByRole("combobox", { name: "Language" }), {
-      target: { value: "en" },
-    });
-
-    expect(screen.getByText("The fastest way to find files.")).toBeVisible();
+    expect(screen.queryByRole("combobox", { name: "Language" })).not.toBeInTheDocument();
   });
 
   it("renders the three-pane shell and status information", () => {

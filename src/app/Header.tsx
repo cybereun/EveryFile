@@ -1,11 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { IconButton } from "../components/IconButton";
 import { BrandMark } from "../components/BrandMark";
-import type { Locale } from "./translations";
 
 interface HeaderProps {
   compact: boolean;
-  locale: Locale;
   tagline: string;
   onAddFolder?: () => void;
   leftPanelOpen?: boolean;
@@ -13,7 +11,6 @@ interface HeaderProps {
   onToggleLeftPanel?: () => void;
   onToggleRightPanel?: () => void;
   onHome: () => void;
-  onLocaleChange: (locale: Locale) => void;
   onSettings?: () => void;
   onStatistics?: () => void;
 }
@@ -62,34 +59,8 @@ function PanelIcon({ side }: { side: "left" | "right" }) {
   );
 }
 
-function LanguageControl({
-  locale,
-  onLocaleChange,
-  compact = false,
-}: {
-  locale: Locale;
-  onLocaleChange: (locale: Locale) => void;
-  compact?: boolean;
-}) {
-  return (
-    <div className={`language-control${compact ? " language-control--compact" : ""}`}>
-      <label htmlFor={compact ? "language-compact" : "language"}>Language</label>
-      <select
-        id={compact ? "language-compact" : "language"}
-        aria-label="Language"
-        value={locale}
-        onChange={(event) => onLocaleChange(event.target.value as Locale)}
-      >
-        <option value="ko">한국어</option>
-        <option value="en">English</option>
-      </select>
-    </div>
-  );
-}
-
 export function Header({
   compact,
-  locale,
   tagline,
   onAddFolder,
   leftPanelOpen = true,
@@ -97,7 +68,6 @@ export function Header({
   onToggleLeftPanel = () => undefined,
   onToggleRightPanel = () => undefined,
   onHome,
-  onLocaleChange,
   onSettings,
   onStatistics,
 }: HeaderProps) {
@@ -213,11 +183,6 @@ export function Header({
                   onClick={() => runMenuAction(onSettings)}
                   icon={<SettingsIcon />}
                 />
-                <LanguageControl
-                  compact
-                  locale={locale}
-                  onLocaleChange={onLocaleChange}
-                />
               </div>
             )}
           </div>
@@ -254,7 +219,6 @@ export function Header({
               onClick={onSettings}
               icon={<SettingsIcon />}
             />
-            <LanguageControl locale={locale} onLocaleChange={onLocaleChange} />
           </>
         )}
       </nav>

@@ -10,10 +10,8 @@ function renderCompactHeader(overrides: {
   return render(
     <Header
       compact
-      locale="ko"
       tagline="파일을 찾는 가장 빠른 방법"
       onHome={() => undefined}
-      onLocaleChange={() => undefined}
       {...overrides}
     />,
   );
@@ -88,14 +86,12 @@ describe("compact Header menu", () => {
     render(
       <Header
         compact={false}
-        locale="ko"
         tagline="EveryFile"
         leftPanelOpen
         rightPanelOpen={false}
         onToggleLeftPanel={onToggleLeftPanel}
         onToggleRightPanel={onToggleRightPanel}
         onHome={() => undefined}
-        onLocaleChange={() => undefined}
       />,
     );
 

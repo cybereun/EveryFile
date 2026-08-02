@@ -28,7 +28,6 @@ import {
   getSettings,
   listBookmarks,
   listSearchHistory,
-  saveSettings,
 } from "../lib/ipc";
 import "../styles/app.css";
 import { Header } from "./Header";
@@ -666,21 +665,12 @@ export function App({
     <div className="app-shell">
       <Header
         compact={compactHeader}
-        locale={locale}
         tagline={tagline}
         onAddFolder={onAddFolder}
         leftPanelOpen={leftPanelOpen}
         rightPanelOpen={rightPanelOpen}
         onToggleLeftPanel={() => setLeftPanelOpen((open) => !open)}
         onToggleRightPanel={() => setRightPanelOpen((open) => !open)}
-        onLocaleChange={(nextLocale) => {
-          setLocale(nextLocale);
-          if (appSettings) {
-            const nextSettings = { ...appSettings, language: nextLocale };
-            setAppSettings(nextSettings);
-            void saveSettings(nextSettings).catch(() => undefined);
-          }
-        }}
         onHome={() => {
           setLeftPanelOpen(true);
           setWorkspaceSelectedDocumentId(null);
