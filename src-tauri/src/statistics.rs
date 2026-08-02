@@ -12,30 +12,32 @@ const MAX_HISTORY_PAGE_SIZE: u32 = 500;
 // contain an ISO date, while the indexer writes SystemTime as nanoseconds
 // since the Unix epoch. Normalize both representations before grouping so the
 // yearly chart remains populated for existing libraries as well as new ones.
-const BY_YEAR_SQL: &str = "WITH normalized AS (\
-             SELECT CASE\
-               WHEN modified_at GLOB '[0-9][0-9][0-9][0-9]-*'\
-                 THEN substr(modified_at, 1, 4)\
-               WHEN modified_at NOT GLOB '*[^0-9]*'\
-                    AND length(modified_at) >= 18\
-                 THEN strftime('%Y', datetime(CAST(modified_at AS INTEGER) / 1000000000, 'unixepoch'))\
-               WHEN modified_at NOT GLOB '*[^0-9]*'\
-                    AND length(modified_at) >= 15\
-                 THEN strftime('%Y', datetime(CAST(modified_at AS INTEGER) / 1000000, 'unixepoch'))\
-               WHEN modified_at NOT GLOB '*[^0-9]*'\
-                    AND length(modified_at) >= 12\
-                 THEN strftime('%Y', datetime(CAST(modified_at AS INTEGER) / 1000, 'unixepoch'))\
-               WHEN modified_at NOT GLOB '*[^0-9]*'\
-                    AND trim(modified_at) != ''\
-                 THEN strftime('%Y', datetime(CAST(modified_at AS INTEGER), 'unixepoch'))\
-             END AS year\
-             FROM documents\
-           )\
-           SELECT year, COUNT(*)\
-           FROM normalized\
-           WHERE year IS NOT NULL\
-           GROUP BY year\
-           ORDER BY year DESC";
+const BY_YEAR_SQL: &str = r#"
+WITH normalized AS (
+  SELECT CASE
+    WHEN modified_at GLOB '[0-9][0-9][0-9][0-9]-*'
+      THEN substr(modified_at, 1, 4)
+    WHEN modified_at NOT GLOB '*[^0-9]*'
+         AND length(modified_at) >= 18
+      THEN strftime('%Y', datetime(CAST(modified_at AS INTEGER) / 1000000000, 'unixepoch'))
+    WHEN modified_at NOT GLOB '*[^0-9]*'
+         AND length(modified_at) >= 15
+      THEN strftime('%Y', datetime(CAST(modified_at AS INTEGER) / 1000000, 'unixepoch'))
+    WHEN modified_at NOT GLOB '*[^0-9]*'
+         AND length(modified_at) >= 12
+      THEN strftime('%Y', datetime(CAST(modified_at AS INTEGER) / 1000, 'unixepoch'))
+    WHEN modified_at NOT GLOB '*[^0-9]*'
+         AND trim(modified_at) != ''
+      THEN strftime('%Y', datetime(CAST(modified_at AS INTEGER), 'unixepoch'))
+  END AS year
+  FROM documents
+)
+SELECT year, COUNT(*)
+FROM normalized
+WHERE year IS NOT NULL
+GROUP BY year
+ORDER BY year DESC
+"#;
 
 #[derive(Clone)]
 pub struct StatisticsRepository {
