@@ -365,7 +365,7 @@ export function StatisticsDialog({
                   </table>
                 </section>
               </div>
-              <div className="statistics-grid">
+              <div className="statistics-grid statistics-grid--rankings">
                 <section>
                   <h3>최근 수정된 문서</h3>
                   <ol className="document-ranking">
