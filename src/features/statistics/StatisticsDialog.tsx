@@ -44,6 +44,38 @@ function formatInteger(value: string) {
   return decimal(value).toLocaleString("ko-KR");
 }
 
+function parseDateValue(value: string) {
+  const trimmed = value.trim();
+  if (/^\d+$/.test(trimmed)) {
+    try {
+      const raw = BigInt(trimmed);
+      // File metadata can arrive as Unix seconds, milliseconds, or nanoseconds.
+      const milliseconds =
+        trimmed.length >= 16
+          ? raw / 1_000_000n
+          : trimmed.length >= 13
+            ? raw
+            : raw * 1_000n;
+      const parsed = new Date(Number(milliseconds));
+      if (Number.isFinite(parsed.getTime())) return parsed;
+    } catch {
+      // Fall through to the ISO/date parser below.
+    }
+  }
+  const parsed = new Date(trimmed);
+  return Number.isFinite(parsed.getTime()) ? parsed : null;
+}
+
+function formatModifiedDate(value: string) {
+  const parsed = parseDateValue(value);
+  return parsed
+    ? parsed.toLocaleString("ko-KR", {
+        dateStyle: "medium",
+        timeStyle: "short",
+      })
+    : "날짜 없음";
+}
+
 function formatBytes(encodedBytes: string) {
   const bytes = decimal(encodedBytes);
   if (bytes < 1024n) return `${bytes} B`;
@@ -340,8 +372,11 @@ export function StatisticsDialog({
                     {statistics.recentlyModified.map((document) => (
                       <li key={document.documentId}>
                         <span>{document.fileName}</span>
-                        <time dateTime={document.modifiedAt}>
-                          {new Date(document.modifiedAt).toLocaleDateString()}
+                        <time
+                          dateTime={parseDateValue(document.modifiedAt)?.toISOString()}
+                          title={formatModifiedDate(document.modifiedAt)}
+                        >
+                          {formatModifiedDate(document.modifiedAt)}
                         </time>
                       </li>
                     ))}

@@ -106,6 +106,33 @@ describe("StatisticsDialog", () => {
     expect(screen.getByText(/7\.81 EB/)).toBeVisible();
   });
 
+  it("formats nanosecond document timestamps instead of showing Invalid Date", async () => {
+    render(
+      <StatisticsDialog
+        open
+        loadStatistics={async () => ({
+          ...statistics,
+          recentlyModified: [
+            {
+              documentId: "document-1",
+              fileName: "report.pdf",
+              path: "C:/Documents/report.pdf",
+              extension: "pdf",
+              sizeBytes: "100",
+              modifiedAt: "1756473860000000000",
+            },
+          ],
+        })}
+        loadHistory={async () => []}
+        onClose={() => undefined}
+      />,
+    );
+
+    expect(await screen.findByText("report.pdf")).toBeVisible();
+    expect(screen.queryByText("Invalid Date")).not.toBeInTheDocument();
+    expect(screen.getByText(/2025/)).toBeVisible();
+  });
+
   it("clears both recent and frequent history views after a successful clear", async () => {
     const clear = vi.fn(async () => undefined);
     render(
