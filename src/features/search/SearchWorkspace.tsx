@@ -16,6 +16,7 @@ import {
   cancelSearch,
   listSearchHistory,
   openSourceFile,
+  openSourceLocation,
   searchDocuments,
 } from "../../lib/ipc";
 import { SearchFilters } from "./SearchFilters";
@@ -29,6 +30,7 @@ export interface SearchWorkspaceProps {
   searchApi?: (request: SearchRequest) => Promise<SearchResponse>;
   cancelApi?: (requestId: string) => Promise<boolean>;
   openApi?: (documentId: string) => Promise<void>;
+  openLocationApi?: (documentId: string) => Promise<void>;
   debounceMs?: number;
   statisticsFilter?: StatisticsSearchFilter | null;
   historyQuery?: string | null;
@@ -50,6 +52,7 @@ export const SearchWorkspace = forwardRef<HTMLInputElement, SearchWorkspaceProps
       searchApi = searchDocuments,
       cancelApi = cancelSearch,
       openApi = openSourceFile,
+      openLocationApi = openSourceLocation,
       debounceMs,
       statisticsFilter,
       historyQuery,
@@ -156,6 +159,7 @@ export const SearchWorkspace = forwardRef<HTMLInputElement, SearchWorkspaceProps
           loading={search.loading}
           onLoadMore={() => void search.loadMore()}
           onOpen={openApi}
+          onOpenLocation={openLocationApi}
           onSelect={(documentId) => onSelectDocument(documentId, search.query)}
           total={within ? visibleHits.length : search.total}
           recentSearches={recentSearches}

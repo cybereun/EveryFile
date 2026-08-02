@@ -20,7 +20,7 @@ function hit(documentId: string, matchKind: SearchHit["matchKind"]): SearchHit {
 describe("SearchResults", () => {
   afterEach(cleanup);
 
-  it("preserves backend order and selects by document identity across replacements", async () => {
+  it("groups matches by kind and selects by document identity across replacements", async () => {
     const open = vi.fn().mockResolvedValue(undefined);
     const select = vi.fn();
     const props = {
@@ -58,7 +58,7 @@ describe("SearchResults", () => {
       expect(screen.getAllByRole("option")[0]).toHaveAttribute("aria-selected", "true"),
     );
     fireEvent.keyDown(screen.getByRole("listbox"), { key: "Enter" });
-    await waitFor(() => expect(open).toHaveBeenCalledWith("new-first"));
+    await waitFor(() => expect(open).toHaveBeenCalledWith("new-second"));
   });
 
   it("reports double-click open failures through the same guarded path", async () => {
@@ -99,5 +99,41 @@ describe("SearchResults", () => {
 
     expect(screen.getByRole("option")).toHaveTextContent("2025. 8. 29.");
     expect(screen.getByRole("option")).not.toHaveTextContent("1756473860000000000");
+  });
+
+  it("opens result actions and the context menu for the selected file", async () => {
+    const open = vi.fn().mockResolvedValue(undefined);
+    const openLocation = vi.fn().mockResolvedValue(undefined);
+    const clipboard = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: clipboard },
+    });
+
+    render(
+      <SearchResults
+        hits={[hit("action", "both")]}
+        total={1}
+        elapsedMs={1}
+        loading={false}
+        error={null}
+        hasMore={false}
+        onLoadMore={vi.fn()}
+        onOpen={open}
+        onOpenLocation={openLocation}
+        onSelect={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "action.pdf 파일 위치 열기" }));
+    await waitFor(() => expect(openLocation).toHaveBeenCalledWith("action"));
+    fireEvent.contextMenu(screen.getByRole("option"), { clientX: 80, clientY: 80 });
+    expect(screen.getByRole("menu", { name: "검색 결과 메뉴" })).toBeVisible();
+    fireEvent.click(screen.getByRole("menuitem", { name: /경로 복사/ }));
+    await waitFor(() => expect(clipboard).toHaveBeenCalledWith("C:\\Documents\\action.pdf"));
+    fireEvent.contextMenu(screen.getByRole("option"), { clientX: 80, clientY: 80 });
+    fireEvent.click(screen.getByRole("menuitem", { name: "비교 대상으로 선택" }));
+    expect(screen.getByRole("option")).toHaveClass("is-compare-target");
+    expect(open).not.toHaveBeenCalled();
   });
 });

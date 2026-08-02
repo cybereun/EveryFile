@@ -197,7 +197,7 @@ describe("SearchWorkspace", () => {
     const list = screen.getByRole("listbox", { name: "검색 결과" });
     fireEvent.keyDown(list, { key: "ArrowDown" });
     fireEvent.keyDown(list, { key: "Enter" });
-    await waitFor(() => expect(open).toHaveBeenCalledWith("content-hit"));
+    await waitFor(() => expect(open).toHaveBeenCalledWith("filename-hit"));
   });
 
   it("filters returned rows with search-within-results", async () => {
