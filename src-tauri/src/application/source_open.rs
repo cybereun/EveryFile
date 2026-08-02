@@ -1,5 +1,6 @@
 use std::io::Read;
 use std::path::{Path, PathBuf};
+#[cfg(not(windows))]
 use std::process::Command;
 
 use rusqlite::OptionalExtension;
@@ -467,14 +468,36 @@ fn launch_source(source: &Path) -> Result<(), SourceOpenError> {
 
 #[cfg(windows)]
 fn launch_location(source: &Path) -> Result<(), SourceOpenError> {
-    use std::os::windows::process::CommandExt;
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    // Passing `/select,<path>` as an Explorer process argument is normally
+    // sufficient, but `CreateProcess` argument quoting differs between
+    // Windows versions and can make Explorer fall back to the parent folder.
+    // Use ShellExecuteEx and provide Explorer's parameters explicitly so the
+    // exact indexed file is selected in the opened folder.
+    use std::os::windows::ffi::OsStrExt;
+    use windows::core::PCWSTR;
+    use windows::Win32::UI::Shell::{
+        ShellExecuteExW, SEE_MASK_FLAG_NO_UI, SEE_MASK_NOASYNC, SEE_MASK_UNICODE, SHELLEXECUTEINFOW,
+    };
+    use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 
-    Command::new("explorer.exe")
-        .arg(format!("/select,{}", shell_path(source)))
-        .creation_flags(CREATE_NO_WINDOW)
-        .spawn()
-        .map(|_| ())
+    let explorer = std::ffi::OsStr::new("explorer.exe")
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let parameters = format!("/select,\"{}\"", shell_path(source));
+    let parameters = std::ffi::OsStr::new(&parameters)
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let mut info = SHELLEXECUTEINFOW {
+        cbSize: std::mem::size_of::<SHELLEXECUTEINFOW>() as u32,
+        fMask: SEE_MASK_FLAG_NO_UI | SEE_MASK_NOASYNC | SEE_MASK_UNICODE,
+        lpFile: PCWSTR(explorer.as_ptr()),
+        lpParameters: PCWSTR(parameters.as_ptr()),
+        nShow: SW_SHOWNORMAL.0,
+        ..Default::default()
+    };
+    unsafe { ShellExecuteExW(&mut info) }
         .map_err(|error| SourceOpenError::Launch(error.to_string()))
 }
 
