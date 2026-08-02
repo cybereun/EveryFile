@@ -44,11 +44,13 @@ impl LibraryRepository {
         let row = connection
             .query_row(
                 "SELECT d.file_name, d.canonical_path, d.extension,
-                        c.markdown, c.blocks_json, c.warnings_json,
+                        COALESCE(c.markdown, ''),
+                        COALESCE(c.blocks_json, '[]'),
+                        COALESCE(c.warnings_json, '[]'),
                         COALESCE(b.note, '')
                  FROM documents d
                  JOIN folders f ON f.id = d.folder_id AND f.enabled = 1
-                 JOIN document_content c ON c.document_id = d.id
+                 LEFT JOIN document_content c ON c.document_id = d.id
                  LEFT JOIN bookmarks b ON b.document_id = d.id
                  WHERE d.id = ?1",
                 [document_id],

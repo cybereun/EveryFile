@@ -22,6 +22,30 @@ fn bookmark_updates_note_without_duplicating_the_document() {
 }
 
 #[test]
+fn metadata_only_images_have_a_preview_shell_for_binary_loading() {
+    let fixture = Fixture::new();
+    fixture.seed_document("doc-image", "photo.png");
+    fixture
+        .database
+        .connection()
+        .execute(
+            "UPDATE documents
+             SET extension = 'png', parse_state = 'metadata_only'
+             WHERE id = 'doc-image'",
+            [],
+        )
+        .unwrap();
+
+    let preview = fixture.library.get_preview("doc-image").unwrap();
+
+    assert_eq!(preview.file_name, "photo.png");
+    assert_eq!(preview.extension, "png");
+    assert!(preview.markdown.is_empty());
+    assert!(preview.blocks.is_empty());
+    assert!(preview.warnings.is_empty());
+}
+
+#[test]
 fn tags_are_case_insensitively_unique_and_reject_unapproved_colors() {
     let fixture = Fixture::new();
     let tag = fixture.library.create_tag("Work", "terracotta").unwrap();

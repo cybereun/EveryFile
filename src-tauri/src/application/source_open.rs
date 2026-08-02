@@ -268,7 +268,7 @@ pub fn read_indexed_image_cancellable(
         .to_ascii_lowercase();
     if !matches!(
         extension.as_str(),
-        "jpg" | "jpeg" | "png" | "webp" | "bmp" | "tif" | "tiff"
+        "jpg" | "jpeg" | "png" | "webp" | "bmp" | "gif" | "tif" | "tiff" | "svg"
     ) {
         return Err(SourceOpenError::NotImagePreview);
     }
