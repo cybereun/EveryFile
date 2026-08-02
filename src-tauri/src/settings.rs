@@ -32,26 +32,13 @@ impl SettingsRepository {
         drop(connection);
         match stored {
             Some(json) => {
-                let mut settings = serde_json::from_str::<AppSettings>(&json)
+                let settings = serde_json::from_str::<AppSettings>(&json)
                     .map_err(SettingsError::Deserialize)?;
-                let normalized_unsupported_flags = settings.minimize_to_tray
-                    || settings.start_with_windows
-                    || settings.start_hidden;
-                settings.minimize_to_tray = false;
-                settings.start_with_windows = false;
-                settings.start_hidden = false;
                 validate(&settings)?;
-                if normalized_unsupported_flags {
-                    self.persist(&settings)?;
-                }
-                Ok(LoadedSettings {
-                    settings,
-                    normalized_unsupported_flags,
-                })
+                Ok(LoadedSettings { settings })
             }
             None => Ok(LoadedSettings {
                 settings: AppSettings::default(),
-                normalized_unsupported_flags: false,
             }),
         }
     }
@@ -78,15 +65,9 @@ impl SettingsRepository {
 
 pub struct LoadedSettings {
     pub settings: AppSettings,
-    pub normalized_unsupported_flags: bool,
 }
 
 fn validate(settings: &AppSettings) -> Result<(), SettingsError> {
-    if settings.minimize_to_tray || settings.start_with_windows || settings.start_hidden {
-        return Err(SettingsError::Invalid(
-            "startup and tray settings are unavailable in this version".into(),
-        ));
-    }
     if !matches!(settings.language.as_str(), "ko" | "en") {
         return Err(SettingsError::Invalid("language must be ko or en".into()));
     }

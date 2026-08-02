@@ -192,9 +192,6 @@ export function SettingsDialog({
               try {
                 const saved = await persistSettings({
                   ...settings,
-                  startWithWindows: false,
-                  startHidden: false,
-                  minimizeToTray: false,
                 });
                 if (
                   saved.aiProvider !== "ollama" &&

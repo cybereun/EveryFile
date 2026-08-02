@@ -15,6 +15,7 @@ pub mod search;
 pub mod settings;
 pub mod state;
 pub mod statistics;
+pub mod system;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -24,7 +25,12 @@ use indexing::IndexCoordinator;
 use infrastructure::database::Database;
 use infrastructure::secure_key::SecureKeyStore;
 use parsing::ParserClient;
-use tauri::{Emitter, Manager};
+use tauri::{Emitter, Manager, WindowEvent};
+
+#[cfg(feature = "tray-icon")]
+use tauri::menu::{MenuBuilder, MenuItemBuilder};
+#[cfg(feature = "tray-icon")]
+use tauri::tray::{MouseButton, TrayIconBuilder, TrayIconEvent};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -53,7 +59,6 @@ pub fn run_with_reset_completion(reset_completion: Option<diagnostics::ResetComp
             database.migrate()?;
             let settings_repository = settings::SettingsRepository::new(Arc::clone(&database));
             let loaded_settings = settings_repository.load_with_migration()?;
-            let normalized_legacy_settings = loaded_settings.normalized_unsupported_flags;
             let persisted_settings = loaded_settings.settings;
             #[cfg(feature = "e2e")]
             let persisted_settings = {
@@ -61,6 +66,8 @@ pub fn run_with_reset_completion(reset_completion: Option<diagnostics::ResetComp
                 e2e::apply_settings_overrides(&mut settings);
                 settings
             };
+            let start_hidden = persisted_settings.start_hidden;
+            let start_with_windows = persisted_settings.start_with_windows;
             statistics::StatisticsRepository::new(Arc::clone(&database))
                 .run_due_history_retention(persisted_settings.history_retention_days)?;
             let parser = Arc::new(ParserClient::new(
@@ -102,23 +109,51 @@ pub fn run_with_reset_completion(reset_completion: Option<diagnostics::ResetComp
                 .map(|folder| PathBuf::from(folder.canonical_path))
                 .collect();
             let diagnostics = diagnostics::DiagnosticsLogger::new(&app_data_dir, registered_roots)?;
-            if normalized_legacy_settings {
-                diagnostics.write(&diagnostics::DiagnosticEvent {
-                    level: "info".into(),
-                    code: "SETTINGS_LEGACY_FLAGS_NORMALIZED".into(),
-                    message:
-                        "Unsupported legacy startup, hidden-start, and tray settings were disabled"
-                            .into(),
-                    document_id: None,
-                })?;
-            }
             diagnostics.write(&diagnostics::DiagnosticEvent {
                 level: "info".into(),
                 code: "APP_STARTED".into(),
                 message: "EveryFile started; local diagnostic retention completed".into(),
                 document_id: None,
             })?;
+            if let Err(error) = system::apply_startup(start_with_windows) {
+                let _ = diagnostics.write(&diagnostics::DiagnosticEvent {
+                    level: "warn".into(),
+                    code: "STARTUP_REGISTRATION_FAILED".into(),
+                    message: error.to_string(),
+                    document_id: None,
+                });
+            }
             app.manage(app_state);
+
+            #[cfg(feature = "tray-icon")]
+            setup_tray(app)?;
+
+            if start_hidden {
+                if let Some(window) = app.get_webview_window("main") {
+                    window.hide()?;
+                }
+            }
+
+            if let Some(window) = app.get_webview_window("main") {
+                let app_handle = app.handle().clone();
+                window.on_window_event(move |event| {
+                    if let WindowEvent::CloseRequested { api, .. } = event {
+                        let minimize_to_tray = app_handle
+                            .state::<state::AppState>()
+                            .settings
+                            .read()
+                            .map(|settings| settings.minimize_to_tray)
+                            .unwrap_or(false);
+                        if minimize_to_tray {
+                            api.prevent_close();
+                            if let Some(window) = app_handle.get_webview_window("main") {
+                                let _ = window.hide();
+                            }
+                        }
+                    }
+                });
+            }
+
             if let Some(completion) = reset_completion
                 .lock()
                 .map_err(|_| "reset completion lock is unavailable")?
@@ -171,6 +206,51 @@ pub fn run_with_reset_completion(reset_completion: Option<diagnostics::ResetComp
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(feature = "tray-icon")]
+fn setup_tray(app: &tauri::App<tauri::Wry>) -> tauri::Result<()> {
+    let show = MenuItemBuilder::with_id("show", "EveryFile 열기").build(app)?;
+    let quit = MenuItemBuilder::with_id("quit", "EveryFile 종료").build(app)?;
+    let menu = MenuBuilder::new(app)
+        .item(&show)
+        .separator()
+        .item(&quit)
+        .build()?;
+    let mut tray = TrayIconBuilder::with_id("everyfile-tray")
+        .menu(&menu)
+        .tooltip("EveryFile")
+        .show_menu_on_left_click(false)
+        .on_menu_event(|app, event| match event.id().as_ref() {
+            "show" => show_main_window(app),
+            "quit" => app.exit(0),
+            _ => {}
+        })
+        .on_tray_icon_event(|tray, event| {
+            if matches!(
+                event,
+                TrayIconEvent::Click {
+                    button: MouseButton::Left,
+                    ..
+                }
+            ) {
+                show_main_window(tray.app_handle());
+            }
+        });
+    if let Some(icon) = app.default_window_icon().cloned() {
+        tray = tray.icon(icon);
+    }
+    tray.build(app)?;
+    Ok(())
+}
+
+#[cfg(feature = "tray-icon")]
+fn show_main_window(app: &tauri::AppHandle<tauri::Wry>) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
 }
 
 fn parser_executable_path() -> PathBuf {

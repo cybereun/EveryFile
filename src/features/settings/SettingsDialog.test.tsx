@@ -87,6 +87,34 @@ describe("SettingsDialog", () => {
     trigger.remove();
   });
 
+  it("enables and persists the Windows startup and tray options", async () => {
+    const save = vi.fn(async (value: AppSettings) => value);
+    render(
+      <SettingsDialog
+        open
+        onClose={() => undefined}
+        loadSettings={async () => settings}
+        persistSettings={save}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole("tab", { name: "시스템" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Windows 시작 시 실행" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "숨김 상태로 시작" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "닫을 때 알림 영역으로 최소화" }));
+    fireEvent.click(screen.getByRole("button", { name: "저장" }));
+
+    await waitFor(() =>
+      expect(save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          startWithWindows: true,
+          startHidden: true,
+          minimizeToTray: true,
+        }),
+      ),
+    );
+  });
+
   it("requires an explicit destructive confirmation before reset", async () => {
     const reset = vi.fn(async () => undefined);
     render(

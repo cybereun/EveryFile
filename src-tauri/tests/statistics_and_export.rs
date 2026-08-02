@@ -273,18 +273,18 @@ fn settings_are_validated_and_persisted_in_the_encrypted_database() {
     assert!(repository.save(&settings).is_err());
     assert_eq!(repository.load().unwrap().history_retention_days, 365);
 
-    for unsupported in ["minimizeToTray", "startWithWindows", "startHidden"] {
+    for supported in ["minimizeToTray", "startWithWindows", "startHidden"] {
         let mut settings = AppSettings::default();
-        match unsupported {
+        match supported {
             "minimizeToTray" => settings.minimize_to_tray = true,
             "startWithWindows" => settings.start_with_windows = true,
             "startHidden" => settings.start_hidden = true,
             _ => unreachable!(),
         }
-        assert!(
-            repository.save(&settings).is_err(),
-            "{unsupported} must be rejected until its runtime behavior is implemented"
-        );
+        let saved = repository.save(&settings).unwrap();
+        assert_eq!(saved.minimize_to_tray, settings.minimize_to_tray);
+        assert_eq!(saved.start_with_windows, settings.start_with_windows);
+        assert_eq!(saved.start_hidden, settings.start_hidden);
     }
 
     fixture
@@ -306,7 +306,7 @@ fn settings_are_validated_and_persisted_in_the_encrypted_database() {
 }
 
 #[test]
-fn legacy_unsupported_startup_flags_are_normalized_and_persisted_on_load() {
+fn startup_flags_are_preserved_when_loading_existing_settings() {
     let fixture = Fixture::new();
     let repository = SettingsRepository::new(Arc::clone(&fixture.database));
     fixture
@@ -327,9 +327,9 @@ fn legacy_unsupported_startup_flags_are_normalized_and_persisted_on_load() {
 
     let loaded = repository.load().unwrap();
 
-    assert!(!loaded.minimize_to_tray);
-    assert!(!loaded.start_with_windows);
-    assert!(!loaded.start_hidden);
+    assert!(loaded.minimize_to_tray);
+    assert!(loaded.start_with_windows);
+    assert!(loaded.start_hidden);
     let stored = fixture
         .database
         .connection()
@@ -340,9 +340,9 @@ fn legacy_unsupported_startup_flags_are_normalized_and_persisted_on_load() {
         )
         .unwrap();
     let stored: serde_json::Value = serde_json::from_str(&stored).unwrap();
-    assert_eq!(stored["minimizeToTray"], false);
-    assert_eq!(stored["startWithWindows"], false);
-    assert_eq!(stored["startHidden"], false);
+    assert_eq!(stored["minimizeToTray"], true);
+    assert_eq!(stored["startWithWindows"], true);
+    assert_eq!(stored["startHidden"], true);
 }
 
 #[test]

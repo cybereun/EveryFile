@@ -33,33 +33,43 @@ export function SystemSettings({
     [onConfirmationChange],
   );
   const confirmationRef = useModalDialog(confirming, () => setConfirmation(false));
-  const deferredSetting = (
+  const systemSetting = (
     key: "minimizeToTray" | "startWithWindows" | "startHidden",
   ) => (
     <label className="settings-check">
       <input
         type="checkbox"
-        checked={false}
-        disabled
-        aria-describedby={`${key}-deferred`}
-        readOnly
+        checked={settings[key]}
+        aria-label={{
+          startWithWindows: "Windows 시작 시 실행",
+          startHidden: "숨김 상태로 시작",
+          minimizeToTray: "닫을 때 알림 영역으로 최소화",
+        }[key]}
+        aria-describedby={`${key}-description`}
+        onChange={(event) => onChange({ ...settings, [key]: event.target.checked })}
       />
       <span>
         {{
-          minimizeToTray: "닫을 때 알림 영역으로 최소화",
           startWithWindows: "Windows 시작 시 실행",
           startHidden: "숨김 상태로 시작",
+          minimizeToTray: "닫을 때 알림 영역으로 최소화",
         }[key]}
-        <small id={`${key}-deferred`}>향후 버전에서 제공됩니다.</small>
+        <small id={`${key}-description`}>
+          {{
+            startWithWindows: "Windows에 로그인하면 EveryFile을 자동으로 실행합니다.",
+            startHidden: "시작할 때 창을 숨기고 알림 영역에서 대기합니다.",
+            minimizeToTray: "닫기 버튼을 눌러도 앱을 종료하지 않고 알림 영역으로 보냅니다.",
+          }[key]}
+        </small>
       </span>
     </label>
   );
 
   return (
     <div className="settings-grid">
-      {deferredSetting("startWithWindows")}
-      {deferredSetting("startHidden")}
-      {deferredSetting("minimizeToTray")}
+      {systemSetting("startWithWindows")}
+      {systemSetting("startHidden")}
+      {systemSetting("minimizeToTray")}
       <label>
         색인 강도
         <select

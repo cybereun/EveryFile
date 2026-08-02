@@ -63,6 +63,7 @@ pub fn save_settings(
         .indexing
         .apply_runtime_settings(&saved)
         .map_err(|error| error.to_string())?;
+    crate::system::apply_startup(saved.start_with_windows).map_err(|error| error.to_string())?;
     *current_settings = saved;
     Ok(current_settings.clone())
 }
