@@ -6,7 +6,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import type { SearchHit } from "../../lib/types";
+import type { SearchHistoryRecord, SearchHit } from "../../lib/types";
 import { exportResults } from "../../lib/ipc";
 import { BrandMark } from "../../components/BrandMark";
 
@@ -20,9 +20,11 @@ interface SearchResultsProps {
   onLoadMore: () => void;
   onOpen: (documentId: string) => Promise<void>;
   onSelect: (documentId: string) => void;
+  onRecentSearch?: (query: string) => void;
   clickBehavior?: "preview" | "open";
   dateDisplay?: "relative" | "absolute";
   workspaceStats?: { documents: number; folders: number };
+  recentSearches?: SearchHistoryRecord[];
 }
 
 function formatSize(bytes: number) {
@@ -181,9 +183,11 @@ export function SearchResults({
   onLoadMore,
   onOpen,
   onSelect,
+  onRecentSearch,
   clickBehavior = "preview",
   dateDisplay = "absolute",
   workspaceStats = { documents: 0, folders: 0 },
+  recentSearches = [],
 }: SearchResultsProps) {
   const [selectedDocumentId, setSelectedDocumentId] = useState<string | null>(
     hits[0]?.documentId ?? null,
@@ -247,12 +251,39 @@ export function SearchResults({
     return (
       <div className="workspace-empty">
         <div className="workspace-empty__content">
-          <BrandMark className="brand-mark--hero" />
-          <strong>EveryFile<span aria-hidden="true">.</span></strong>
+          <div className="workspace-empty__brand">
+            <BrandMark className="brand-mark--hero" />
+            <strong>EveryFile<span aria-hidden="true">.</span></strong>
+          </div>
           <p>내 PC 깊숙이 흩어진 문서들.<br />이제 빠르게 찾아보세요.</p>
-          <span className="workspace-empty__stats">
-            {workspaceStats.documents.toLocaleString()} 문서 · {workspaceStats.folders.toLocaleString()} 폴더
-          </span>
+          <div className="workspace-empty__stats" aria-label="문서 통계">
+            <span><strong>{workspaceStats.documents.toLocaleString()}</strong><small>문서</small></span>
+            <i aria-hidden="true" />
+            <span><strong>{workspaceStats.folders.toLocaleString()}</strong><small>등록 폴더</small></span>
+          </div>
+          {recentSearches.length > 0 && (
+            <section className="workspace-empty__recent" aria-label="최근 검색">
+              <div className="workspace-empty__recent-heading">
+                <span aria-hidden="true">⌕</span>
+                <strong>최근 검색</strong>
+                <small>다시 검색하려면 항목을 선택하세요</small>
+              </div>
+              <div className="workspace-empty__recent-list">
+                {recentSearches.slice(0, 5).map((item) => (
+                  <button
+                    key={item.id}
+                    title={item.query}
+                    type="button"
+                    onClick={() => onRecentSearch?.(item.query)}
+                  >
+                    <span aria-hidden="true">⌕</span>
+                    <span>{item.query}</span>
+                    <time dateTime={item.searchedAt}>{relativeDate(item.searchedAt)}</time>
+                  </button>
+                ))}
+              </div>
+            </section>
+          )}
         </div>
       </div>
     );

@@ -9,10 +9,12 @@ import type {
   FolderRecord,
   SearchRequest,
   SearchResponse,
+  SearchHistoryRecord,
   StatisticsSearchFilter,
 } from "../../lib/types";
 import {
   cancelSearch,
+  listSearchHistory,
   openSourceFile,
   searchDocuments,
 } from "../../lib/ipc";
@@ -55,6 +57,7 @@ export const SearchWorkspace = forwardRef<HTMLInputElement, SearchWorkspaceProps
     ref: Ref<HTMLInputElement>,
   ) {
     const [withinResults, setWithinResults] = useState("");
+    const [recentSearches, setRecentSearches] = useState<SearchHistoryRecord[]>([]);
     const search = useImmediateSearch({
       search: searchApi,
       cancel: cancelApi,
@@ -82,6 +85,28 @@ export const SearchWorkspace = forwardRef<HTMLInputElement, SearchWorkspaceProps
     useEffect(() => {
       if (homeRequest > 0) search.reset();
     }, [homeRequest, search.reset]);
+
+    useEffect(() => {
+      let active = true;
+      void listSearchHistory(5, 0)
+        .then((records) => {
+          if (active) setRecentSearches(records);
+        })
+        .catch(() => undefined);
+      return () => {
+        active = false;
+      };
+    }, []);
+
+    useEffect(() => {
+      if (search.loading || !search.query.trim()) return;
+      const refresh = window.setTimeout(() => {
+        void listSearchHistory(5, 0)
+          .then(setRecentSearches)
+          .catch(() => undefined);
+      }, 250);
+      return () => window.clearTimeout(refresh);
+    }, [search.hits.length, search.loading, search.query]);
     const visibleHits = useMemo(() => {
       if (!within) return search.hits;
       return search.hits.filter((hit) =>
@@ -120,6 +145,8 @@ export const SearchWorkspace = forwardRef<HTMLInputElement, SearchWorkspaceProps
           onOpen={openApi}
           onSelect={(documentId) => onSelectDocument(documentId, search.query)}
           total={within ? visibleHits.length : search.total}
+          recentSearches={recentSearches}
+          onRecentSearch={search.setQuery}
           workspaceStats={workspaceStats}
         />
       </section>
