@@ -8,6 +8,35 @@ use crate::infrastructure::database::Database;
 
 const MAX_HISTORY_PAGE_SIZE: u32 = 500;
 
+// `modified_at` is stored as text for backwards compatibility. Older rows may
+// contain an ISO date, while the indexer writes SystemTime as nanoseconds
+// since the Unix epoch. Normalize both representations before grouping so the
+// yearly chart remains populated for existing libraries as well as new ones.
+const BY_YEAR_SQL: &str = "WITH normalized AS (\
+             SELECT CASE\
+               WHEN modified_at GLOB '[0-9][0-9][0-9][0-9]-*'\
+                 THEN substr(modified_at, 1, 4)\
+               WHEN modified_at NOT GLOB '*[^0-9]*'\
+                    AND length(modified_at) >= 18\
+                 THEN strftime('%Y', datetime(CAST(modified_at AS INTEGER) / 1000000000, 'unixepoch'))\
+               WHEN modified_at NOT GLOB '*[^0-9]*'\
+                    AND length(modified_at) >= 15\
+                 THEN strftime('%Y', datetime(CAST(modified_at AS INTEGER) / 1000000, 'unixepoch'))\
+               WHEN modified_at NOT GLOB '*[^0-9]*'\
+                    AND length(modified_at) >= 12\
+                 THEN strftime('%Y', datetime(CAST(modified_at AS INTEGER) / 1000, 'unixepoch'))\
+               WHEN modified_at NOT GLOB '*[^0-9]*'\
+                    AND trim(modified_at) != ''\
+                 THEN strftime('%Y', datetime(CAST(modified_at AS INTEGER), 'unixepoch'))\
+             END AS year\
+             FROM documents\
+           )\
+           SELECT year, COUNT(*)\
+           FROM normalized\
+           WHERE year IS NOT NULL\
+           GROUP BY year\
+           ORDER BY year DESC";
+
 #[derive(Clone)]
 pub struct StatisticsRepository {
     database: Arc<Database>,
@@ -52,14 +81,7 @@ impl StatisticsRepository {
              HAVING COUNT(documents.id) > 0
              ORDER BY COUNT(documents.id) DESC, folders.display_name",
         )?;
-        let by_year = count_buckets(
-            &connection,
-            "SELECT substr(modified_at, 1, 4), COUNT(*)
-             FROM documents
-             WHERE modified_at GLOB '[0-9][0-9][0-9][0-9]-*'
-             GROUP BY substr(modified_at, 1, 4)
-             ORDER BY 1 DESC",
-        )?;
+        let by_year = count_buckets(&connection, BY_YEAR_SQL)?;
         let parse_states = count_buckets(
             &connection,
             "SELECT parse_state, COUNT(*)
@@ -508,6 +530,34 @@ pub enum StatisticsError {
     HistoryFilters(#[source] serde_json::Error),
     #[error("invalid statistics request: {0}")]
     InvalidInput(String),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{count_buckets, BY_YEAR_SQL};
+
+    #[test]
+    fn yearly_counts_normalize_iso_and_epoch_timestamps() {
+        let connection = rusqlite::Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE documents (modified_at TEXT NOT NULL);
+                 INSERT INTO documents (modified_at) VALUES
+                   ('2026-08-01T12:00:00Z'),
+                   ('1767225600000000000'),
+                   ('1767225600000'),
+                   ('1735689600000000000'),
+                   ('not-a-date');",
+            )
+            .unwrap();
+
+        let buckets = count_buckets(&connection, BY_YEAR_SQL).unwrap();
+
+        assert_eq!(buckets[0].label, "2026");
+        assert_eq!(buckets[0].count, 3);
+        assert_eq!(buckets[1].label, "2025");
+        assert_eq!(buckets[1].count, 1);
+    }
 }
 
 impl StatisticsError {
