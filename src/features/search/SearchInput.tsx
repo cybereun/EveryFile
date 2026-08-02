@@ -2,6 +2,8 @@ import { forwardRef } from "react";
 interface SearchInputProps {
   query: string;
   onQueryChange: (query: string) => void;
+  aiEnabled?: boolean;
+  onAskEveryfile?: () => void;
 }
 
 function SearchIcon() {
@@ -21,7 +23,7 @@ function SearchIcon() {
 }
 
 export const SearchInput = forwardRef<HTMLInputElement, SearchInputProps>(
-  function SearchInput({ query, onQueryChange }, ref) {
+  function SearchInput({ query, onQueryChange, aiEnabled = false, onAskEveryfile }, ref) {
     return (
       <div className="search-input-block">
         <div className="search-mode-tabs" aria-label="검색 방식">
@@ -34,7 +36,9 @@ export const SearchInput = forwardRef<HTMLInputElement, SearchInputProps>(
           </button>
           <button
             aria-label="Ask Everyfile"
-            className="search-mode-tabs__ask"
+            aria-disabled={!aiEnabled}
+            className={`search-mode-tabs__ask${aiEnabled ? "" : " is-disabled"}`}
+            onClick={onAskEveryfile}
             type="button"
           >
             <span aria-hidden="true">✦</span> Ask Everyfile

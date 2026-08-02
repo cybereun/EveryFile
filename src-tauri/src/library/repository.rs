@@ -6,8 +6,8 @@ use serde_json::Value;
 use thiserror::Error;
 
 use crate::domain::models::{
-    BookmarkRecord, PreviewBlock, PreviewCell, PreviewDocument, PreviewTable, PreviewWarning,
-    TagRecord,
+    BookmarkRecord, BookmarkSummary, PreviewBlock, PreviewCell, PreviewDocument, PreviewTable,
+    PreviewWarning, TagRecord,
 };
 use crate::infrastructure::database::Database;
 
@@ -157,18 +157,20 @@ impl LibraryRepository {
         Ok(())
     }
 
-    pub fn list_bookmarks(&self) -> Result<Vec<BookmarkRecord>, LibraryError> {
+    pub fn list_bookmarks(&self) -> Result<Vec<BookmarkSummary>, LibraryError> {
         let connection = self.database.connection();
         let mut statement = connection.prepare(
-            "SELECT b.document_id, b.note, b.created_at
+            "SELECT b.document_id, d.file_name, d.canonical_path, b.note, b.created_at
              FROM bookmarks b JOIN documents d ON d.id = b.document_id
              ORDER BY b.created_at DESC, b.document_id",
         )?;
         let rows = statement.query_map([], |row| {
-            Ok(BookmarkRecord {
+            Ok(BookmarkSummary {
                 document_id: row.get(0)?,
-                note: row.get(1)?,
-                created_at: row.get(2)?,
+                file_name: row.get(1)?,
+                path: row.get(2)?,
+                note: row.get(3)?,
+                created_at: row.get(4)?,
             })
         })?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)

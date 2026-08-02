@@ -155,6 +155,7 @@ pub fn run_with_reset_completion(reset_completion: Option<diagnostics::ResetComp
             application::commands::cancel_pdf_read,
             application::commands::set_bookmark,
             application::commands::remove_bookmark,
+            application::commands::list_bookmarks,
             application::commands::create_tag,
             application::commands::set_document_tags,
             application::commands::save_markdown,

@@ -17,7 +17,8 @@ use crate::diagnostics::{
     require_reset_confirmation, start_reset_worker, DiagnosticError, DiagnosticsLogger,
 };
 use crate::domain::models::{
-    BookmarkRecord, FolderRecord, PreviewDocument, SearchRequest, SearchResponse, TagRecord,
+    BookmarkRecord, BookmarkSummary, FolderRecord, PreviewDocument, SearchRequest, SearchResponse,
+    TagRecord,
 };
 use crate::export::{
     export_to_destination, ExportError, ExportFormat, ExportOutcome, ExportRequest,
@@ -450,6 +451,13 @@ pub fn remove_bookmark(
 ) -> Result<(), CommandError> {
     LibraryRepository::new(state.database.clone())
         .remove_bookmark(&document_id)
+        .map_err(CommandError::from)
+}
+
+#[tauri::command]
+pub fn list_bookmarks(state: State<'_, AppState>) -> Result<Vec<BookmarkSummary>, CommandError> {
+    LibraryRepository::new(state.database.clone())
+        .list_bookmarks()
         .map_err(CommandError::from)
 }
 

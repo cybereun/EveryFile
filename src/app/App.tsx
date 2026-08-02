@@ -1,4 +1,11 @@
-import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
+import {
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import { ResizablePane } from "../components/ResizablePane";
 import {
   CommandStatus,
@@ -11,6 +18,7 @@ import { SettingsDialog } from "../features/settings/SettingsDialog";
 import { StatisticsDialog } from "../features/statistics/StatisticsDialog";
 import type {
   AppSettings,
+  BookmarkSummary,
   FolderRecord,
   SearchHistoryRecord,
   StatisticsSearchFilter,
@@ -18,6 +26,7 @@ import type {
 import {
   clearSearchHistory,
   getSettings,
+  listBookmarks,
   listSearchHistory,
   saveSettings,
 } from "../lib/ipc";
@@ -208,6 +217,9 @@ function FolderPane({
   onOpenFolder,
   onReindexFolder,
   onSearchHistory,
+  onBookmarkSelect,
+  historyRefreshToken = 0,
+  bookmarkRefreshToken = 0,
 }: {
   folders: FolderRecord[];
   onAddFolder?: () => void;
@@ -215,9 +227,13 @@ function FolderPane({
   onOpenFolder?: (folderId: string) => void;
   onReindexFolder?: (folderId: string) => void;
   onSearchHistory?: (query: string) => void;
+  onBookmarkSelect?: (documentId: string) => void;
+  historyRefreshToken?: number;
+  bookmarkRefreshToken?: number;
 }) {
   const [history, setHistory] = useState<SearchHistoryRecord[]>([]);
   const [historyError, setHistoryError] = useState("");
+  const [bookmarks, setBookmarks] = useState<BookmarkSummary[]>([]);
   const [smartFolders, setSmartFolders] = useState<SmartFolderRecord[]>(readSmartFolders);
   const [folderMenu, setFolderMenu] = useState<string | null>(null);
   const [removeCandidate, setRemoveCandidate] = useState<FolderRecord | null>(null);
@@ -236,7 +252,17 @@ function FolderPane({
       .then((records) => { if (active) setHistory(records); })
       .catch(() => undefined);
     return () => { active = false; };
-  }, []);
+  }, [historyRefreshToken]);
+
+  useEffect(() => {
+    let active = true;
+    void listBookmarks()
+      .then((records) => { if (active) setBookmarks(records); })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+    };
+  }, [bookmarkRefreshToken]);
 
   const clearRecentHistory = async () => {
     const previous = history;
@@ -432,7 +458,28 @@ function FolderPane({
           ),
           <button type="button" className="sidebar-section__action" aria-label="최근 검색 삭제" onClick={(event) => { event.preventDefault(); event.stopPropagation(); void clearRecentHistory(); }}><span className="sidebar-trash-icon" aria-hidden="true" /></button>,
         )}
-        {section("북마크", 0, <p className="sidebar-empty">북마크가 없습니다.</p>)}
+        {section(
+          "북마크",
+          bookmarks.length,
+          bookmarks.length === 0 ? (
+            <p className="sidebar-empty">북마크가 없습니다.</p>
+          ) : (
+            <ul className="sidebar-link-list">
+              {bookmarks.map((bookmark) => (
+                <li key={bookmark.documentId}>
+                  <button
+                    type="button"
+                    title={bookmark.path}
+                    onClick={() => onBookmarkSelect?.(bookmark.documentId)}
+                  >
+                    <span aria-hidden="true">☆</span>
+                    <span>{bookmark.fileName}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ),
+        )}
       </div>
       {historyError && <p className="sidebar-error" role="alert">{historyError}</p>}
       <div className="sidebar-credit">
@@ -495,8 +542,17 @@ export function App({
   const [statisticsFilter, setStatisticsFilter] =
     useState<StatisticsSearchFilter | null>(null);
   const [historyQuery, setHistoryQuery] = useState<string | null>(null);
+  const [historyRequest, setHistoryRequest] = useState(0);
+  const [historyRefreshToken, setHistoryRefreshToken] = useState(0);
+  const [bookmarkRefreshToken, setBookmarkRefreshToken] = useState(0);
+  const [aiAskRequest, setAiAskRequest] = useState(0);
+  const [interactionNotice, setInteractionNotice] =
+    useState<CommandStatusMessage | null>(null);
   const [homeRequest, setHomeRequest] = useState(0);
   const [appSettings, setAppSettings] = useState<AppSettings | null>(null);
+  const handleHistoryChanged = useCallback(() => {
+    setHistoryRefreshToken((token) => token + 1);
+  }, []);
   const searchInput = useRef<HTMLInputElement>(null);
   const [leftWidth, setLeftWidth] = usePersistedWidth(
     LEFT_PANE_KEY,
@@ -630,6 +686,7 @@ export function App({
           setWorkspaceSelectedDocumentId(null);
           setPreviewSearchQuery("");
           setHistoryQuery(null);
+          setInteractionNotice(null);
           setStatisticsFilter(null);
           setHomeRequest((request) => request + 1);
           searchInput.current?.focus();
@@ -645,8 +702,11 @@ export function App({
       />
       <div className="command-status-slot">
         <CommandStatus
-          message={commandStatus}
-          onDismiss={onDismissCommandStatus}
+          message={interactionNotice ?? commandStatus}
+          onDismiss={() => {
+            setInteractionNotice(null);
+            onDismissCommandStatus?.();
+          }}
         />
       </div>
       <main ref={workspaceRef} className="workspace">
@@ -666,8 +726,16 @@ export function App({
             onRemoveFolder={onRemoveFolder}
             onOpenFolder={onOpenFolder}
             onReindexFolder={onReindexFolder}
+            onBookmarkSelect={(documentId) => {
+              setWorkspaceSelectedDocumentId(documentId);
+              setPreviewSearchQuery("");
+              setInteractionNotice(null);
+            }}
+            historyRefreshToken={historyRefreshToken}
+            bookmarkRefreshToken={bookmarkRefreshToken}
             onSearchHistory={(query) => {
               setHistoryQuery(query);
+              setHistoryRequest((request) => request + 1);
               setStatisticsFilter(null);
             }}
           />
@@ -677,14 +745,34 @@ export function App({
           <SearchWorkspace
             folders={folders}
             historyQuery={historyQuery}
+            historyRequest={historyRequest}
             homeRequest={homeRequest}
             statisticsFilter={statisticsFilter}
+            aiEnabled={appSettings?.aiEnabled ?? false}
+            onAskEveryfile={() => {
+              if (!appSettings?.aiEnabled) {
+                setInteractionNotice({
+                  kind: "info",
+                  text: "설정에서 AI 기능을 먼저 활성화하세요.",
+                });
+              } else if (!workspaceSelectedDocumentId) {
+                setInteractionNotice({
+                  kind: "info",
+                  text: "Ask Everyfile을 사용하려면 먼저 검색 결과에서 문서를 선택하세요.",
+                });
+              } else {
+                setInteractionNotice(null);
+                setAiAskRequest((request) => request + 1);
+              }
+            }}
+            onHistoryChanged={handleHistoryChanged}
             pageSize={appSettings?.resultPageSize}
             fileClickBehavior={appSettings?.fileClickBehavior}
             dateDisplay={appSettings?.dateDisplay}
             onSelectDocument={(documentId, query) => {
               setWorkspaceSelectedDocumentId(documentId);
               setPreviewSearchQuery(query);
+              setInteractionNotice(null);
               onDocumentSelect?.(documentId);
             }}
             ref={searchInput}
@@ -706,6 +794,8 @@ export function App({
             searchQuery={previewSearchQuery}
             aiEnabled={appSettings?.aiEnabled ?? false}
             aiProvider={appSettings?.aiProvider ?? "ollama"}
+            askRequest={aiAskRequest}
+            onBookmarkChanged={() => setBookmarkRefreshToken((token) => token + 1)}
           />
         </ResizablePane>
       </main>

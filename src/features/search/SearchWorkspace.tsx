@@ -36,6 +36,10 @@ export interface SearchWorkspaceProps {
   pageSize?: number;
   fileClickBehavior?: "preview" | "open";
   dateDisplay?: "relative" | "absolute";
+  aiEnabled?: boolean;
+  onAskEveryfile?: () => void;
+  onHistoryChanged?: () => void;
+  historyRequest?: number;
 }
 
 export const SearchWorkspace = forwardRef<HTMLInputElement, SearchWorkspaceProps>(
@@ -53,6 +57,10 @@ export const SearchWorkspace = forwardRef<HTMLInputElement, SearchWorkspaceProps
       pageSize,
       fileClickBehavior,
       dateDisplay,
+      aiEnabled = false,
+      onAskEveryfile,
+      onHistoryChanged,
+      historyRequest = 0,
     },
     ref: Ref<HTMLInputElement>,
   ) {
@@ -80,7 +88,7 @@ export const SearchWorkspace = forwardRef<HTMLInputElement, SearchWorkspaceProps
     useEffect(() => {
       if (historyQuery == null) return;
       search.setQuery(historyQuery);
-    }, [historyQuery, search.setQuery]);
+    }, [historyQuery, historyRequest, search.setQuery]);
 
     useEffect(() => {
       if (homeRequest > 0) search.reset();
@@ -102,11 +110,14 @@ export const SearchWorkspace = forwardRef<HTMLInputElement, SearchWorkspaceProps
       if (search.loading || !search.query.trim()) return;
       const refresh = window.setTimeout(() => {
         void listSearchHistory(5, 0)
-          .then(setRecentSearches)
+          .then((records) => {
+            setRecentSearches(records);
+            onHistoryChanged?.();
+          })
           .catch(() => undefined);
       }, 250);
       return () => window.clearTimeout(refresh);
-    }, [search.hits.length, search.loading, search.query]);
+    }, [onHistoryChanged, search.hits.length, search.loading, search.query]);
     const visibleHits = useMemo(() => {
       if (!within) return search.hits;
       return search.hits.filter((hit) =>
@@ -120,7 +131,9 @@ export const SearchWorkspace = forwardRef<HTMLInputElement, SearchWorkspaceProps
     return (
       <section className="detailed-search" role="search" aria-label="파일 검색 / File search">
         <SearchInput
+          aiEnabled={aiEnabled}
           onQueryChange={search.setQuery}
+          onAskEveryfile={onAskEveryfile}
           query={search.query}
           ref={ref}
         />

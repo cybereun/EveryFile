@@ -105,6 +105,11 @@ export interface Bookmark {
   createdAt: string;
 }
 
+export interface BookmarkSummary extends Bookmark {
+  fileName: string;
+  path: string;
+}
+
 export interface PreviewDocument {
   documentId: string;
   fileName: string;

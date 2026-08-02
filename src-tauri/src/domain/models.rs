@@ -153,6 +153,16 @@ pub struct BookmarkRecord {
     pub created_at: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct BookmarkSummary {
+    pub document_id: String,
+    pub file_name: String,
+    pub path: String,
+    pub note: String,
+    pub created_at: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PreviewDocument {

@@ -38,6 +38,7 @@ export function useImmediateSearch({
   initialFilters = DEFAULT_SEARCH_FILTERS,
 }: UseImmediateSearchOptions) {
   const [query, setRawQuery] = useState("");
+  const [queryRevision, setQueryRevision] = useState(0);
   const [filters, setFilters] = useState<SearchFilters>(initialFilters);
   const [hits, setHits] = useState<SearchHit[]>([]);
   const [total, setTotal] = useState(0);
@@ -55,6 +56,7 @@ export function useImmediateSearch({
     const next = structuredValuesFromQuery(value);
     queryRef.current = value;
     setRawQuery(value);
+    setQueryRevision((revision) => revision + 1);
     setFilters((current) => {
       const patch: Partial<SearchFilters> = {};
       if (previous.extensions.length > 0 || next.extensions.length > 0) {
@@ -177,7 +179,7 @@ export function useImmediateSearch({
       void execute(generation, 0, false);
     }, debounceMs);
     return () => window.clearTimeout(timer);
-  }, [cancel, debounceMs, execute, filters, query]);
+  }, [cancel, debounceMs, execute, filters, query, queryRevision]);
 
   useEffect(
     () => () => {

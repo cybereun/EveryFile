@@ -1198,6 +1198,10 @@ select:focus-visible,
   color: var(--color-text) !important;
 }
 
+.search-mode-tabs__ask.is-disabled {
+  opacity: 0.62;
+}
+
 .search-scope-toggle {
   display: inline-flex;
   overflow: hidden;

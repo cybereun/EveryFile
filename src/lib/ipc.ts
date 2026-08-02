@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   AppSettings,
+  BookmarkSummary,
   FolderRecord,
   IndexStatus,
   Bookmark,
@@ -86,6 +87,9 @@ export const setBookmark = (documentId: string, note: string) =>
 
 export const removeBookmark = (documentId: string) =>
   invoke<void>("remove_bookmark", { documentId });
+
+export const listBookmarks = () =>
+  invoke<BookmarkSummary[]>("list_bookmarks");
 
 export const createTag = (name: string, color: string) =>
   invoke<Tag>("create_tag", { name, color });
