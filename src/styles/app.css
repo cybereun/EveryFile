@@ -2565,6 +2565,49 @@ select:focus-visible,
   min-height: 0;
 }
 
+.settings-card__heading-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.settings-card__heading-row > div {
+  min-width: 0;
+}
+
+.settings-inline-button {
+  flex: 0 0 auto;
+  min-height: 2.15rem;
+  padding: 0.35rem 0.7rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: inherit;
+  font: inherit;
+}
+
+.settings-inline-button:disabled {
+  cursor: progress;
+  opacity: 0.6;
+}
+
+.update-toggle {
+  margin-top: 0.8rem;
+  padding-top: 0.8rem;
+  border-top: 1px solid color-mix(in srgb, var(--color-border) 72%, transparent);
+}
+
+.update-toggle span {
+  display: grid;
+  gap: 0.18rem;
+}
+
+.settings-inline-status {
+  margin-top: 0.65rem !important;
+  color: var(--color-accent) !important;
+}
+
 .settings-dialog {
   height: min(88vh, 760px);
   min-height: 0;
@@ -2580,6 +2623,65 @@ select:focus-visible,
 .settings-dialog .dialog-body {
   flex: 1 1 auto;
   min-height: 0;
+}
+
+.update-modal-backdrop {
+  z-index: 300;
+}
+
+.update-dialog {
+  width: min(700px, calc(100vw - 2rem));
+  max-height: min(760px, calc(100vh - 2rem));
+}
+
+.update-dialog__body {
+  display: grid;
+  gap: 0.55rem;
+  min-height: 0;
+  padding: 1.25rem 1.35rem;
+  overflow: auto;
+}
+
+.update-dialog__lead,
+.update-dialog__date {
+  margin: 0;
+}
+
+.update-dialog__date {
+  color: var(--color-text-muted);
+  font-size: 0.82rem;
+}
+
+.update-dialog__notes {
+  min-height: 10rem;
+  max-height: 20rem;
+  margin: 0.35rem 0 0;
+  padding: 0.85rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-muted);
+  color: inherit;
+  font: inherit;
+  line-height: 1.55;
+}
+
+.update-dialog__progress {
+  display: grid;
+  gap: 0.45rem;
+  color: var(--color-text-muted);
+  font-size: 0.82rem;
+}
+
+.update-dialog__progress progress {
+  width: 100%;
+  accent-color: var(--color-accent);
+}
+
+.update-dialog__error {
+  margin: 0;
+  color: var(--color-danger, #b64232);
 }
 
 .statistics-dialog .dialog-tabs {

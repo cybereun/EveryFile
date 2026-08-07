@@ -1,18 +1,59 @@
-import type { ParseErrorRecord } from "../../lib/types";
+import type { AvailableUpdate } from "../../lib/updater";
+import type { AppSettings, ParseErrorRecord } from "../../lib/types";
 
 interface DiagnosticsSettingsProps {
+  settings: AppSettings;
   errors: ParseErrorRecord[];
   logFolder?: string;
   onRetry?: (documentId: string) => Promise<void>;
+  onChange: (settings: AppSettings) => void;
+  onCheckForUpdates?: () => Promise<AvailableUpdate | null>;
+  updateChecking?: boolean;
+  updateStatus?: string;
 }
 
 export function DiagnosticsSettings({
+  settings,
   errors,
   logFolder,
   onRetry,
+  onChange,
+  onCheckForUpdates,
+  updateChecking = false,
+  updateStatus = "",
 }: DiagnosticsSettingsProps) {
   return (
     <div className="settings-grid">
+      <section className="settings-card update-settings-card" aria-labelledby="update-heading">
+        <div className="settings-card__heading-row">
+          <div>
+            <h3 id="update-heading">업데이트</h3>
+            <p>새 버전이 있으면 서명된 설치 파일을 확인하고 알립니다. 문서와 색인 데이터는 전송되지 않습니다.</p>
+          </div>
+          <button
+            type="button"
+            className="settings-inline-button"
+            disabled={!onCheckForUpdates || updateChecking}
+            onClick={() => void onCheckForUpdates?.()}
+          >
+            {updateChecking ? "확인 중…" : "지금 확인"}
+          </button>
+        </div>
+        <label className="settings-check update-toggle">
+          <input
+            type="checkbox"
+            checked={settings.autoUpdateEnabled ?? true}
+            onChange={(event) =>
+              onChange({ ...settings, autoUpdateEnabled: event.target.checked })
+            }
+          />
+          <span>
+            <strong>자동 업데이트 확인</strong>
+            <small>앱 시작 시와 6시간마다 확인 · 새 버전 발견 시 알림</small>
+          </span>
+        </label>
+        {updateStatus && <p className="settings-inline-status" role="status">{updateStatus}</p>}
+      </section>
       <section className="settings-card">
         <h3>진단 로그</h3>
         <p>로그는 이 PC의 앱 데이터 폴더에만 7일간 보관되며 자동 전송되지 않습니다.</p>

@@ -1,3 +1,15 @@
+# EveryFile v1.0.1
+
+## Signed automatic updates
+
+- Added a signed GitHub Releases updater with an optional startup and six-hour
+  check in Settings → Diagnostics.
+- Added the update notes dialog with deferred installation and passive Windows
+  restart behavior.
+- Published the updater manifest at the EveryFile Releases `latest.json`
+  endpoint; existing installations can update without losing settings or the
+  local index.
+
 # EveryFile v1.0.0
 
 EveryFile is a Windows document search workspace by Lebi_Cybereun.
@@ -25,5 +37,6 @@ provider, starts an operation, and accepts the transfer notice.
 
 ## Windows notice
 
-This build is not code-signed. Windows SmartScreen may display a warning.
-Verify the files with `SHA256SUMS.txt`.
+The installer is not Authenticode-signed, so Windows SmartScreen may display a
+warning. The updater package itself is signed by the Tauri updater key. Verify
+the downloadable files with `SHA256SUMS.txt`.

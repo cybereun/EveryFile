@@ -231,6 +231,10 @@ pub struct AppSettings {
     pub ai_model: String,
     pub ai_temperature: f32,
     pub ai_max_tokens: u32,
+    /// Check the configured GitHub update manifest when the app starts and
+    /// on the six-hour background interval. The field is intentionally
+    /// defaulted so settings written by older versions remain compatible.
+    pub auto_update_enabled: bool,
     pub history_retention_days: u32,
     pub minimize_to_tray: bool,
     pub start_with_windows: bool,
@@ -256,6 +260,7 @@ impl Default for AppSettings {
             ai_model: "gemma3:4b".into(),
             ai_temperature: 0.2,
             ai_max_tokens: 2048,
+            auto_update_enabled: true,
             history_retention_days: 90,
             minimize_to_tray: false,
             start_with_windows: false,

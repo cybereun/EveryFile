@@ -19,6 +19,14 @@ Developer: Lebi_Cybereun · Email: cybereunny@gmail.com
 The left folder panel and right preview panel can be opened or closed
 independently from the header. Their widths and visibility are remembered.
 
+## Updates
+
+Open Settings → Diagnostics to enable automatic update checks. EveryFile checks
+on startup and every six hours, and shows a signed release note dialog only
+when a newer version is available. Use “지금 확인” to check manually. Updates
+are downloaded from the EveryFile GitHub Releases manifest and do not upload
+your documents, search history, or local index.
+
 ## Search and preview
 
 - Keyword and filename search, exact/all/any term matching, extension, date,

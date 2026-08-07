@@ -11,6 +11,7 @@ import {
   saveSettings,
 } from "../../lib/ipc";
 import type { AppSettings, FolderRecord, ParseErrorRecord } from "../../lib/types";
+import type { AvailableUpdate } from "../../lib/updater";
 import { DiagnosticsSettings } from "./DiagnosticsSettings";
 import { GeneralSettings } from "./GeneralSettings";
 import { AiSettings } from "./AiSettings";
@@ -37,6 +38,7 @@ export interface SettingsDialogProps {
   retryDocument?: (documentId: string) => Promise<void>;
   resetApplicationData?: () => Promise<void>;
   loadDiagnosticsLogFolder?: () => Promise<string>;
+  onCheckForUpdates?: () => Promise<AvailableUpdate | null>;
   onSaved?: (settings: AppSettings) => void;
 }
 
@@ -50,6 +52,7 @@ export function SettingsDialog({
   retryDocument = retryParse,
   resetApplicationData = resetApplicationDataCommand,
   loadDiagnosticsLogFolder = getDiagnosticsLogFolder,
+  onCheckForUpdates,
   onSaved,
 }: SettingsDialogProps) {
   const [activeTab, setActiveTab] = useState<SettingsTab>("general");
@@ -60,12 +63,15 @@ export function SettingsDialog({
   const [resetConfirmationOpen, setResetConfirmationOpen] = useState(false);
   const [hasSavedSecret, setHasSavedSecret] = useState(false);
   const [secretDraft, setSecretDraft] = useState<string | null>(null);
+  const [updateChecking, setUpdateChecking] = useState(false);
+  const [updateStatus, setUpdateStatus] = useState("");
   const close = useCallback(() => onClose(), [onClose]);
   const dialogRef = useModalDialog(open && !resetConfirmationOpen, close);
 
   useEffect(() => {
     if (!open) return;
     setMessage("");
+    setUpdateStatus("");
     void loadSettings().then(setSettings).catch(() => setMessage("설정을 불러오지 못했습니다."));
     void loadParseErrors().then(setErrors).catch(() => setErrors([]));
     void loadDiagnosticsLogFolder().then(setLogFolder).catch(() => setLogFolder(undefined));
@@ -84,6 +90,26 @@ export function SettingsDialog({
   }, [open, settings?.aiProvider]);
 
   if (!open) return null;
+
+  const checkForUpdates = async () => {
+    if (!onCheckForUpdates) return null;
+    setUpdateChecking(true);
+    setUpdateStatus("");
+    try {
+      const update = await onCheckForUpdates();
+      setUpdateStatus(
+        update
+          ? `새 버전 ${update.version}을(를) 찾았습니다. 설치 창을 확인하세요.`
+          : "현재 최신 버전입니다.",
+      );
+      return update;
+    } catch {
+      setUpdateStatus("업데이트를 확인하지 못했습니다. 잠시 후 다시 시도하세요.");
+      return null;
+    } finally {
+      setUpdateChecking(false);
+    }
+  };
 
   const moveTab = (direction: number) => {
     const index = tabs.findIndex((tab) => tab.id === activeTab);
@@ -169,8 +195,13 @@ export function SettingsDialog({
             />
           ) : (
             <DiagnosticsSettings
+              settings={settings}
               errors={errors}
               logFolder={logFolder}
+              onChange={setSettings}
+              onCheckForUpdates={checkForUpdates}
+              updateChecking={updateChecking}
+              updateStatus={updateStatus}
               onRetry={async (documentId) => {
                 await retryDocument(documentId);
                 setErrors((current) =>

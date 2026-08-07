@@ -16,6 +16,7 @@ import { PreviewPanel } from "../features/preview/PreviewPanel";
 import { SearchWorkspace } from "../features/search/SearchWorkspace";
 import { SettingsDialog } from "../features/settings/SettingsDialog";
 import { StatisticsDialog } from "../features/statistics/StatisticsDialog";
+import { UpdateDialog } from "../features/update/UpdateDialog";
 import type {
   AppSettings,
   BookmarkSummary,
@@ -23,6 +24,7 @@ import type {
   SearchHistoryRecord,
   StatisticsSearchFilter,
 } from "../lib/types";
+import { checkForUpdate, type AvailableUpdate } from "../lib/updater";
 import {
   clearSearchHistory,
   getSettings,
@@ -45,7 +47,8 @@ const RIGHT_PANE_MAX = 720;
 const CENTER_PANE_MIN = 520;
 const PREVIEW_BREAKPOINT = 1100;
 const COMPACT_HEADER_BREAKPOINT = 560;
-const APP_VERSION = "v1.0.0";
+const APP_VERSION = "v1.0.1";
+const UPDATE_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
 function relativeSearchTime(value: string) {
   const timestamp = new Date(value).getTime();
@@ -549,6 +552,7 @@ export function App({
     useState<CommandStatusMessage | null>(null);
   const [homeRequest, setHomeRequest] = useState(0);
   const [appSettings, setAppSettings] = useState<AppSettings | null>(null);
+  const [availableUpdate, setAvailableUpdate] = useState<AvailableUpdate | null>(null);
   const handleHistoryChanged = useCallback(() => {
     setHistoryRefreshToken((token) => token + 1);
   }, []);
@@ -617,6 +621,32 @@ export function App({
       })
       .catch(() => undefined);
   }, []);
+
+  const runUpdateCheck = useCallback(async () => {
+    const update = await checkForUpdate();
+    if (update) setAvailableUpdate(update);
+    return update;
+  }, []);
+
+  useEffect(() => {
+    if (!appSettings || appSettings.autoUpdateEnabled === false) return;
+    let active = true;
+    const checkInBackground = async () => {
+      try {
+        const update = await checkForUpdate();
+        if (active && update) setAvailableUpdate(update);
+      } catch {
+        // Automatic checks are deliberately quiet; the diagnostics tab reports
+        // errors when the user explicitly requests a check.
+      }
+    };
+    void checkInBackground();
+    const timer = window.setInterval(() => void checkInBackground(), UPDATE_INTERVAL_MS);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, [appSettings?.autoUpdateEnabled, appSettings]);
 
   useEffect(() => {
     const handleShortcut = (event: KeyboardEvent) => {
@@ -793,12 +823,17 @@ export function App({
         folders={folders}
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}
+        onCheckForUpdates={runUpdateCheck}
         onSaved={(settings) => {
           setAppSettings(settings);
           if (settings.language === "ko" || settings.language === "en") {
             setLocale(settings.language);
           }
         }}
+      />
+      <UpdateDialog
+        update={availableUpdate}
+        onClose={() => setAvailableUpdate(null)}
       />
       <StatisticsDialog
         open={statisticsOpen}

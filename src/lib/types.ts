@@ -176,6 +176,7 @@ export interface AppSettings {
   aiModel?: string;
   aiTemperature?: number;
   aiMaxTokens?: number;
+  autoUpdateEnabled?: boolean;
 }
 
 export interface StatisticsBucket {

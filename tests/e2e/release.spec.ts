@@ -15,7 +15,7 @@ const enabled =
   process.env.EVERYFILE_RELEASE_ACCEPTANCE === "1";
 const root = path.resolve(import.meta.dirname, "..", "..");
 const release = path.join(root, "artifacts", "release");
-const version = "1.0.0";
+const version = "1.0.1";
 const installer = path.join(release, `EveryFile-Setup-v${version}.exe`);
 const portableZip = path.join(release, `EveryFile-Portable-v${version}.zip`);
 const temporary = enabled

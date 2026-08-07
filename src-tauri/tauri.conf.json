@@ -2,7 +2,7 @@
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "EveryFile",
   "mainBinaryName": "EveryFile",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "identifier": "com.cybereun.everyfile",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -27,6 +27,7 @@
   },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "publisher": "Lebi_Cybereun",
     "copyright": "\u00A9 2026 Lebi_Cybereun",
     "externalBin": [
@@ -55,5 +56,16 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDk2OTQ2OUU1REI0QjY4MEEKUldRS2FFdmI1V21VbG9STk54aDBscVVneWE1M1ZjTFFwY0hEZWZIS1FjcDE2QkZPYjlpaU42ZmoK",
+      "endpoints": [
+        "https://github.com/cybereun/EveryFile/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
   }
 }

@@ -40,6 +40,10 @@ pub fn run() {
 pub fn run_with_reset_completion(reset_completion: Option<diagnostics::ResetCompletionStartup>) {
     let reset_completion = Arc::new(Mutex::new(reset_completion));
     let builder = tauri::Builder::default().plugin(tauri_plugin_dialog::init());
+    #[cfg(desktop)]
+    let builder = builder
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_updater::Builder::new().build());
     #[cfg(feature = "e2e")]
     let builder = builder
         .plugin(tauri_plugin_wdio::init())
