@@ -2002,8 +2002,10 @@ select:focus-visible,
   z-index: 4;
   display: flex;
   min-width: 0;
-  min-height: 2.1rem;
-  max-height: min(42vh, 24rem);
+  height: 3.1rem;
+  min-height: 3.1rem;
+  max-height: 3.1rem;
+  box-sizing: border-box;
   align-items: center;
   gap: 0.7rem;
   padding: 0.3rem 1rem;

@@ -7,6 +7,7 @@ import {
   registerFolder,
   removeFolder,
   startIndexing,
+  getIndexStatus,
 } from "../lib/ipc";
 import type { FolderRecord, IndexStatus } from "../lib/types";
 import { App } from "./App";
@@ -51,6 +52,7 @@ export function DesktopApp() {
     let unlisten: (() => void) | undefined;
     void listen<IndexStatus>("index-status://changed", (event) => {
       const next = event.payload;
+      if (next.silent) return;
       if (next.state === "failed") setQueueState("error");
       else if (next.state === "paused") setQueueState("paused");
       else if (["completed", "cancelled"].includes(next.state)) {
@@ -81,18 +83,24 @@ export function DesktopApp() {
   const addFolder = async () => {
     setStatus({ kind: "info", text: "폴더를 선택하는 중입니다…" });
     try {
-      const folder = await registerFolder();
-      if (!folder) {
+      const registration = await registerFolder();
+      if (!registration) {
         setStatus(null);
         return;
       }
+      const { folder, jobId } = registration;
       await refreshFolders();
-      setQueueState("indexing");
+      const currentStatus = await getIndexStatus(jobId);
+      if (currentStatus.state === "failed") setQueueState("error");
+      else if (["completed", "cancelled"].includes(currentStatus.state)) {
+        setQueueState("idle");
+      } else {
+        setQueueState("indexing");
+      }
       setStatus({
         kind: "success",
         text: `${folder.displayName} 폴더를 등록했습니다. 색인을 시작합니다.`,
       });
-      const jobId = await startIndexing(folder.id);
       setReportJobIds((current) => new Set(current).add(jobId));
     } catch (error) {
       setQueueState("error");

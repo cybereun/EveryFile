@@ -23,6 +23,7 @@ const SETTINGS_AND_MAINTENANCE_MIGRATION: &str =
     include_str!("../../migrations/0007_settings_and_maintenance.sql");
 const OCR_MIGRATION: &str = include_str!("../../migrations/0008_ocr.sql");
 const AI_MIGRATION: &str = include_str!("../../migrations/0009_ai.sql");
+const INDEX_JOB_ORIGIN_MIGRATION: &str = include_str!("../../migrations/0010_index_job_origin.sql");
 
 pub struct Database {
     connection: Mutex<Option<Connection>>,
@@ -109,6 +110,11 @@ impl Database {
         transaction
             .execute_batch(AI_MIGRATION)
             .map_err(DatabaseError::Migration)?;
+        if !index_jobs_have_origin(&transaction).map_err(DatabaseError::Migration)? {
+            transaction
+                .execute_batch(INDEX_JOB_ORIGIN_MIGRATION)
+                .map_err(DatabaseError::Migration)?;
+        }
         transaction.commit().map_err(DatabaseError::Migration)
     }
 
@@ -142,6 +148,17 @@ fn documents_have_parse_attempt_token(connection: &Connection) -> Result<bool, r
     let mut rows = statement.query([])?;
     while let Some(row) = rows.next()? {
         if row.get::<_, String>(1)? == "parse_attempt_token" {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn index_jobs_have_origin(connection: &Connection) -> Result<bool, rusqlite::Error> {
+    let mut statement = connection.prepare("PRAGMA table_info(index_jobs)")?;
+    let mut rows = statement.query([])?;
+    while let Some(row) = rows.next()? {
+        if row.get::<_, String>(1)? == "origin" {
             return Ok(true);
         }
     }

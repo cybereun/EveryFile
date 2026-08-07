@@ -189,6 +189,8 @@ pub struct IndexStatus {
     pub current_path: Option<String>,
     pub error_count: u64,
     pub errors: Vec<IndexFailure>,
+    #[serde(default)]
+    pub silent: bool,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

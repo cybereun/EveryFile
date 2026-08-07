@@ -56,9 +56,11 @@ describe("App", () => {
     expect(
       screen.getByRole("region", { name: "문서 미리보기 / Document preview" }),
     ).toBeVisible();
-    expect(screen.getByRole("status")).toHaveTextContent("42");
-    expect(screen.getByRole("status")).toHaveTextContent("1");
-    expect(screen.getByRole("status")).toHaveTextContent("v1.0.0");
+    const statusSummary = document.querySelector(".status-summary");
+    expect(statusSummary).not.toBeNull();
+    expect(statusSummary).toHaveTextContent("42");
+    expect(statusSummary).toHaveTextContent("1");
+    expect(statusSummary).toHaveTextContent("v1.0.0");
   });
 
   it("removes an indexed folder only through its three-dot menu and confirmation", () => {
@@ -161,10 +163,7 @@ describe("App", () => {
 
   it("does not hijack Ctrl+B or slash in text-entry controls", () => {
     render(<App />);
-    const controls: HTMLElement[] = [
-      screen.getByRole("searchbox"),
-      screen.getByRole("combobox", { name: "Language" }),
-    ];
+    const controls: HTMLElement[] = [screen.getByRole("searchbox")];
     const textarea = document.createElement("textarea");
     textarea.setAttribute("aria-label", "Test textarea");
     document.body.append(textarea);

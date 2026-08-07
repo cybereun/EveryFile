@@ -534,6 +534,16 @@ pub enum StatisticsError {
     InvalidInput(String),
 }
 
+impl StatisticsError {
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::Database(_) => "STATISTICS_DATABASE_FAILED",
+            Self::HistoryFilters(_) => "HISTORY_FILTERS_INVALID",
+            Self::InvalidInput(_) => "STATISTICS_INPUT_INVALID",
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{count_buckets, BY_YEAR_SQL};
@@ -559,15 +569,5 @@ mod tests {
         assert_eq!(buckets[0].count, 3);
         assert_eq!(buckets[1].label, "2025");
         assert_eq!(buckets[1].count, 1);
-    }
-}
-
-impl StatisticsError {
-    pub fn code(&self) -> &'static str {
-        match self {
-            Self::Database(_) => "STATISTICS_DATABASE_FAILED",
-            Self::HistoryFilters(_) => "HISTORY_FILTERS_INVALID",
-            Self::InvalidInput(_) => "STATISTICS_INPUT_INVALID",
-        }
     }
 }

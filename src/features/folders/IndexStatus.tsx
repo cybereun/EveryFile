@@ -119,23 +119,17 @@ function IndexingReport({ status, onClose }: { status: IndexStatusModel; onClose
 
 interface IndexStatusControllerProps {
   idleContent?: ReactNode;
-  /** When provided, only explicitly started jobs show a completion dialog. */
+  /** Kept for API compatibility; watcher jobs are filtered by status.silent. */
   reportJobIds?: ReadonlySet<string>;
 }
 
 export function IndexStatusController({
   idleContent = null,
-  reportJobIds,
 }: IndexStatusControllerProps) {
   const [status, setStatus] = useState<IndexStatusModel | null>(null);
   const [report, setReport] = useState<IndexStatusModel | null>(null);
   const reportedJobs = useRef(new Set<string>());
   const activeJobId = useRef<string | null>(null);
-  const reportJobIdsRef = useRef(reportJobIds);
-
-  useEffect(() => {
-    reportJobIdsRef.current = reportJobIds;
-  }, [reportJobIds]);
 
   useEffect(() => {
     let disposed = false;
@@ -145,6 +139,7 @@ export function IndexStatusController({
         ...event.payload,
         errorCount: event.payload.errorCount ?? event.payload.errors.length,
       };
+      if (payload.silent) return;
       if (["completed", "failed"].includes(payload.state)) {
         // A worker can publish one last progress snapshot after its terminal
         // event has already reached the webview. Ignore that stale snapshot so
@@ -154,9 +149,7 @@ export function IndexStatusController({
         activeJobId.current = null;
         if (reportedJobs.current.has(payload.jobId)) return;
         reportedJobs.current.add(payload.jobId);
-        if (reportJobIdsRef.current === undefined || reportJobIdsRef.current.has(payload.jobId)) {
-          setReport(payload);
-        }
+        setReport(payload);
       } else if (payload.state === "cancelled") {
         if (activeJobId.current && activeJobId.current !== payload.jobId) return;
         activeJobId.current = null;

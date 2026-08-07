@@ -189,4 +189,34 @@ describe("IndexStatusController", () => {
     expect(screen.getByRole("dialog")).toBeVisible();
     expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
   });
+
+  it("does not render progress for silent watcher jobs", async () => {
+    let receive: ((event: { payload: IndexStatus }) => void) | undefined;
+    bridge.listen.mockImplementation(
+      (_topic: string, handler: (event: { payload: IndexStatus }) => void) => {
+        receive = handler;
+        return Promise.resolve(bridge.unlisten);
+      },
+    );
+    render(<IndexStatusController reportJobIds={new Set()} />);
+    await waitFor(() => expect(bridge.listen).toHaveBeenCalled());
+
+    act(() => {
+      receive?.({
+        payload: {
+          jobId: "job-watcher",
+          state: "parsing",
+          totalFiles: 1,
+          completedFiles: 0,
+          currentPath: "C:\\Users\\me\\changed.txt",
+          errorCount: 0,
+          errors: [],
+          silent: true,
+        },
+      });
+    });
+
+    expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
 });

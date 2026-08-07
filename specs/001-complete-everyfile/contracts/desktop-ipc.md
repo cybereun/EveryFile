@@ -2,7 +2,9 @@
 
 ## Folder and workspace
 
-- `register_folder() -> FolderRecord | null`: native picker; null is cancellation.
+- `register_folder() -> { folder: FolderRecord, jobId: JobId } | null`: native
+  picker; null is cancellation. Registration activates the filesystem watcher
+  and starts exactly one initial indexing job, whose id is returned to the UI.
 - `list_folders() -> FolderRecord[]`
 - `start_indexing(folder_id) -> JobId`
 - `get_library_summary() -> counts and queue state`

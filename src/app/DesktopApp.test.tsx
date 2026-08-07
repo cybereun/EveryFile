@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   removeFolder: vi.fn(),
   openFolderLocation: vi.fn(),
   startIndexing: vi.fn(),
+  getIndexStatus: vi.fn(),
   listen: vi.fn(),
 }));
 
@@ -18,6 +19,7 @@ vi.mock("../lib/ipc", () => ({
   removeFolder: mocks.removeFolder,
   openFolderLocation: mocks.openFolderLocation,
   startIndexing: mocks.startIndexing,
+  getIndexStatus: mocks.getIndexStatus,
 }));
 vi.mock("./App", () => ({
   App: (props: AppProps) => (
@@ -45,16 +47,25 @@ const folder = {
 describe("DesktopApp", () => {
   beforeEach(() => {
     mocks.listFolders.mockReset().mockResolvedValue([]);
-    mocks.registerFolder.mockReset().mockResolvedValue(folder);
+    mocks.registerFolder.mockReset().mockResolvedValue({ folder, jobId: "job-1" });
     mocks.removeFolder.mockReset().mockResolvedValue(undefined);
     mocks.openFolderLocation.mockReset().mockResolvedValue(undefined);
     mocks.startIndexing.mockReset().mockResolvedValue("job-1");
+    mocks.getIndexStatus.mockReset().mockResolvedValue({
+      jobId: "job-1",
+      state: "parsing",
+      totalFiles: 1,
+      completedFiles: 0,
+      currentPath: null,
+      errorCount: 0,
+      errors: [],
+    });
     mocks.listen.mockReset().mockResolvedValue(() => undefined);
   });
 
   afterEach(cleanup);
 
-  it("loads folders and registers then starts indexing the selected folder", async () => {
+  it("loads folders and registers with the single backend-started indexing job", async () => {
     mocks.listFolders
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([folder]);
@@ -64,7 +75,7 @@ describe("DesktopApp", () => {
     fireEvent.click(screen.getByRole("button", { name: "add" }));
 
     await waitFor(() => expect(mocks.registerFolder).toHaveBeenCalledOnce());
-    await waitFor(() => expect(mocks.startIndexing).toHaveBeenCalledWith("folder-1"));
+    expect(mocks.startIndexing).not.toHaveBeenCalled();
     expect(screen.getByTestId("folder-count")).toHaveTextContent("1");
     expect(screen.getByTestId("queue-state")).toHaveTextContent("indexing");
   });

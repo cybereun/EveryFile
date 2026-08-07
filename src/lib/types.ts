@@ -39,6 +39,11 @@ export interface FolderRecord {
   indexState: string;
 }
 
+export interface FolderRegistration {
+  folder: FolderRecord;
+  jobId: string;
+}
+
 export interface DocumentRecord {
   id: string;
   folderId: string;
@@ -132,6 +137,7 @@ export interface IndexStatus {
   currentPath: string | null;
   errorCount: number;
   errors: IndexFailure[];
+  silent?: boolean;
 }
 
 export type IndexState =

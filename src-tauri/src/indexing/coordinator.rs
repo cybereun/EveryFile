@@ -472,8 +472,8 @@ impl IndexCoordinator {
             let transaction = connection.transaction()?;
             transaction.execute(
                 "INSERT INTO index_jobs
-                 (id, folder_id, state, completed_files, total_files, last_path, updated_at)
-                 VALUES (?1, ?2, ?3, 0, 0, NULL, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
+                 (id, folder_id, state, completed_files, total_files, last_path, updated_at, origin)
+                 VALUES (?1, ?2, ?3, 0, 0, NULL, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), 'manual')",
                 params![job_id, folder_id, JobState::Queued.as_sql()],
             )?;
             transaction.execute(
@@ -685,7 +685,7 @@ impl IndexCoordinator {
                 return Ok(());
             }
             let job_id = random_id();
-            self.create_single_candidate_job(&job_id, folder_id, candidate)?;
+            self.create_single_candidate_job(&job_id, folder_id, candidate, "watcher")?;
             let runtime = Arc::new(JobRuntime::new());
             self.run_job(job_id, runtime).await;
         }
@@ -990,7 +990,12 @@ impl IndexCoordinator {
                     if self.candidate_matches_stored_identity(folder_id, &candidate)? {
                         return Ok(false);
                     }
-                    self.create_single_candidate_job(&job_id, folder_id, candidate)?;
+                    self.create_single_candidate_job(
+                        &job_id,
+                        folder_id,
+                        candidate,
+                        "reconciliation",
+                    )?;
                     Ok(true)
                 })?;
                 if !created {
@@ -1397,15 +1402,16 @@ impl IndexCoordinator {
         job_id: &str,
         folder_id: &str,
         candidate: FileCandidate,
+        origin: &str,
     ) -> Result<(), IndexingError> {
         let mut connection = self.database.connection();
         let transaction = connection.transaction()?;
         transaction.execute(
             "INSERT INTO index_jobs
-             (id, folder_id, state, completed_files, total_files, last_path, updated_at)
+             (id, folder_id, state, completed_files, total_files, last_path, updated_at, origin)
              VALUES (?1, ?2, 'parsing', 0, 1, NULL,
-                     strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
-            params![job_id, folder_id],
+                     strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), ?3)",
+            params![job_id, folder_id, origin],
         )?;
         transaction.execute(
             "INSERT INTO index_job_files
@@ -2022,15 +2028,23 @@ impl IndexCoordinator {
 
     fn load_status(&self, job_id: &str) -> Result<IndexStatus, IndexingError> {
         let connection = self.database.connection();
-        let row: Option<(String, i64, i64, Option<String>)> = connection
+        let row: Option<(String, i64, i64, Option<String>, String)> = connection
             .query_row(
-                "SELECT state, total_files, completed_files, last_path
+                "SELECT state, total_files, completed_files, last_path, origin
                  FROM index_jobs WHERE id = ?1",
                 [job_id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                },
             )
             .optional()?;
-        let (state, total, completed, current_path) =
+        let (state, total, completed, current_path, origin) =
             row.ok_or_else(|| IndexingError::JobNotFound(job_id.to_owned()))?;
         let state = JobState::from_sql(&state)?;
         let error_count = connection.query_row(
@@ -2067,6 +2081,7 @@ impl IndexCoordinator {
             current_path,
             error_count: u64::try_from(error_count).unwrap_or(0),
             errors,
+            silent: origin != "manual",
         })
     }
 
@@ -3004,6 +3019,7 @@ mod tests {
         DocumentParser, EventPathProvider, IndexCoordinator, JobRuntime, JobState,
         PersistedCandidate, ReconciliationScratch, RuntimeIndexSettings,
     };
+    use crate::domain::models::IndexStatus;
     use crate::folders::repository::FolderRepository;
     use crate::infrastructure::database::Database;
     use crate::infrastructure::secure_key::SecretKey;
@@ -3221,6 +3237,50 @@ mod tests {
             coordinator.reconcile(&folder.id).await.unwrap();
             assert!(coordinator.runtimes.lock().await.is_empty());
         }
+    }
+
+    #[tokio::test]
+    async fn watcher_reindex_status_is_silent_but_manual_status_is_visible() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("root");
+        fs::create_dir(&root).unwrap();
+        fs::write(root.join("one.txt"), "one").unwrap();
+        let key = SecretKey::from_bytes(Zeroizing::new([34_u8; 32]));
+        let database = Arc::new(Database::open(&temp.path().join("index.db"), &key).unwrap());
+        database.migrate().unwrap();
+        let folder = FolderRepository::new(Arc::clone(&database))
+            .register(&root)
+            .unwrap();
+        let statuses = Arc::new(std::sync::Mutex::new(Vec::<IndexStatus>::new()));
+        let observed: Arc<std::sync::Mutex<Vec<IndexStatus>>> = Arc::clone(&statuses);
+        let coordinator = IndexCoordinator::with_parser_and_sink(
+            Arc::clone(&database),
+            Arc::new(TestParser),
+            1024 * 1024,
+            Some(Arc::new(move |status| {
+                observed.lock().unwrap().push(status);
+                Ok(())
+            })),
+        );
+
+        let manual_job = coordinator.start(&folder.id).await.unwrap();
+        wait_for_completed(&coordinator, &manual_job).await;
+        assert!(statuses
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|status| status.job_id == manual_job && !status.silent));
+
+        fs::write(root.join("one.txt"), "changed").unwrap();
+        coordinator
+            .reindex_discovered_path(&folder.id, &root.join("one.txt"))
+            .await
+            .unwrap();
+        assert!(statuses
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|status| status.job_id != manual_job && status.silent));
     }
 
     #[tokio::test]

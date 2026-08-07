@@ -10,7 +10,7 @@ use thiserror::Error;
 pub fn apply_startup(enabled: bool) -> Result<(), SystemError> {
     #[cfg(windows)]
     {
-        return windows_startup::apply(enabled);
+        windows_startup::apply(enabled)
     }
 
     #[cfg(not(windows))]

@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   AppSettings,
   BookmarkSummary,
+  FolderRegistration,
   FolderRecord,
   IndexStatus,
   Bookmark,
@@ -47,7 +48,7 @@ export const cancelDocumentAi = (requestId: string) =>
 export const listFolders = () => invoke<FolderRecord[]>("list_folders");
 
 export const registerFolder = () =>
-  invoke<FolderRecord | null>("register_folder");
+  invoke<FolderRegistration | null>("register_folder");
 
 export const removeFolder = (folderId: string) =>
   invoke<void>("remove_folder", { folderId });

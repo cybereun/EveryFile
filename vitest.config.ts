@@ -8,6 +8,7 @@ export default defineConfig({
     setupFiles: ["@testing-library/jest-dom/vitest"],
     exclude: [
       ...configDefaults.exclude,
+      ".worktrees/**",
       "sidecar/parser-host/**",
       "vendor/kordoc/**",
     ],

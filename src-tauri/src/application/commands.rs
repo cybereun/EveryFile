@@ -35,6 +35,13 @@ use crate::statistics::{
     StatisticsRepository,
 };
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RegisteredFolder {
+    pub folder: FolderRecord,
+    pub job_id: JobId,
+}
+
 #[tauri::command]
 pub fn get_settings(state: State<'_, AppState>) -> Result<AppSettings, String> {
     state
@@ -183,7 +190,7 @@ pub fn cancel_document_ai(
 pub async fn register_folder(
     app: AppHandle,
     state: State<'_, AppState>,
-) -> Result<Option<FolderRecord>, CommandError> {
+) -> Result<Option<RegisteredFolder>, CommandError> {
     let selected_path = app
         .dialog()
         .file()
@@ -198,12 +205,16 @@ pub async fn register_folder(
     let registered =
         register_selected_folder(selected_path, &state.folders).map_err(CommandError::from)?;
     if let Some(folder) = &registered {
-        state
+        let job_id = state
             .activate_registered_folder(&folder.id)
             .await
             .map_err(|error| CommandError::new("FOLDER_ACTIVATION_FAILED", error.to_string()))?;
+        return Ok(Some(RegisteredFolder {
+            folder: folder.clone(),
+            job_id,
+        }));
     }
-    Ok(registered)
+    Ok(None)
 }
 
 pub fn register_selected_folder(
@@ -418,8 +429,9 @@ pub async fn get_image_bytes(
         .map_err(CommandError::from)?;
     let database = state.database.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let bytes = read_indexed_image_cancellable(&database, &document_id, || lease.is_cancelled())
-            .map_err(CommandError::from)?;
+        let bytes =
+            read_indexed_image_cancellable(&database, &document_id, || lease.is_cancelled())
+                .map_err(CommandError::from)?;
         lease
             .finish(bytes)
             .map(tauri::ipc::Response::new)
