@@ -7,6 +7,24 @@ Copyright (c) 2026 Lebi_Cybereun
 The EveryFile copyright above is separate from the following upstream
 license and notice text.
 
+## Design reference / 디자인 참고 (not a bundled dependency)
+
+Some of EveryFile's UI/UX direction was inspired by the layout and interaction
+patterns of [Docufinder (Anything)](https://github.com/chrisryugj/Docufinder).
+EveryFile is maintained as a separate implementation and its current
+distribution does not bundle Docufinder source code, icons, images, branding,
+or documentation. This acknowledgement does not grant rights to Docufinder's
+works. Docufinder's copyright and licensing remain with its original project;
+see its [Business Source License 1.1](https://github.com/chrisryugj/Docufinder/blob/main/LICENSE).
+
+EveryFile의 일부 UI/UX 방향은
+[Docufinder (Anything)](https://github.com/chrisryugj/Docufinder)의 화면 구성과
+상호작용 패턴에서 영감을 받아 별도로 구현했습니다. 현재 EveryFile 배포본에는
+Docufinder의 소스 코드, 아이콘, 이미지, 브랜드 또는 문서를 포함하지 않습니다.
+이 고지는 Docufinder 저작물에 대한 사용 권한을 부여하지 않으며, 저작권과 라이선스는
+원 프로젝트에 있습니다. 자세한 내용은 [Docufinder의 Business Source License 1.1](https://github.com/chrisryugj/Docufinder/blob/main/LICENSE)을
+확인하십시오.
+
 ## Kordoc license (verbatim)
 
 MIT License

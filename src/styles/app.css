@@ -93,14 +93,15 @@ select:focus-visible,
   width: 1.65rem;
   height: 1.65rem;
   flex: 0 0 auto;
-  color: var(--color-accent);
+  object-fit: contain;
+  filter: drop-shadow(0 2px 2px rgb(91 66 47 / 18%));
 }
 
 .brand-mark--hero {
   width: 3rem;
   height: 3rem;
   margin: 0 auto 0.65rem;
-  color: var(--color-accent);
+  filter: drop-shadow(0 5px 6px rgb(91 66 47 / 20%));
 }
 
 .brand h1 {
@@ -195,6 +196,12 @@ select:focus-visible,
 .icon-button svg {
   width: 1.25rem;
   height: 1.25rem;
+  overflow: visible;
+  filter: drop-shadow(0 1px 1px rgb(91 66 47 / 16%));
+}
+
+.icon-button--accent svg {
+  filter: drop-shadow(0 1px 1px rgb(62 35 24 / 24%));
 }
 
 .app-header--compact {

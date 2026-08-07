@@ -161,3 +161,21 @@ for published releases.
 EveryFile source code, UI, artwork, branding, and documentation are covered by
 the [EveryFile Proprietary License](LICENSE). Third-party components retain
 their own licenses; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+### Design acknowledgement / 디자인 참고
+
+Some of EveryFile's UI/UX direction was inspired by the layout and interaction
+patterns of [Docufinder (Anything)](https://github.com/chrisryugj/Docufinder).
+EveryFile is maintained as a separate implementation and its current
+distribution does not bundle Docufinder source code, icons, images, branding,
+or documentation. This acknowledgement does not grant rights to Docufinder's
+works; please consult the [Docufinder license](https://github.com/chrisryugj/Docufinder/blob/main/LICENSE)
+for any use of that project.
+
+EveryFile의 일부 UI/UX 방향은
+[Docufinder (Anything)](https://github.com/chrisryugj/Docufinder)의 화면 구성과
+상호작용 패턴에서 영감을 받아 별도로 구현했습니다. 현재 EveryFile 배포본에는
+Docufinder의 소스 코드, 아이콘, 이미지, 브랜드 또는 문서를 포함하지 않습니다.
+이는 Docufinder 저작물에 대한 사용 권한을 부여하는 문구가 아니며, 해당 프로젝트를
+사용할 경우 [Docufinder 라이선스](https://github.com/chrisryugj/Docufinder/blob/main/LICENSE)를
+확인해야 합니다.
