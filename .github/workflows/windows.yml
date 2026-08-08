@@ -5,6 +5,12 @@ on:
     branches: [main, codex/phase-1-core-search]
   pull_request:
   workflow_dispatch:
+    inputs:
+      diagnostics_only:
+        description: Run only the Windows durable-reset diagnostic test
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -23,11 +29,13 @@ jobs:
           submodules: recursive
 
       - uses: actions/setup-node@v4
+        if: ${{ !inputs.diagnostics_only }}
         with:
           node-version: 24
           cache: npm
 
       - uses: astral-sh/setup-uv@v6
+        if: ${{ !inputs.diagnostics_only }}
         with:
           enable-cache: true
 
@@ -47,22 +55,40 @@ jobs:
           "C:\Strawberry\perl\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - run: npm ci
+        if: ${{ !inputs.diagnostics_only }}
       - run: npm test -- --run
+        if: ${{ !inputs.diagnostics_only }}
       - run: npm run build
+        if: ${{ !inputs.diagnostics_only }}
       # Tauri validates externalBin resources during Cargo/Clippy. Build the
       # parser sidecar first on clean runners so the gate can inspect them.
       - run: node scripts/build-parser-sidecar.mjs
+        if: ${{ !inputs.diagnostics_only }}
       - name: Build OCR sidecar
+        if: ${{ !inputs.diagnostics_only }}
         shell: pwsh
         run: powershell -ExecutionPolicy Bypass -File scripts/build-ocr-sidecar.ps1
       - run: cargo fmt --manifest-path src-tauri\Cargo.toml -- --check
+        if: ${{ !inputs.diagnostics_only }}
       - run: cargo clippy --manifest-path src-tauri\Cargo.toml --all-targets -- -D warnings
+        if: ${{ !inputs.diagnostics_only }}
       - run: npm run tauri build
+        if: ${{ !inputs.diagnostics_only }}
       - run: powershell -ExecutionPolicy Bypass -File scripts/test-rust.ps1
+        if: ${{ !inputs.diagnostics_only }}
       - run: powershell -ExecutionPolicy Bypass -File scripts/build-portable.ps1
+        if: ${{ !inputs.diagnostics_only }}
       - run: powershell -ExecutionPolicy Bypass -File scripts/verify-no-console.ps1
+        if: ${{ !inputs.diagnostics_only }}
+
+      - name: Run durable reset test with diagnostics
+        if: ${{ inputs.diagnostics_only }}
+        shell: pwsh
+        run: |
+          cargo test --manifest-path src-tauri\Cargo.toml -j1 diagnostics::windows_reset_tests::durable_state_write_faults_never_publish_partial_json -- --nocapture --test-threads=1
 
       - shell: pwsh
+        if: ${{ !inputs.diagnostics_only }}
         run: |
           Get-FileHash artifacts\release\* -Algorithm SHA256 |
             Select-Object Hash, Path |
@@ -70,6 +96,7 @@ jobs:
             Set-Content artifacts\release\checksums.json
 
       - uses: actions/upload-artifact@v4
+        if: ${{ !inputs.diagnostics_only }}
         with:
           name: EveryFile-Windows-v1.0.1
           path: artifacts/release/*
