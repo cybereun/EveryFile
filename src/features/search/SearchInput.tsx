@@ -1,4 +1,5 @@
 import { forwardRef } from "react";
+import { useI18n } from "../../app/translations";
 interface SearchInputProps {
   query: string;
   onQueryChange: (query: string) => void;
@@ -24,15 +25,16 @@ function SearchIcon() {
 
 export const SearchInput = forwardRef<HTMLInputElement, SearchInputProps>(
   function SearchInput({ query, onQueryChange, aiEnabled = false, onAskEveryfile }, ref) {
+    const { t } = useI18n();
     return (
       <div className="search-input-block">
-        <div className="search-mode-tabs" aria-label="검색 방식">
+        <div className="search-mode-tabs" aria-label={t("검색 방식")}>
           <button
             aria-pressed="true"
             className="is-active search-mode-tabs__search"
             type="button"
           >
-            <SearchIcon /> 검색
+            <SearchIcon /> {t("검색")}
           </button>
           <button
             aria-label="Ask Everyfile"
@@ -46,11 +48,11 @@ export const SearchInput = forwardRef<HTMLInputElement, SearchInputProps>(
         </div>
         <label className="search-field search-field--workspace">
           <SearchIcon />
-          <span className="sr-only">검색어</span>
+          <span className="sr-only">{t("검색어")}</span>
           <input
-            aria-label="검색어"
+            aria-label={t("검색어")}
             onChange={(event) => onQueryChange(event.target.value)}
-            placeholder="파일명이나 문서 속 단어를 입력하세요"
+            placeholder={t("파일명이나 문서 속 단어를 입력하세요")}
             ref={ref}
             type="search"
             value={query}

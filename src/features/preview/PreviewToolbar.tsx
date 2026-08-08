@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
+import { useI18n } from "../../app/translations";
 
 interface PreviewToolbarProps {
   bookmark: ReactNode;
@@ -26,6 +27,7 @@ export function PreviewToolbar({
   onOpenLocation,
   onSaveMarkdown,
 }: PreviewToolbarProps) {
+  const { t } = useI18n();
   const [moreOpen, setMoreOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
   const moreButton = useRef<HTMLButtonElement>(null);
@@ -73,12 +75,12 @@ export function PreviewToolbar({
   };
 
   return (
-    <div className="preview-toolbar" aria-label="미리보기 도구" ref={root}>
+    <div className="preview-toolbar" aria-label={t("미리보기 도구")} ref={root}>
       <button
-        aria-label="파일 위치 열기"
+        aria-label={t("파일 위치 열기")}
         className="preview-toolbar-icon"
         onClick={onOpenLocation}
-        title="파일 위치 열기"
+        title={t("파일 위치 열기")}
         type="button"
       >
         <svg aria-hidden="true" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.8" viewBox="0 0 24 24">
@@ -86,13 +88,13 @@ export function PreviewToolbar({
           <path d="m14 14 3-3m0 0h-3m3 0v3" />
         </svg>
       </button>
-      <button onClick={onOpen} type="button">파일 열기</button>
-      <button onClick={onFind} type="button">찾기</button>
+      <button onClick={onOpen} type="button">{t("파일 열기")}</button>
+      <button onClick={onFind} type="button">{t("찾기")}</button>
       {onAiSummary && (
-        <button onClick={onAiSummary} type="button">AI 요약</button>
+        <button onClick={onAiSummary} type="button">{t("AI 요약")}</button>
       )}
       {onAiQuestion && (
-        <button onClick={onAiQuestion} type="button">이 파일에 질문</button>
+        <button onClick={onAiQuestion} type="button">{t("이 파일에 질문")}</button>
       )}
       {bookmark}
       <div className="preview-more">
@@ -103,20 +105,20 @@ export function PreviewToolbar({
           ref={moreButton}
           type="button"
         >
-          더보기
+          {t("더보기")}
         </button>
         {moreOpen && (
           <div
-            aria-label="추가 문서 작업"
+            aria-label={t("추가 문서 작업")}
             className="preview-more-menu"
             ref={menu}
             role="menu"
           >
-            <button onClick={() => run(onOpenLocation)} role="menuitem" type="button">파일 위치 열기</button>
-            <button onClick={() => run(onCopyText)} role="menuitem" type="button">텍스트 복사</button>
-            <button onClick={() => run(onSaveMarkdown)} role="menuitem" type="button">Markdown 저장</button>
-            <button onClick={() => run(onCopyPath)} role="menuitem" type="button">경로 복사</button>
-            <button onClick={() => run(onAddTag)} role="menuitem" type="button">태그 추가</button>
+            <button onClick={() => run(onOpenLocation)} role="menuitem" type="button">{t("파일 위치 열기")}</button>
+            <button onClick={() => run(onCopyText)} role="menuitem" type="button">{t("텍스트 복사")}</button>
+            <button onClick={() => run(onSaveMarkdown)} role="menuitem" type="button">{t("Markdown 저장")}</button>
+            <button onClick={() => run(onCopyPath)} role="menuitem" type="button">{t("경로 복사")}</button>
+            <button onClick={() => run(onAddTag)} role="menuitem" type="button">{t("태그 추가")}</button>
           </div>
         )}
       </div>

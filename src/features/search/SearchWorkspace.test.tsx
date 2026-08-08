@@ -134,7 +134,7 @@ describe("SearchWorkspace", () => {
     expect(screen.getByLabelText("폴더 범위")).toBeVisible();
     expect(screen.getByRole("checkbox", { name: "파일명 포함" })).toBeVisible();
     expect(screen.getByRole("textbox", { name: "결과 내 검색" })).toBeVisible();
-    expect(screen.getByRole("button", { name: "프리셋 저장" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "프리셋 저장" })).not.toBeInTheDocument();
     expect(screen.getByTestId("search-filter-scroller")).toHaveStyle({
       overflowX: "auto",
     });
@@ -287,7 +287,7 @@ describe("SearchWorkspace", () => {
     expect(screen.getByText(/파일명 검색에서는/)).toBeVisible();
   });
 
-  it("saves the current query and detailed filters as a local preset", () => {
+  it("saves the current query and detailed filters for immediate reuse", () => {
     render(
       <SearchWorkspace
         folders={folders}
@@ -299,9 +299,7 @@ describe("SearchWorkspace", () => {
     fireEvent.change(screen.getByRole("searchbox", { name: "검색어" }), {
       target: { value: "수행평가 ext:pdf" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "프리셋 저장" }));
-
-    expect(window.localStorage.getItem("everyfile.search.preset")).toContain(
+    expect(window.localStorage.getItem("everyfile.search.current")).toContain(
       "수행평가 ext:pdf",
     );
   });

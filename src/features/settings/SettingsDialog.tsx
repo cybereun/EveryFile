@@ -17,6 +17,7 @@ import { GeneralSettings } from "./GeneralSettings";
 import { AiSettings } from "./AiSettings";
 import { SearchSettings } from "./SearchSettings";
 import { SystemSettings } from "./SystemSettings";
+import { useI18n } from "../../app/translations";
 
 type SettingsTab = "general" | "search" | "ai" | "system" | "diagnostics";
 
@@ -55,6 +56,7 @@ export function SettingsDialog({
   onCheckForUpdates,
   onSaved,
 }: SettingsDialogProps) {
+  const { t } = useI18n();
   const [activeTab, setActiveTab] = useState<SettingsTab>("general");
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [errors, setErrors] = useState<ParseErrorRecord[]>([]);
@@ -72,10 +74,10 @@ export function SettingsDialog({
     if (!open) return;
     setMessage("");
     setUpdateStatus("");
-    void loadSettings().then(setSettings).catch(() => setMessage("설정을 불러오지 못했습니다."));
+    void loadSettings().then(setSettings).catch(() => setMessage(t("설정을 불러오지 못했습니다.")));
     void loadParseErrors().then(setErrors).catch(() => setErrors([]));
     void loadDiagnosticsLogFolder().then(setLogFolder).catch(() => setLogFolder(undefined));
-  }, [loadDiagnosticsLogFolder, loadParseErrors, loadSettings, open]);
+  }, [loadDiagnosticsLogFolder, loadParseErrors, loadSettings, open, t]);
 
   useEffect(() => {
     if (!open || !settings || (settings.aiProvider ?? "ollama") === "ollama") {
@@ -99,12 +101,12 @@ export function SettingsDialog({
       const update = await onCheckForUpdates();
       setUpdateStatus(
         update
-          ? `새 버전 ${update.version}을(를) 찾았습니다. 설치 창을 확인하세요.`
-          : "현재 최신 버전입니다.",
+          ? t("새 버전 {version}을(를) 찾았습니다. 설치 창을 확인하세요.", { version: update.version })
+          : t("현재 최신 버전입니다."),
       );
       return update;
     } catch {
-      setUpdateStatus("업데이트를 확인하지 못했습니다. 잠시 후 다시 시도하세요.");
+      setUpdateStatus(t("업데이트를 확인하지 못했습니다. 잠시 후 다시 시도하세요."));
       return null;
     } finally {
       setUpdateChecking(false);
@@ -132,13 +134,13 @@ export function SettingsDialog({
         inert={resetConfirmationOpen || undefined}
       >
         <header className="dialog-header">
-          <h2 id="settings-title">설정</h2>
-          <button type="button" aria-label="설정 닫기" onClick={close}>×</button>
+          <h2 id="settings-title">{t("설정")}</h2>
+          <button type="button" aria-label={t("설정 닫기")} onClick={close}>×</button>
         </header>
         <div
           className="dialog-tabs"
           role="tablist"
-          aria-label="설정 항목"
+          aria-label={t("설정 항목")}
           onKeyDown={(event) => {
             if (event.key === "ArrowRight") {
               event.preventDefault();
@@ -161,7 +163,7 @@ export function SettingsDialog({
               tabIndex={activeTab === tab.id ? 0 : -1}
               onClick={() => setActiveTab(tab.id)}
             >
-              {tab.label}
+              {t(tab.label)}
             </button>
           ))}
         </div>
@@ -173,7 +175,7 @@ export function SettingsDialog({
           tabIndex={0}
         >
           {!settings ? (
-            <p role="status">{message || "설정을 불러오는 중…"}</p>
+            <p role="status">{message || t("설정을 불러오는 중…")}</p>
           ) : activeTab === "general" ? (
             <GeneralSettings settings={settings} onChange={setSettings} />
           ) : activeTab === "search" ? (
@@ -213,7 +215,7 @@ export function SettingsDialog({
         </div>
         <footer className="dialog-footer">
           <span role="status" aria-live="polite">{message}</span>
-          <button type="button" onClick={close}>닫기</button>
+          <button type="button" onClick={close}>{t("닫기")}</button>
           <button
             type="button"
             className="primary-button"
@@ -234,13 +236,13 @@ export function SettingsDialog({
                 }
                 setSettings(saved);
                 onSaved?.(saved);
-                setMessage("저장했습니다.");
+                setMessage(t("저장했습니다."));
               } catch {
-                setMessage("설정을 저장하지 못했습니다.");
+                setMessage(t("설정을 저장하지 못했습니다."));
               }
             }}
           >
-            저장
+            {t("저장")}
           </button>
         </footer>
       </div>

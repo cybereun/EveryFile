@@ -2,6 +2,7 @@ import { listen } from "@tauri-apps/api/event";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { cancelIndexing, pauseIndexing, resumeIndexing } from "../../lib/ipc";
 import type { IndexStatus as IndexStatusModel } from "../../lib/types";
+import { useI18n } from "../../app/translations";
 
 interface Props {
   status: IndexStatusModel;
@@ -10,8 +11,8 @@ interface Props {
   onCancel: (jobId: string) => void;
 }
 
-function fileName(path: string | null) {
-  if (!path) return "준비 중";
+function fileName(path: string | null, t: (source: string) => string) {
+  if (!path) return t("준비 중");
   const segments = path.split(/[\\/]/);
   return segments[segments.length - 1] || path;
 }
@@ -27,38 +28,39 @@ const phaseLabels: Record<IndexStatusModel["state"], string> = {
 };
 
 export function IndexStatus({ status, onPause, onResume, onCancel }: Props) {
+  const { t } = useI18n();
   const total = Math.max(0, status.totalFiles);
   const completed = Math.min(Math.max(0, status.completedFiles), total || 1);
   const percentage = total > 0 ? Math.min(100, Math.round((completed / total) * 100)) : 0;
   const errorCount = status.errorCount ?? status.errors.length;
 
   return (
-    <div className="index-progress" role="status" aria-label="색인 진행 상태" aria-live="polite">
+    <div className="index-progress" role="status" aria-label={t("색인 진행 상태")} aria-live="polite">
       <div className="index-progress__line">
         <span className="index-progress__phase">
           <span className="index-progress__dot" aria-hidden="true" />
-          {phaseLabels[status.state]}
+          {t(phaseLabels[status.state])}
         </span>
         <span className="index-progress__count">
           {status.completedFiles.toLocaleString()} / {status.totalFiles.toLocaleString()}
         </span>
         <span className="index-progress__file" title={status.currentPath ?? undefined}>
-          {fileName(status.currentPath)}
+          {fileName(status.currentPath, t)}
         </span>
         {errorCount > 0 && (
-          <span className="index-progress__errors">실패 {errorCount.toLocaleString()}건</span>
+          <span className="index-progress__errors">{t("실패")} {errorCount.toLocaleString()}{t("건")}</span>
         )}
         <strong className="index-progress__percent">{percentage}%</strong>
         {status.state === "paused" ? (
-          <button type="button" onClick={() => onResume(status.jobId)}>계속</button>
+          <button type="button" onClick={() => onResume(status.jobId)}>{t("계속")}</button>
         ) : (
-          <button type="button" onClick={() => onPause(status.jobId)}>일시정지</button>
+          <button type="button" onClick={() => onPause(status.jobId)}>{t("일시정지")}</button>
         )}
-        <button type="button" onClick={() => onCancel(status.jobId)}>취소</button>
+        <button type="button" onClick={() => onCancel(status.jobId)}>{t("취소")}</button>
       </div>
       <progress
         className="index-progress__bar"
-        aria-label="색인 진행률"
+        aria-label={t("색인 진행률")}
         max={total || 1}
         value={completed}
       />
@@ -67,6 +69,7 @@ export function IndexStatus({ status, onPause, onResume, onCancel }: Props) {
 }
 
 function IndexingReport({ status, onClose }: { status: IndexStatusModel; onClose: () => void }) {
+  const { t } = useI18n();
   const failures = status.errorCount;
   const successes = Math.max(0, status.completedFiles - failures);
 
@@ -88,30 +91,30 @@ function IndexingReport({ status, onClose }: { status: IndexStatusModel; onClose
     >
       <section className="index-report" role="dialog" aria-modal="true" aria-labelledby="index-report-title">
         <header>
-          <h2 id="index-report-title">색인 결과</h2>
-          <button type="button" className="icon-button" aria-label="색인 결과 닫기" onClick={onClose}>×</button>
+          <h2 id="index-report-title">{t("색인 결과")}</h2>
+          <button type="button" className="icon-button" aria-label={`${t("색인 결과")} ${t("닫기")}`} onClick={onClose}>×</button>
         </header>
         <div className="index-report__totals">
-          <div><strong className="is-success">{successes.toLocaleString()}</strong><span>성공</span></div>
-          <div><strong className="is-failure">{failures.toLocaleString()}</strong><span>실패</span></div>
+          <div><strong className="is-success">{successes.toLocaleString()}</strong><span>{t("성공")}</span></div>
+          <div><strong className="is-failure">{failures.toLocaleString()}</strong><span>{t("실패")}</span></div>
         </div>
         {failures > 0 && (
           <details className="index-report__errors">
-            <summary>오류 ({failures.toLocaleString()}건)</summary>
+            <summary>{t("오류")} ({failures.toLocaleString()}{t("건")})</summary>
             <div className="index-report__error-list">
               {status.errors.map((error, index) => (
                 <article key={`${error.code}-${error.fileName}-${index}`}>
-                  <strong>{error.fileName || "알 수 없는 파일"}</strong>
+                  <strong>{error.fileName || t("알 수 없는 파일")}</strong>
                   <span>{error.code}: {error.message}</span>
                 </article>
               ))}
               {failures > status.errors.length && (
-                <p>나머지 {(failures - status.errors.length).toLocaleString()}건은 진단 메뉴에서 확인할 수 있습니다.</p>
+                <p>{t("나머지")}{" "}{(failures - status.errors.length).toLocaleString()}{t("건은 진단 메뉴에서 확인할 수 있습니다.")}</p>
               )}
             </div>
           </details>
         )}
-        <footer><button type="button" onClick={onClose}>닫기</button></footer>
+        <footer><button type="button" onClick={onClose}>{t("닫기")}</button></footer>
       </section>
     </div>
   );

@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { removeBookmark, setBookmark } from "../../lib/ipc";
+import { useI18n } from "../../app/translations";
 
 interface BookmarkButtonProps {
   documentId: string;
@@ -16,6 +17,7 @@ export function BookmarkButton({
   setApi = setBookmark,
   removeApi = removeBookmark,
 }: BookmarkButtonProps) {
+  const { t } = useI18n();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -32,7 +34,7 @@ export function BookmarkButton({
         onChange(documentId, true);
       }
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "북마크를 변경하지 못했습니다.");
+      setError(caught instanceof Error ? caught.message : t("북마크를 변경하지 못했습니다."));
     } finally {
       setBusy(false);
     }
@@ -47,7 +49,7 @@ export function BookmarkButton({
         onClick={() => void toggle()}
         type="button"
       >
-        {bookmarked ? "북마크 제거" : "북마크 추가"}
+        {bookmarked ? t("북마크 제거") : t("북마크 추가")}
       </button>
       {error && <span className="preview-inline-error" role="alert">{error}</span>}
     </>

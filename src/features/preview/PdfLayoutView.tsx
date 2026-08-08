@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import { cancelPdfRead, getPdfBytes } from "../../lib/ipc";
+import { useI18n, type Translator } from "../../app/translations";
 
 const RESIZE_DEBOUNCE_MS = 80;
 const MAX_CANVAS_DIMENSION = 8192;
@@ -54,22 +55,22 @@ function nextRequestId() {
   return `pdf-${Date.now().toString(36)}-${requestSequence.toString(36)}`;
 }
 
-function safePdfError(caught: unknown) {
+function safePdfError(caught: unknown, t: Translator) {
   const code =
     caught && typeof caught === "object" && "code" in caught
       ? String(caught.code)
       : "";
   if (code === "SOURCE_PDF_TOO_LARGE") {
-    return "PDF 파일이 미리보기 크기 제한을 초과했습니다.";
+    return t("PDF 파일이 미리보기 크기 제한을 초과했습니다.");
   }
   if (code === "PDF_PASSWORD_REQUIRED" || code === "PDF_ENCRYPTED") {
-    return "암호화된 PDF는 원본 레이아웃으로 미리볼 수 없습니다.";
+    return t("암호화된 PDF는 원본 레이아웃으로 미리볼 수 없습니다.");
   }
   if (code === "SOURCE_NOT_PDF" || code === "PDF_INVALID" || code === "PDF_MALFORMED") {
-    return "손상되었거나 올바르지 않은 PDF입니다.";
+    return t("손상되었거나 올바르지 않은 PDF입니다.");
   }
   if (code === "SOURCE_NOT_FOUND" || code === "SOURCE_UNAVAILABLE") {
-    return "PDF 파일을 읽을 수 없습니다.";
+    return t("PDF 파일을 읽을 수 없습니다.");
   }
   if (code === "PDF_READ_CANCELLED" || code === "SOURCE_PDF_READ_CANCELLED") {
     return null;
@@ -79,13 +80,13 @@ function safePdfError(caught: unknown) {
       ? String(caught.name)
       : "";
   if (name === "PasswordException") {
-    return "암호화된 PDF는 원본 레이아웃으로 미리볼 수 없습니다.";
+    return t("암호화된 PDF는 원본 레이아웃으로 미리볼 수 없습니다.");
   }
   if (name === "InvalidPDFException" || name === "FormatError") {
-    return "손상되었거나 올바르지 않은 PDF입니다.";
+    return t("손상되었거나 올바르지 않은 PDF입니다.");
   }
   if (name === "MissingPDFException") {
-    return "PDF 파일을 읽을 수 없습니다.";
+    return t("PDF 파일을 읽을 수 없습니다.");
   }
   if (
     name === "AbortException" ||
@@ -96,7 +97,7 @@ function safePdfError(caught: unknown) {
   }
   return caught instanceof Error && caught.message
     ? caught.message
-    : "PDF를 불러오지 못했습니다.";
+    : t("PDF를 불러오지 못했습니다.");
 }
 
 interface PdfLayoutViewProps {
@@ -116,6 +117,7 @@ export function PdfLayoutView({
   cancelReadApi = cancelPdfRead,
   loader = loadLocalPdf,
 }: PdfLayoutViewProps) {
+  const { t } = useI18n();
   const container = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
   const pages = useRef(new Map<number, PdfPageLike>());
@@ -176,7 +178,7 @@ export function PdfLayoutView({
       })
       .catch((caught) => {
         if (!active) return;
-        const message = safePdfError(caught);
+        const message = safePdfError(caught, t);
         if (message) setError(message);
       })
       .finally(() => {
@@ -190,7 +192,7 @@ export function PdfLayoutView({
       pages.current.clear();
       void loadingTask?.destroy?.();
     };
-  }, [cancelReadApi, documentId, getBytesApi, loader]);
+  }, [cancelReadApi, documentId, getBytesApi, loader, t]);
 
   useEffect(() => {
     if (!document || !container.current || typeof ResizeObserver !== "function") return;
@@ -316,8 +318,8 @@ export function PdfLayoutView({
         }
         setError(
           caught instanceof Error && caught.message === "PDF_PAGE_RENDER_LIMIT"
-            ? "PDF 페이지가 안전한 표시 한도를 초과했습니다."
-            : safePdfError(caught) ?? "PDF 페이지 표시가 취소되었습니다.",
+            ? t("PDF 페이지가 안전한 표시 한도를 초과했습니다.")
+            : safePdfError(caught, t) ?? t("PDF 페이지 표시가 취소되었습니다."),
         );
       });
 
@@ -325,7 +327,7 @@ export function PdfLayoutView({
       active = false;
       renderTask?.cancel?.();
     };
-  }, [containerWidth, document, fitRevision, fitWidth, pageNumber, zoom]);
+  }, [containerWidth, document, fitRevision, fitWidth, pageNumber, t, zoom]);
 
   useEffect(() => {
     const handleFullscreenChange = () => {
@@ -350,7 +352,7 @@ export function PdfLayoutView({
     }
   };
 
-  if (loading) return <div className="preview-message">PDF 불러오는 중…</div>;
+  if (loading) return <div className="preview-message">{t("PDF 불러오는 중…")}</div>;
   if (error) return <div className="preview-message preview-message--error" role="alert">{error}</div>;
   if (!document) return null;
 
@@ -390,12 +392,12 @@ export function PdfLayoutView({
 
   return (
     <section className="pdf-layout-view" ref={container}>
-      <div className="pdf-controls" aria-label="PDF 보기 도구">
-        <button aria-label="이전 페이지" disabled={pageNumber <= 1} onClick={() => setPageNumber((page) => Math.max(1, page - 1))} type="button">‹</button>
+      <div className="pdf-controls" aria-label={t("PDF 보기 도구")}>
+        <button aria-label={t("이전 페이지")} disabled={pageNumber <= 1} onClick={() => setPageNumber((page) => Math.max(1, page - 1))} type="button">‹</button>
         <span>{pageNumber} / {document.numPages}</span>
-        <button aria-label="다음 페이지" disabled={pageNumber >= document.numPages} onClick={() => setPageNumber((page) => Math.min(document.numPages, page + 1))} type="button">›</button>
-        <button aria-label="축소" onClick={() => { setFitWidth(false); setZoom((value) => Math.max(0.25, value - 0.25)); }} type="button">−</button>
-        <button aria-label="확대" onClick={() => { setFitWidth(false); setZoom((value) => Math.min(4, value + 0.25)); }} type="button">+</button>
+        <button aria-label={t("다음 페이지")} disabled={pageNumber >= document.numPages} onClick={() => setPageNumber((page) => Math.min(document.numPages, page + 1))} type="button">›</button>
+        <button aria-label={t("축소")} onClick={() => { setFitWidth(false); setZoom((value) => Math.max(0.25, value - 0.25)); }} type="button">−</button>
+        <button aria-label={t("확대")} onClick={() => { setFitWidth(false); setZoom((value) => Math.min(4, value + 0.25)); }} type="button">+</button>
         <button
           aria-pressed={fitWidth}
           onClick={() => {
@@ -404,10 +406,10 @@ export function PdfLayoutView({
           }}
           type="button"
         >
-          너비 맞춤
+          {t("너비 맞춤")}
         </button>
         <button
-          aria-label={isFullscreen ? "원래 크기로" : "전체 화면"}
+          aria-label={isFullscreen ? t("원래 크기로") : t("전체 화면")}
           aria-pressed={isFullscreen}
           onClick={() => void toggleFullscreen()}
           type="button"
@@ -417,16 +419,16 @@ export function PdfLayoutView({
       </div>
       {findOpen && (
         <div className="document-find pdf-layout-find">
-          <input aria-label="원본에서 찾기" onChange={(event) => { setQuery(event.target.value); setActiveMatch(0); }} placeholder="원본에서 찾기" type="search" value={query} />
+          <input aria-label={t("원본에서 찾기")} onChange={(event) => { setQuery(event.target.value); setActiveMatch(0); }} placeholder={t("원본에서 찾기")} type="search" value={query} />
           <span aria-live="polite">{totalMatches ? `${activeMatch + 1} / ${totalMatches}` : "0 / 0"}</span>
-          <button aria-label="이전 일치" onClick={() => moveMatch(-1)} type="button">↑</button>
-          <button aria-label="다음 일치" onClick={() => moveMatch(1)} type="button">↓</button>
-          <button aria-label="찾기 닫기" onClick={() => setFindOpen(false)} type="button">×</button>
+          <button aria-label={t("이전 일치")} onClick={() => moveMatch(-1)} type="button">↑</button>
+          <button aria-label={t("다음 일치")} onClick={() => moveMatch(1)} type="button">↓</button>
+          <button aria-label={t("찾기 닫기")} onClick={() => setFindOpen(false)} type="button">×</button>
         </div>
       )}
       <div className="pdf-canvas-wrap">
         <div className="pdf-page-surface">
-          <canvas aria-label={`PDF ${pageNumber}페이지`} ref={canvas} />
+          <canvas aria-label={`PDF ${pageNumber}${t("페이지")}`} ref={canvas} />
           <div className="pdf-text-layer" aria-hidden="true">
             {textItems.map((item, index) => (
               <span key={index} style={{ left: item.left, top: item.top, width: item.width, fontSize: item.fontSize }}>{highlightText(item.text)}</span>

@@ -33,7 +33,13 @@ import {
 } from "../lib/ipc";
 import "../styles/app.css";
 import { Header } from "./Header";
-import { defaultLocale, productTranslations, type Locale } from "./translations";
+import {
+  createTranslator,
+  defaultLocale,
+  I18nProvider,
+  type Locale,
+  useI18n,
+} from "./translations";
 
 const LEFT_PANE_KEY = "everyfile.ui.left-pane-width";
 const RIGHT_PANE_KEY = "everyfile.ui.right-pane-width";
@@ -50,14 +56,15 @@ const COMPACT_HEADER_BREAKPOINT = 560;
 const APP_VERSION = "v1.0.1";
 const UPDATE_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
-function relativeSearchTime(value: string) {
+function relativeSearchTime(value: string, locale: Locale = defaultLocale) {
   const timestamp = new Date(value).getTime();
-  if (!Number.isFinite(timestamp)) return "날짜 없음";
+  if (!Number.isFinite(timestamp)) return locale === "en" ? "Unknown date" : "날짜 없음";
   const elapsed = Math.max(0, Date.now() - timestamp);
-  if (elapsed < 60_000) return "방금";
-  if (elapsed < 60 * 60_000) return `${Math.floor(elapsed / 60_000)}분 전`;
-  if (elapsed < 24 * 60 * 60_000) return `${Math.floor(elapsed / (60 * 60_000))}시간 전`;
-  return `${Math.floor(elapsed / (24 * 60 * 60_000))}일 전`;
+  const formatter = new Intl.RelativeTimeFormat(locale === "en" ? "en-US" : "ko-KR", { numeric: "auto" });
+  if (elapsed < 60_000) return formatter.format(0, "second");
+  if (elapsed < 60 * 60_000) return formatter.format(-Math.floor(elapsed / 60_000), "minute");
+  if (elapsed < 24 * 60 * 60_000) return formatter.format(-Math.floor(elapsed / (60 * 60_000)), "hour");
+  return formatter.format(-Math.floor(elapsed / (24 * 60 * 60_000)), "day");
 }
 
 interface SmartFolderRecord {
@@ -212,6 +219,43 @@ function isTextEntryTarget(target: EventTarget | null) {
   );
 }
 
+function SidebarTrashIcon() {
+  return (
+    <svg
+      className="sidebar-trash-icon"
+      viewBox="0 0 20 20"
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+      focusable="false"
+      aria-hidden="true"
+    >
+      <path
+        d="M5.1 6.2h9.8l-.55 9.05a1.55 1.55 0 0 1-1.55 1.45H7.2a1.55 1.55 0 0 1-1.55-1.45L5.1 6.2Z"
+        fill="currentColor"
+        fillOpacity="0.18"
+        stroke="currentColor"
+        strokeWidth="1.15"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M3.8 5.35h12.4M7.5 3.55h5a.9.9 0 0 1 .9.9v.9H6.6v-.9a.9.9 0 0 1 .9-.9Z"
+        stroke="currentColor"
+        strokeWidth="1.15"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M8.1 8.3v5.35M11.9 8.3v5.35"
+        stroke="currentColor"
+        strokeWidth="0.95"
+        strokeLinecap="round"
+        opacity="0.8"
+      />
+      <path d="M15.8 3.1h1.1" stroke="var(--color-accent)" strokeWidth="1.15" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 function FolderPane({
   folders,
   onAddFolder,
@@ -233,6 +277,7 @@ function FolderPane({
   historyRefreshToken?: number;
   bookmarkRefreshToken?: number;
 }) {
+  const { locale, t } = useI18n();
   const [history, setHistory] = useState<SearchHistoryRecord[]>([]);
   const [historyError, setHistoryError] = useState("");
   const [bookmarks, setBookmarks] = useState<BookmarkSummary[]>([]);
@@ -278,21 +323,21 @@ function FolderPane({
         const current = await listSearchHistory(3, 0);
         if (current.length > 0) {
           setHistory(current);
-          setHistoryError("최근 검색을 삭제하지 못했습니다.");
+          setHistoryError(t("검색 히스토리를 삭제하지 못했습니다."));
         }
       }
     } catch {
       const current = await listSearchHistory(3, 0).catch(() => previous);
       setHistory(current);
-      setHistoryError("최근 검색을 삭제하지 못했습니다.");
+      setHistoryError(t("검색 히스토리를 삭제하지 못했습니다."));
     }
   };
 
   const addSmartFolder = () => {
     try {
       const preset = JSON.parse(
-        window.localStorage.getItem("everyfile.search.preset") ??
-          window.localStorage.getItem("everyfile.search.current") ??
+        window.localStorage.getItem("everyfile.search.current") ??
+          window.localStorage.getItem("everyfile.search.preset") ??
           "null",
       ) as { query?: unknown } | null;
       const query = typeof preset?.query === "string" ? preset.query.trim() : "";
@@ -368,13 +413,13 @@ function FolderPane({
   );
 
   return (
-    <aside className="folder-pane" aria-label="등록 폴더 / Indexed folders">
+    <aside className="folder-pane" aria-label={locale === "en" ? t("색인된 폴더") : "등록 폴더 / Indexed folders"}>
       <div className="sidebar-scroll">
         {section(
-          "색인된 폴더",
+          t("색인된 폴더"),
           folders.length,
           folders.length === 0 ? (
-            <p className="sidebar-empty">선택한 폴더만 이 PC에서 색인합니다.</p>
+            <p className="sidebar-empty">{t("선택한 폴더만 이 PC에서 색인합니다.")}</p>
           ) : (
             <div className="folder-list">
               {folders.map((folder) => (
@@ -386,7 +431,7 @@ function FolderPane({
                     <button
                       type="button"
                       className="folder-menu-trigger"
-                      aria-label={`${folder.displayName} 폴더 메뉴`}
+                      aria-label={`${folder.displayName} ${t("폴더")} 메뉴`}
                       aria-expanded={folderMenu === folder.id}
                       aria-haspopup="menu"
                       onClick={() => setFolderMenu((current) => current === folder.id ? null : folder.id)}
@@ -394,17 +439,17 @@ function FolderPane({
                     {folderMenu === folder.id && (
                       <div className="folder-context-menu" role="menu">
                         <button role="menuitem" type="button" onClick={() => toggleFavorite(folder.id)}>
-                          <span aria-hidden="true">☆</span>{favoriteFolders.has(folder.id) ? "즐겨찾기 해제" : "즐겨찾기 추가"}
+                          <span aria-hidden="true">☆</span>{favoriteFolders.has(folder.id) ? t("즐겨찾기 해제") : t("즐겨찾기 추가")}
                         </button>
                         <button role="menuitem" type="button" onClick={() => { setFolderMenu(null); onOpenFolder?.(folder.id); }} disabled={!onOpenFolder}>
-                          <span aria-hidden="true">▱</span>탐색기에서 열기
+                          <span aria-hidden="true">▱</span>{t("탐색기에서 열기")}
                         </button>
                         <button role="menuitem" type="button" onClick={() => { setFolderMenu(null); onReindexFolder?.(folder.id); }} disabled={!onReindexFolder}>
-                          <span aria-hidden="true">↻</span>재인덱싱
+                          <span aria-hidden="true">↻</span>{t("재인덱싱")}
                         </button>
                         <div className="folder-context-menu__separator" role="separator" />
                         <button className="is-danger" role="menuitem" type="button" onClick={() => { setFolderMenu(null); setRemoveCandidate(folder); }} disabled={!onRemoveFolder}>
-                          <span aria-hidden="true">♲</span>폴더 제거
+                          <span aria-hidden="true">♲</span>{t("폴더 제거")}
                         </button>
                       </div>
                     )}
@@ -413,13 +458,13 @@ function FolderPane({
               ))}
             </div>
           ),
-          <button type="button" className="sidebar-section__action" aria-label="폴더 추가" onClick={(event) => { event.preventDefault(); onAddFolder?.(); }} disabled={!onAddFolder}>＋</button>,
+          <button type="button" className="sidebar-section__action" aria-label={t("폴더 추가")} onClick={(event) => { event.preventDefault(); onAddFolder?.(); }} disabled={!onAddFolder}>＋</button>,
         )}
         {section(
-          "스마트 폴더",
+          t("스마트 폴더"),
           smartFolders.length,
           smartFolders.length === 0 ? (
-            <p className="sidebar-helper"><span aria-hidden="true">⌕</span> 자주 쓰는 검색 조건을 저장하면 여기서 한 번에 다시 실행할 수 있어요.</p>
+            <p className="sidebar-helper"><span aria-hidden="true">⌕</span> {t("자주 쓰는 검색 조건을 저장하면 여기서 한 번에 다시 실행할 수 있어요.")}</p>
           ) : (
             <ul className="sidebar-link-list">
               {smartFolders.map((item) => (
@@ -430,8 +475,8 @@ function FolderPane({
                   <button
                     type="button"
                     className="sidebar-link-list__remove"
-                    aria-label={`${item.name} 스마트 폴더 삭제`}
-                    title="스마트 폴더 삭제"
+                    aria-label={`${item.name} ${t("스마트 폴더 삭제")}`}
+                    title={t("스마트 폴더 삭제")}
                     onClick={(event) => {
                       event.preventDefault();
                       event.stopPropagation();
@@ -442,29 +487,29 @@ function FolderPane({
               ))}
             </ul>
           ),
-          <button type="button" className="sidebar-section__action" aria-label="스마트 폴더 추가" onClick={(event) => { event.preventDefault(); event.stopPropagation(); addSmartFolder(); }}>＋</button>,
+          <button type="button" className="sidebar-section__action" aria-label={t("스마트 폴더 추가")} onClick={(event) => { event.preventDefault(); event.stopPropagation(); addSmartFolder(); }}>＋</button>,
         )}
         {section(
-          "최근 검색",
+          t("최근 검색"),
           history.length,
           history.length === 0 ? (
-            <p className="sidebar-empty">최근 검색이 없습니다.</p>
+            <p className="sidebar-empty">{t("최근 검색이 없습니다.")}</p>
           ) : (
             <ul className="sidebar-link-list">
               {history.map((item) => (
                 <li key={item.id}>
-                  <button type="button" title={item.query} onClick={() => onSearchHistory?.(item.query)}><span aria-hidden="true">⌕</span><span>{item.query}</span><time dateTime={item.searchedAt}>{relativeSearchTime(item.searchedAt)}</time></button>
+                  <button type="button" title={item.query} onClick={() => onSearchHistory?.(item.query)}><span aria-hidden="true">⌕</span><span>{item.query}</span><time dateTime={item.searchedAt}>{relativeSearchTime(item.searchedAt, locale)}</time></button>
                 </li>
               ))}
             </ul>
           ),
-          <button type="button" className="sidebar-section__action" aria-label="최근 검색 삭제" onClick={(event) => { event.preventDefault(); event.stopPropagation(); void clearRecentHistory(); }}><span className="sidebar-trash-icon" aria-hidden="true" /></button>,
+          <button type="button" className="sidebar-section__action" aria-label={t("최근 검색 삭제")} onClick={(event) => { event.preventDefault(); event.stopPropagation(); void clearRecentHistory(); }}><SidebarTrashIcon /></button>,
         )}
         {section(
-          "북마크",
+          t("북마크"),
           bookmarks.length,
           bookmarks.length === 0 ? (
-            <p className="sidebar-empty">북마크가 없습니다.</p>
+            <p className="sidebar-empty">{t("북마크가 없습니다.")}</p>
           ) : (
             <ul className="sidebar-link-list">
               {bookmarks.map((bookmark) => (
@@ -491,11 +536,11 @@ function FolderPane({
       {removeCandidate && (
         <div className="confirmation-backdrop" role="presentation">
           <section className="folder-remove-dialog" role="alertdialog" aria-modal="true" aria-labelledby="folder-remove-title">
-            <h2 id="folder-remove-title">색인 폴더를 제거할까요?</h2>
-            <p><strong>{removeCandidate.displayName}</strong> 폴더의 색인 정보만 제거하며 원본 파일은 삭제하지 않습니다.</p>
+            <h2 id="folder-remove-title">{t("색인 폴더를 제거할까요?")}</h2>
+            <p><strong>{removeCandidate.displayName}</strong> {t("폴더의 색인 정보만 제거하며 원본 파일은 삭제하지 않습니다.")}</p>
             <div>
-              <button type="button" onClick={() => setRemoveCandidate(null)}>취소</button>
-              <button className="is-danger" type="button" onClick={() => { onRemoveFolder?.(removeCandidate.id); setRemoveCandidate(null); }}>폴더 제거</button>
+              <button type="button" onClick={() => setRemoveCandidate(null)}>{t("취소")}</button>
+              <button className="is-danger" type="button" onClick={() => { onRemoveFolder?.(removeCandidate.id); setRemoveCandidate(null); }}>{t("폴더 제거")}</button>
             </div>
           </section>
         </div>
@@ -570,7 +615,8 @@ export function App({
     RIGHT_PANE_MAX,
   );
   const [workspaceRef, workspaceWidth] = useWorkspaceWidth();
-  const { tagline } = productTranslations[locale];
+  const t = createTranslator(locale);
+  const tagline = t("파일을 찾는 가장 빠른 방법");
   const previewRequested =
     rightPanelOpen &&
     (workspaceWidth > PREVIEW_BREAKPOINT || !leftPanelOpen);
@@ -692,7 +738,8 @@ export function App({
   }, []);
 
   return (
-    <div className="app-shell">
+    <I18nProvider locale={locale}>
+      <div className="app-shell">
       <Header
         compact={compactHeader}
         tagline={tagline}
@@ -733,7 +780,7 @@ export function App({
         <ResizablePane
           className="left-pane-container"
           hidden={!leftPaneVisible}
-          label="폴더 패널 크기 조절 / Resize folder pane"
+          label={t("폴더 패널 크기 조절 / Resize folder pane")}
           maxWidth={leftMaximumForLayout}
           minWidth={LEFT_PANE_MIN}
           onWidthChange={setLeftWidth}
@@ -761,9 +808,10 @@ export function App({
           />
         </ResizablePane>
 
-        <section className="center-pane" aria-label="검색 작업 공간 / Search workspace">
+        <section className="center-pane" aria-label={t("검색 작업 공간 / Search workspace")}>
           <SearchWorkspace
             folders={folders}
+            onAddFolder={onAddFolder}
             historyQuery={historyQuery}
             historyRequest={historyRequest}
             homeRequest={homeRequest}
@@ -773,12 +821,12 @@ export function App({
               if (!appSettings?.aiEnabled) {
                 setInteractionNotice({
                   kind: "info",
-                  text: "설정에서 AI 기능을 먼저 활성화하세요.",
+                  text: t("설정에서 AI 기능을 먼저 활성화하세요."),
                 });
               } else if (!workspaceSelectedDocumentId) {
                 setInteractionNotice({
                   kind: "info",
-                  text: "Ask Everyfile을 사용하려면 먼저 검색 결과에서 문서를 선택하세요.",
+                  text: t("Ask Everyfile을 사용하려면 먼저 검색 결과에서 문서를 선택하세요."),
                 });
               } else {
                 setInteractionNotice(null);
@@ -802,7 +850,7 @@ export function App({
         <ResizablePane
           className="preview-pane-container"
           hidden={!previewVisible}
-          label="미리보기 패널 크기 조절 / Resize preview pane"
+          label={t("미리보기 패널 크기 조절 / Resize preview pane")}
           maxWidth={rightMaximumForLayout}
           minWidth={RIGHT_PANE_MIN}
           onWidthChange={setRightWidth}
@@ -854,14 +902,15 @@ export function App({
           reportJobIds={reportJobIds}
           idleContent={
             <div className="status-summary" role="status" aria-live="polite">
-              <span>색인 문서 {indexedDocumentCount.toLocaleString()}개</span>
-              <span>폴더 {folders.length.toLocaleString()}개</span>
-              <span>대기열 {queueLabels[queueState]}</span>
+              <span>{t("색인 문서")} {indexedDocumentCount.toLocaleString()}{t("개")}</span>
+              <span>{t("폴더")} {folders.length.toLocaleString()}{t("개")}</span>
+              <span>{t("대기열")} {t(queueLabels[queueState])}</span>
               <span className="app-version">{APP_VERSION}</span>
             </div>
           }
         />
       </footer>
-    </div>
+      </div>
+    </I18nProvider>
   );
 }

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { IconButton } from "../components/IconButton";
 import { BrandMark } from "../components/BrandMark";
+import { useI18n } from "./translations";
 
 interface HeaderProps {
   compact: boolean;
@@ -113,6 +114,7 @@ export function Header({
   onSettings,
   onStatistics,
 }: HeaderProps) {
+  const { t } = useI18n();
   const [overflowOpen, setOverflowOpen] = useState(false);
   const overflowRoot = useRef<HTMLDivElement>(null);
   const moreTrigger = useRef<HTMLButtonElement>(null);
@@ -160,19 +162,25 @@ export function Header({
         <h1>EveryFile</h1>
         {!compact && <p>{tagline}</p>}
       </div>
-      <nav className="header-actions" aria-label="주요 메뉴 / Main menu">
+      <nav className="header-actions" aria-label={t("주요 메뉴 / Main menu")}>
         <IconButton
-          label="홈 / Home"
+          label={t("홈 / Home")}
           onClick={onHome}
           icon={
             <HomeIcon />
           }
         />
+        <IconButton
+          label={t("폴더 추가 / Add folder")}
+          disabled={!onAddFolder}
+          onClick={onAddFolder}
+          icon={<AddFolderIcon />}
+        />
         {compact ? (
           <div ref={overflowRoot} className="header-overflow">
             <IconButton
               ref={moreTrigger}
-              label="더보기 / More"
+              label={t("더보기 / More")}
               aria-expanded={overflowOpen}
               aria-controls="header-overflow-menu"
               onClick={() => setOverflowOpen((open) => !open)}
@@ -183,35 +191,28 @@ export function Header({
                 id="header-overflow-menu"
                 className="header-overflow-menu"
                 role="group"
-                aria-label="추가 메뉴 / More actions"
+                aria-label={t("추가 메뉴 / More actions")}
               >
                 <IconButton
-                  label={`${leftPanelOpen ? "왼쪽 패널 닫기" : "왼쪽 패널 열기"} / Toggle left panel`}
+                  label={`${t(leftPanelOpen ? "왼쪽 패널 닫기" : "왼쪽 패널 열기")} / Toggle left panel`}
                   aria-pressed={leftPanelOpen}
                   onClick={() => runMenuAction(onToggleLeftPanel)}
                   icon={<PanelIcon side="left" />}
                 />
                 <IconButton
-                  label={`${rightPanelOpen ? "오른쪽 패널 닫기" : "오른쪽 패널 열기"} / Toggle right panel`}
+                  label={`${t(rightPanelOpen ? "오른쪽 패널 닫기" : "오른쪽 패널 열기")} / Toggle right panel`}
                   aria-pressed={rightPanelOpen}
                   onClick={() => runMenuAction(onToggleRightPanel)}
                   icon={<PanelIcon side="right" />}
                 />
                 <IconButton
-                  label="통계 / Statistics"
+                  label={t("통계 / Statistics")}
                   disabled={!onStatistics}
                   onClick={() => runMenuAction(onStatistics)}
                   icon={<StatisticsIcon />}
                 />
                 <IconButton
-                  label="폴더 추가 / Add folder"
-                  disabled={!onAddFolder}
-                  onClick={() => runMenuAction(onAddFolder)}
-                  tone="accent"
-                  icon={<AddFolderIcon />}
-                />
-                <IconButton
-                  label="설정 / Settings"
+                  label={t("설정 / Settings")}
                   disabled={!onSettings}
                   onClick={() => runMenuAction(onSettings)}
                   icon={<SettingsIcon />}
@@ -222,32 +223,25 @@ export function Header({
         ) : (
           <>
             <IconButton
-              label={`${leftPanelOpen ? "왼쪽 패널 닫기" : "왼쪽 패널 열기"} / Toggle left panel`}
+              label={`${t(leftPanelOpen ? "왼쪽 패널 닫기" : "왼쪽 패널 열기")} / Toggle left panel`}
               aria-pressed={leftPanelOpen}
               onClick={onToggleLeftPanel}
               icon={<PanelIcon side="left" />}
             />
             <IconButton
-              label={`${rightPanelOpen ? "오른쪽 패널 닫기" : "오른쪽 패널 열기"} / Toggle right panel`}
+              label={`${t(rightPanelOpen ? "오른쪽 패널 닫기" : "오른쪽 패널 열기")} / Toggle right panel`}
               aria-pressed={rightPanelOpen}
               onClick={onToggleRightPanel}
               icon={<PanelIcon side="right" />}
             />
             <IconButton
-              label="통계 / Statistics"
+              label={t("통계 / Statistics")}
               disabled={!onStatistics}
               onClick={onStatistics}
               icon={<StatisticsIcon />}
             />
             <IconButton
-              label="폴더 추가 / Add folder"
-              disabled={!onAddFolder}
-              onClick={onAddFolder}
-              tone="accent"
-              icon={<AddFolderIcon />}
-            />
-            <IconButton
-              label="설정 / Settings"
+              label={t("설정 / Settings")}
               disabled={!onSettings}
               onClick={onSettings}
               icon={<SettingsIcon />}

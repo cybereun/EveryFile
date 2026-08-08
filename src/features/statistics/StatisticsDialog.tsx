@@ -12,6 +12,7 @@ import type {
   StatisticsSearchFilter,
 } from "../../lib/types";
 import { SearchHistoryTab } from "./SearchHistoryTab";
+import { useI18n } from "../../app/translations";
 
 type StatisticsTab = "documents" | "history";
 
@@ -66,14 +67,14 @@ function parseDateValue(value: string) {
   return Number.isFinite(parsed.getTime()) ? parsed : null;
 }
 
-function formatModifiedDate(value: string) {
+function formatModifiedDate(value: string, locale: "ko" | "en" = "ko") {
   const parsed = parseDateValue(value);
   return parsed
-    ? parsed.toLocaleString("ko-KR", {
+    ? parsed.toLocaleString(locale === "en" ? "en-US" : "ko-KR", {
         dateStyle: "medium",
         timeStyle: "short",
       })
-    : "날짜 없음";
+    : locale === "en" ? "Unknown date" : "날짜 없음";
 }
 
 function formatBytes(encodedBytes: string) {
@@ -116,18 +117,19 @@ function DistributionTable({
   label: string;
   onSelect: (bucket: StatisticsBucket) => void;
 }) {
+  const { t } = useI18n();
   const total = buckets.reduce((sum, bucket) => sum + decimal(bucket.count), 0n);
   return (
     <div className="extension-distribution">
       <div className="donut-chart" style={{ background: donutGradient(buckets) }} aria-hidden="true">
-        <div><strong>{total.toLocaleString("ko-KR")}</strong><span>총 문서</span></div>
+        <div><strong>{total.toLocaleString("ko-KR")}</strong><span>{t("총 문서")}</span></div>
       </div>
       <table className="data-table distribution-table" aria-label={label}>
-        <thead className="sr-only"><tr><th scope="col">구분</th><th scope="col">문서 수</th><th scope="col">비율</th></tr></thead>
+        <thead className="sr-only"><tr><th scope="col">{t("구분")}</th><th scope="col">{t("문서 수")}</th><th scope="col">{t("비율")}</th></tr></thead>
         <tbody>
           {buckets.slice(0, 10).map((bucket, index) => (
             <tr key={bucket.label}>
-              <th scope="row"><button type="button" className="chart-segment" aria-label={`${bucket.label.toUpperCase()} 문서 ${bucket.count}개 검색`} onClick={() => onSelect(bucket)}>
+              <th scope="row"><button type="button" className="chart-segment" aria-label={`${bucket.label.toUpperCase()} ${t("문서 {count}개 검색", { count: bucket.count })}`} onClick={() => onSelect(bucket)}>
                 <span className="chart-swatch" style={{ background: CHART_COLORS[index % CHART_COLORS.length] }} aria-hidden="true" />{bucket.label.toUpperCase()}
               </button></th>
               <td>{formatInteger(bucket.count)}</td>
@@ -151,6 +153,7 @@ export function StatisticsDialog({
   onSearchHistory,
   registeredFolderIds,
 }: StatisticsDialogProps) {
+  const { locale, t } = useI18n();
   const [activeTab, setActiveTab] = useState<StatisticsTab>("documents");
   const [statistics, setStatistics] = useState<DocumentStatistics | null>(null);
   const [error, setError] = useState("");
@@ -161,9 +164,9 @@ export function StatisticsDialog({
     if (!open) return;
     setError("");
     void loadStatistics().then(setStatistics).catch(() => {
-      setError("통계를 불러오지 못했습니다.");
+      setError(t("통계를 불러오지 못했습니다."));
     });
-  }, [loadStatistics, open]);
+  }, [loadStatistics, open, t]);
 
   if (!open) return null;
 
@@ -177,13 +180,13 @@ export function StatisticsDialog({
         aria-labelledby="statistics-title"
       >
         <header className="dialog-header">
-          <h2 id="statistics-title">통계</h2>
-          <button type="button" aria-label="통계 닫기" onClick={close}>×</button>
+          <h2 id="statistics-title">{t("통계")}</h2>
+          <button type="button" aria-label={`${t("통계")} ${t("닫기")}`} onClick={close}>×</button>
         </header>
         <div
           className="dialog-tabs"
           role="tablist"
-          aria-label="통계 항목"
+          aria-label={t("통계 항목")}
           onKeyDown={(event) => {
             if (!["ArrowRight", "ArrowLeft"].includes(event.key)) return;
             event.preventDefault();
@@ -203,7 +206,7 @@ export function StatisticsDialog({
             tabIndex={activeTab === "documents" ? 0 : -1}
             onClick={() => setActiveTab("documents")}
           >
-            문서 통계
+            {t("문서 통계")}
           </button>
           <button
             type="button"
@@ -214,7 +217,7 @@ export function StatisticsDialog({
             tabIndex={activeTab === "history" ? 0 : -1}
             onClick={() => setActiveTab("history")}
           >
-            검색 히스토리
+            {t("검색 히스토리")}
           </button>
         </div>
         <div
@@ -227,9 +230,9 @@ export function StatisticsDialog({
           {activeTab === "history" ? (
             <>
               {statistics && (
-                <section className="search-statistics-summary" aria-label="검색 통계 요약">
-                  <div><strong>{formatInteger(statistics.totalSearches)}</strong><span>총 검색 횟수</span></div>
-                  <div><strong>{formatInteger(statistics.uniqueSearchTerms)}</strong><span>고유 검색어</span></div>
+                <section className="search-statistics-summary" aria-label={t("검색 통계 요약")}>
+                  <div><strong>{formatInteger(statistics.totalSearches)}</strong><span>{t("총 검색 횟수")}</span></div>
+                  <div><strong>{formatInteger(statistics.uniqueSearchTerms)}</strong><span>{t("고유 검색어")}</span></div>
                 </section>
               )}
               <SearchHistoryTab
@@ -241,20 +244,20 @@ export function StatisticsDialog({
               />
             </>
           ) : !statistics ? (
-            <p role="status">{error || "문서 통계를 계산하는 중…"}</p>
+            <p role="status">{error || t("문서 통계를 계산하는 중…")}</p>
           ) : (
             <>
-              <section className="statistics-summary" aria-label="문서 통계 요약">
-                <div><strong>{formatInteger(statistics.totalDocuments)}</strong><span>총 문서</span></div>
-                <div><strong>{formatInteger(statistics.indexedDocuments)}</strong><span>색인 완료</span></div>
-                <div><strong>{formatBytes(statistics.totalBytes)}</strong><span>총 크기</span></div>
+              <section className="statistics-summary" aria-label={t("문서 통계 요약")}>
+                <div><strong>{formatInteger(statistics.totalDocuments)}</strong><span>{t("총 문서")}</span></div>
+                <div><strong>{formatInteger(statistics.indexedDocuments)}</strong><span>{t("색인 완료")}</span></div>
+                <div><strong>{formatBytes(statistics.totalBytes)}</strong><span>{t("총 크기")}</span></div>
               </section>
               <div className="statistics-grid statistics-grid--stacked">
                 <section>
-                  <h3>파일 유형별 분포</h3>
+                  <h3>{t("파일 유형별 분포")}</h3>
                   <DistributionTable
                     buckets={statistics.byExtension}
-                    label="파일 유형별 문서 수"
+                    label={t("파일 유형별 문서 수")}
                     onSelect={(bucket) => {
                       onApplyFilter?.(
                         bucket.label === "(none)"
@@ -266,9 +269,9 @@ export function StatisticsDialog({
                   />
                 </section>
                 <section>
-                  <h3>폴더별 문서 수</h3>
-                  <table className="data-table" aria-label="폴더별 문서 수">
-                    <thead><tr><th scope="col">폴더</th><th scope="col">문서 수</th></tr></thead>
+                  <h3>{t("폴더별 문서 수")}</h3>
+                  <table className="data-table" aria-label={t("폴더별 문서 수")}>
+                    <thead><tr><th scope="col">{t("폴더")}</th><th scope="col">{t("문서 수")}</th></tr></thead>
                     <tbody>
                       {statistics.byFolder
                         .filter(
@@ -314,9 +317,9 @@ export function StatisticsDialog({
               </div>
               <div className="statistics-grid">
                 <section>
-                  <h3>연도별 문서 수</h3>
-                  <table className="data-table" aria-label="연도별 문서 수">
-                    <thead><tr><th scope="col">연도</th><th scope="col">문서 수</th></tr></thead>
+                  <h3>{t("연도별 문서 수")}</h3>
+                  <table className="data-table" aria-label={t("연도별 문서 수")}>
+                    <thead><tr><th scope="col">{t("연도")}</th><th scope="col">{t("문서 수")}</th></tr></thead>
                     <tbody>
                       {statistics.byYear.map((bucket) => (
                         <tr key={bucket.label}>
@@ -351,9 +354,9 @@ export function StatisticsDialog({
                   </table>
                 </section>
                 <section>
-                  <h3>문서 처리 상태</h3>
-                  <table className="data-table" aria-label="문서 처리 상태">
-                    <thead><tr><th scope="col">상태</th><th scope="col">문서 수</th></tr></thead>
+                  <h3>{t("문서 처리 상태")}</h3>
+                  <table className="data-table" aria-label={t("문서 처리 상태")}>
+                    <thead><tr><th scope="col">{t("상태")}</th><th scope="col">{t("문서 수")}</th></tr></thead>
                     <tbody>
                       {statistics.parseStates.map((bucket) => (
                         <tr key={bucket.label}>
@@ -367,23 +370,23 @@ export function StatisticsDialog({
               </div>
               <div className="statistics-grid statistics-grid--rankings">
                 <section>
-                  <h3>최근 수정된 문서</h3>
+                  <h3>{t("최근 수정된 문서")}</h3>
                   <ol className="document-ranking">
                     {statistics.recentlyModified.map((document) => (
                       <li key={document.documentId}>
                         <span>{document.fileName}</span>
                         <time
                           dateTime={parseDateValue(document.modifiedAt)?.toISOString()}
-                          title={formatModifiedDate(document.modifiedAt)}
+                          title={formatModifiedDate(document.modifiedAt, locale)}
                         >
-                          {formatModifiedDate(document.modifiedAt)}
+                          {formatModifiedDate(document.modifiedAt, locale)}
                         </time>
                       </li>
                     ))}
                   </ol>
                 </section>
                 <section>
-                  <h3>가장 큰 문서</h3>
+                  <h3>{t("가장 큰 문서")}</h3>
                   <ol className="document-ranking">
                     {statistics.largestDocuments.map((document) => (
                       <li key={document.documentId}>
@@ -398,8 +401,8 @@ export function StatisticsDialog({
           )}
         </div>
         <footer className="dialog-footer">
-          <span>통계와 검색 기록은 이 PC에만 저장됩니다.</span>
-          <button type="button" onClick={close}>닫기</button>
+          <span>{t("통계와 검색 기록은 이 PC에만 저장됩니다.")}</span>
+          <button type="button" onClick={close}>{t("닫기")}</button>
         </footer>
       </div>
     </div>

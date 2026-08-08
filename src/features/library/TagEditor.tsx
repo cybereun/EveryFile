@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { createTag, setDocumentTags } from "../../lib/ipc";
 import type { Tag } from "../../lib/types";
+import { useI18n } from "../../app/translations";
 
 interface TagEditorProps {
   documentId: string;
@@ -23,6 +24,7 @@ export function TagEditor({
   onOpenChange,
   showTrigger = true,
 }: TagEditorProps) {
+  const { t } = useI18n();
   const [internalOpen, setInternalOpen] = useState(false);
   const [name, setName] = useState("");
   const [color, setColor] = useState("terracotta");
@@ -53,7 +55,7 @@ export function TagEditor({
       onChange(documentId, saved);
       setOpen(false);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "태그를 추가하지 못했습니다.");
+      setError(caught instanceof Error ? caught.message : t("태그를 추가하지 못했습니다."));
     } finally {
       setBusy(false);
     }
@@ -62,43 +64,43 @@ export function TagEditor({
   return (
     <>
       {showTrigger && (
-        <button onClick={() => setOpen(true)} type="button">태그 추가</button>
+        <button onClick={() => setOpen(true)} type="button">{t("태그 추가")}</button>
       )}
       {isOpen && (
-        <div aria-label="태그 편집" className="tag-editor" role="dialog">
+        <div aria-label={t("태그 편집")} className="tag-editor" role="dialog">
           <div className="tag-editor__heading">
-            <strong>태그 추가</strong>
-            <button aria-label="태그 편집 닫기" onClick={() => setOpen(false)} type="button">×</button>
+            <strong>{t("태그 추가")}</strong>
+            <button aria-label={t("태그 편집 닫기")} onClick={() => setOpen(false)} type="button">×</button>
           </div>
           <label>
-            새 태그 이름
+            {t("새 태그 이름")}
             <input
-              aria-label="새 태그 이름"
+              aria-label={t("새 태그 이름")}
               maxLength={64}
               onChange={(event) => setName(event.target.value)}
               value={name}
             />
           </label>
           <label>
-            색상
+            {t("색상")}
             <select
-              aria-label="태그 색상"
+              aria-label={t("태그 색상")}
               onChange={(event) => setColor(event.target.value)}
               value={color}
             >
-              <option value="terracotta">테라코타</option>
-              <option value="amber">앰버</option>
-              <option value="brown">브라운</option>
-              <option value="sand">샌드</option>
-              <option value="rose">로즈</option>
-              <option value="slate">슬레이트</option>
-              <option value="blue">블루</option>
-              <option value="violet">바이올렛</option>
+              <option value="terracotta">{t("테라코타")}</option>
+              <option value="amber">{t("앰버")}</option>
+              <option value="brown">{t("브라운")}</option>
+              <option value="sand">{t("샌드")}</option>
+              <option value="rose">{t("로즈")}</option>
+              <option value="slate">{t("슬레이트")}</option>
+              <option value="blue">{t("블루")}</option>
+              <option value="violet">{t("바이올렛")}</option>
             </select>
           </label>
           {error && <p role="alert">{error}</p>}
           <button disabled={busy || !name.trim()} onClick={() => void createAndAttach()} type="button">
-            태그 만들기
+            {t("태그 만들기")}
           </button>
         </div>
       )}

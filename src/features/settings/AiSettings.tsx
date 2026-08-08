@@ -1,4 +1,5 @@
 import type { AppSettings } from "../../lib/types";
+import { useI18n } from "../../app/translations";
 
 interface AiSettingsProps {
   settings: AppSettings;
@@ -24,6 +25,7 @@ export function AiSettings({
   onChange,
   onSecretDraftChange,
 }: AiSettingsProps) {
+  const { t } = useI18n();
   const enabled = settings.aiEnabled ?? false;
   const provider = settings.aiProvider ?? "ollama";
   const remote = provider !== "ollama";
@@ -33,11 +35,11 @@ export function AiSettings({
       <section className="settings-card">
         <div className="settings-toggle-row">
           <div>
-            <h3>AI 기능 활성화</h3>
-            <p>문서 요약과 선택한 파일에 대한 질문 기능을 사용합니다.</p>
+            <h3>{t("AI 기능 활성화")}</h3>
+            <p>{t("문서 요약과 선택한 파일에 대한 질문 기능을 사용합니다.")}</p>
           </div>
           <input
-            aria-label="AI 기능 활성화"
+            aria-label={t("AI 기능 활성화")}
             type="checkbox"
             checked={enabled}
             onChange={(event) =>
@@ -50,9 +52,9 @@ export function AiSettings({
       {enabled && (
         <>
           <label>
-            LLM Provider
+            {t("LLM Provider")}
             <select
-              aria-label="LLM Provider"
+              aria-label={t("LLM Provider")}
               value={provider}
               onChange={(event) => {
                 const next = event.target.value as keyof typeof providerDefaults;
@@ -65,13 +67,13 @@ export function AiSettings({
                 });
               }}
             >
-              <option value="ollama">Ollama (로컬)</option>
+              <option value="ollama">Ollama ({t("로컬")})</option>
               <option value="gemini">Google Gemini API</option>
               <option value="openai">OpenAI API</option>
             </select>
           </label>
           <label>
-            Base URL
+            {t("Base URL")}
             <input
               value={settings.aiBaseUrl ?? providerDefaults[provider].baseUrl}
               onChange={(event) =>
@@ -81,28 +83,28 @@ export function AiSettings({
           </label>
           {remote && (
             <label>
-              API 키
+            {t("API 키")}
               <input
-                aria-label="AI API 키"
+                aria-label={`${t("AI")} ${t("API 키")}`}
                 type="password"
                 autoComplete="off"
                 placeholder={
                   hasSavedSecret && secretDraft === null
-                    ? "저장된 키가 있습니다"
-                    : "API 키 입력"
+                    ? t("저장된 키가 있습니다")
+                    : t("API 키 입력")
                 }
                 value={secretDraft ?? ""}
                 onChange={(event) => onSecretDraftChange(event.target.value)}
               />
               {hasSavedSecret && (
                 <button type="button" onClick={() => onSecretDraftChange("")}>
-                  저장된 키 삭제
+                  {t("저장된 키 삭제")}
                 </button>
               )}
             </label>
           )}
           <label>
-            AI 모델
+            {t("AI 모델")}
             <input
               value={settings.aiModel ?? providerDefaults[provider].model}
               onChange={(event) =>
@@ -112,7 +114,7 @@ export function AiSettings({
           </label>
           <div className="settings-two-columns">
             <label>
-              온도 ({(settings.aiTemperature ?? 0.2).toFixed(1)})
+              {t("온도")} ({(settings.aiTemperature ?? 0.2).toFixed(1)})
               <input
                 min={0}
                 max={2}
@@ -128,7 +130,7 @@ export function AiSettings({
               />
             </label>
             <label>
-              최대 토큰
+              {t("최대 토큰")}
               <input
                 min={128}
                 max={32768}
@@ -145,8 +147,8 @@ export function AiSettings({
           </div>
           <div className="settings-warning">
             {remote
-              ? "선택한 문서의 필요한 일부가 설정한 외부 AI 서비스로 전송됩니다. 전송 전에 사용자 확인을 받습니다."
-              : "Ollama는 이 PC에서 실행됩니다. EveryFile은 사용자가 선택한 모델만 사용하며 다른 제공자로 자동 전환하지 않습니다."}
+              ? t("선택한 문서의 필요한 일부가 설정한 외부 AI 서비스로 전송됩니다. 전송 전에 사용자 확인을 받습니다.")
+              : t("Ollama는 이 PC에서 실행됩니다. EveryFile은 사용자가 선택한 모델만 사용하며 다른 제공자로 자동 전환하지 않습니다.")}
           </div>
         </>
       )}

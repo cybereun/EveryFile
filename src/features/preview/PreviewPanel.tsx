@@ -23,6 +23,7 @@ import { PdfLayoutView, type PdfLoader } from "./PdfLayoutView";
 import { HwpLayoutView, type HwpLoader } from "./HwpLayoutView";
 import { PreviewToolbar } from "./PreviewToolbar";
 import { DocumentAiPanel } from "./DocumentAiPanel";
+import { useI18n } from "../../app/translations";
 
 function textFromBlocks(blocks: PreviewBlock[]): string {
   return blocks
@@ -88,6 +89,7 @@ function ImagePreview({
   extension: string;
   getBytesApi: typeof getImageBytes;
 }) {
+  const { t } = useI18n();
   const [source, setSource] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const sourceRef = useRef<string | null>(null);
@@ -109,7 +111,7 @@ function ImagePreview({
         setSource(url);
       })
       .catch((caught) => {
-        if (active) setError(caught instanceof Error ? caught.message : "이미지를 불러오지 못했습니다.");
+        if (active) setError(caught instanceof Error ? caught.message : t("이미지를 불러오지 못했습니다."));
       });
     return () => {
       active = false;
@@ -119,12 +121,12 @@ function ImagePreview({
         sourceRef.current = null;
       }
     };
-  }, [documentId, extension, getBytesApi]);
+  }, [documentId, extension, getBytesApi, t]);
 
   if (error) return <div className="preview-message preview-message--error" role="alert">{error}</div>;
-  if (!source) return <div className="preview-message">이미지 미리보기를 불러오는 중…</div>;
+  if (!source) return <div className="preview-message">{t("이미지 미리보기를 불러오는 중…")}</div>;
   return (
-    <div className="image-preview" aria-label={`${fileName} 이미지 미리보기`}>
+    <div className="image-preview" aria-label={`${fileName} ${t("이미지 미리보기")}`}>
       <img src={source} alt={fileName} decoding="async" />
     </div>
   );
@@ -139,22 +141,23 @@ function PreviewTabs({
   onTabChange: (next: "text" | "layout") => void;
   disabled?: boolean;
 }) {
+  const { t } = useI18n();
   return (
-    <div className="preview-tabs" role="tablist" aria-label="미리보기 형식">
+    <div className="preview-tabs" role="tablist" aria-label={t("미리보기 형식")}>
       <button
         aria-selected={tab === "text"}
         disabled={disabled}
         onClick={() => onTabChange("text")}
         role="tab"
         type="button"
-      >문서 텍스트</button>
+      >{t("문서 텍스트")}</button>
       <button
         aria-selected={tab === "layout"}
         disabled={disabled}
         onClick={() => onTabChange("layout")}
         role="tab"
         type="button"
-      >원본 레이아웃</button>
+      >{t("원본 레이아웃")}</button>
     </div>
   );
 }
@@ -204,6 +207,7 @@ export function PreviewPanel({
   askRequest = 0,
   onBookmarkChanged,
 }: PreviewPanelProps) {
+  const { t } = useI18n();
   const [preview, setPreview] = useState<PreviewDocument | null>(null);
   const [tab, setTab] = useState<"text" | "layout">("text");
   const [findRequest, setFindRequest] = useState(0);
@@ -236,7 +240,7 @@ export function PreviewPanel({
       .catch((caught) => {
         if (active) {
           setPreview(null);
-          setError(caught instanceof Error ? caught.message : "미리보기를 불러오지 못했습니다.");
+          setError(caught instanceof Error ? caught.message : t("미리보기를 불러오지 못했습니다."));
         }
       })
       .finally(() => {
@@ -245,7 +249,7 @@ export function PreviewPanel({
     return () => {
       active = false;
     };
-  }, [documentId, getPreviewApi]);
+  }, [documentId, getPreviewApi, t]);
 
   useEffect(() => {
     if (askRequest <= 0 || !aiEnabled) return;
@@ -259,7 +263,7 @@ export function PreviewPanel({
       await action();
     } catch (caught) {
       if (selectedDocumentId.current === ownerDocumentId) {
-        setError(caught instanceof Error ? caught.message : "작업을 완료하지 못했습니다.");
+        setError(caught instanceof Error ? caught.message : t("작업을 완료하지 못했습니다."));
       }
     }
   };
@@ -267,35 +271,35 @@ export function PreviewPanel({
   const copy = (ownerDocumentId: string, value: string) =>
     run(ownerDocumentId, async () => {
       if (!navigator.clipboard?.writeText) {
-        throw new Error("클립보드를 사용할 수 없습니다.");
+        throw new Error(t("클립보드를 사용할 수 없습니다."));
       }
       await navigator.clipboard.writeText(value);
     });
 
   if (!documentId) {
     return (
-      <section className="preview-pane" aria-label="문서 미리보기 / Document preview">
+      <section className="preview-pane" aria-label={t("문서 미리보기 / Document preview")}>
         <PreviewTabs tab={tab} onTabChange={setTab} disabled />
-        <div className="preview-empty">검색 결과에서 파일을 선택하면 내용을 볼 수 있습니다.</div>
+        <div className="preview-empty">{t("검색 결과에서 파일을 선택하면 내용을 볼 수 있습니다.")}</div>
       </section>
     );
   }
   if (!preview) {
     return (
-      <section className="preview-pane" aria-label="문서 미리보기 / Document preview">
+      <section className="preview-pane" aria-label={t("문서 미리보기 / Document preview")}>
         <PreviewTabs tab={tab} onTabChange={setTab} disabled={loading} />
         <div
           className={loading ? "preview-message" : "preview-message preview-message--error"}
           role={loading ? "status" : "alert"}
         >
-          {loading ? "미리보기 불러오는 중…" : error ?? "미리보기를 사용할 수 없습니다."}
+          {loading ? t("미리보기 불러오는 중…") : error ?? t("미리보기를 사용할 수 없습니다.")}
         </div>
       </section>
     );
   }
 
   return (
-    <section className="preview-pane" aria-label="문서 미리보기 / Document preview">
+      <section className="preview-pane" aria-label={t("문서 미리보기 / Document preview")}>
       <header className="preview-title">
         <strong title={preview.fileName}>{preview.fileName}</strong>
         <span>{preview.extension.toUpperCase()}</span>
@@ -384,7 +388,7 @@ export function PreviewPanel({
         tags={preview.tags}
       />
       {preview.tags.length > 0 && (
-        <div className="preview-tags" aria-label="문서 태그">
+        <div className="preview-tags" aria-label={t("문서 태그")}>
           {preview.tags.map((tag) => (
             <span className="preview-tag" key={tag.id}>{tag.name}</span>
           ))}
@@ -393,14 +397,14 @@ export function PreviewPanel({
       <PreviewTabs tab={tab} onTabChange={setTab} disabled={loading} />
       {preview.truncated && (
         <div className="preview-limit-notice" role="status">
-          문서가 커서 안전한 미리보기 한도까지만 표시합니다.
+          {t("문서가 커서 안전한 미리보기 한도까지만 표시합니다.")}
         </div>
       )}
       {error && <div className="preview-inline-error" role="alert">{error}</div>}
       <div className="preview-content" aria-busy={loading} role="tabpanel">
         {loading ? (
           <div className="preview-message" role="status">
-            문서 미리보기를 불러오는 중…
+            {t("문서 미리보기를 불러오는 중…")}
           </div>
         ) : isImageExtension(preview.extension) ? (
           <ImagePreview
@@ -436,14 +440,14 @@ export function PreviewPanel({
           />
         ) : (
           <div className="preview-layout-unavailable">
-            <p>이 형식은 문서 텍스트로만 미리볼 수 있습니다.</p>
+            <p>{t("이 형식은 문서 텍스트로만 미리볼 수 있습니다.")}</p>
             <button
               onClick={() =>
                 void run(preview.documentId, () => openApi(preview.documentId))
               }
               type="button"
             >
-              파일 열기
+              {t("파일 열기")}
             </button>
           </div>
         )}

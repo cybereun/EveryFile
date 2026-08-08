@@ -1,4 +1,5 @@
 import type { AppSettings, FolderRecord } from "../../lib/types";
+import { useI18n } from "../../app/translations";
 
 interface SearchSettingsProps {
   settings: AppSettings;
@@ -11,6 +12,7 @@ export function SearchSettings({
   folders,
   onChange,
 }: SearchSettingsProps) {
+  const { t } = useI18n();
   const ocrEnabled = settings.ocrEnabled ?? false;
   const mathOcrEnabled = settings.mathOcrEnabled ?? false;
 
@@ -19,14 +21,13 @@ export function SearchSettings({
       <section className="settings-card" aria-labelledby="ocr-heading">
         <div className="settings-toggle-row">
           <div>
-            <h3 id="ocr-heading">로컬 OCR</h3>
+            <h3 id="ocr-heading">{t("로컬 OCR")}</h3>
             <p>
-              스캔 PDF와 이미지의 글자를 PC 안에서 인식합니다. 문서와 이미지는
-              외부 서버로 전송되지 않습니다.
+              {t("스캔 PDF와 이미지의 글자를 PC 안에서 인식합니다. 문서와 이미지는 외부 서버로 전송되지 않습니다.")}
             </p>
           </div>
           <input
-            aria-label="로컬 OCR 활성화"
+            aria-label={t("로컬 OCR 활성화")}
             type="checkbox"
             checked={ocrEnabled}
             onChange={(event) =>
@@ -39,19 +40,17 @@ export function SearchSettings({
           />
         </div>
         <p className="settings-help">
-          지원 이미지: JPG, PNG, WebP, BMP, TIFF. 일반 PDF에 정상 텍스트가
-          있으면 기존 텍스트를 사용하고 OCR을 건너뜁니다.
+          {t("지원 이미지: JPG, PNG, WebP, BMP, TIFF. 일반 PDF에 정상 텍스트가 있으면 기존 텍스트를 사용하고 OCR을 건너뜁니다.")}
         </p>
         <div className="settings-toggle-row">
           <div>
-            <strong>수학 OCR</strong>
+            <strong>{t("수학 OCR")}</strong>
             <p>
-              수식이 포함된 PDF를 위한 별도 모델입니다. 모델이 크며 CPU 사용량과
-              처리 시간이 크게 늘어납니다.
+              {t("수식이 포함된 PDF를 위한 별도 모델입니다. 모델이 크며 CPU 사용량과 처리 시간이 크게 늘어납니다.")}
             </p>
           </div>
           <input
-            aria-label="수학 OCR 활성화"
+            aria-label={t("수학 OCR 활성화")}
             type="checkbox"
             checked={mathOcrEnabled}
             disabled={!ocrEnabled}
@@ -63,7 +62,7 @@ export function SearchSettings({
       </section>
 
       <label>
-        검색 히스토리 보관 기간
+        {t("검색 히스토리 보관 기간")}
         <select
           value={settings.historyRetentionDays}
           onChange={(event) =>
@@ -73,14 +72,14 @@ export function SearchSettings({
             })
           }
         >
-          <option value={30}>30일</option>
-          <option value={90}>90일</option>
-          <option value={365}>365일</option>
-          <option value={0}>제한 없음</option>
+          <option value={30}>30{t("일")}</option>
+          <option value={90}>90{t("일")}</option>
+          <option value={365}>365{t("일")}</option>
+          <option value={0}>{t("제한 없음")}</option>
         </select>
       </label>
       <label>
-        최대 파일 크기 (MB)
+        {t("최대 파일 크기 (MB)")}
         <input
           min={1}
           max={4096}
@@ -96,9 +95,9 @@ export function SearchSettings({
         />
       </label>
       <section className="settings-card" aria-labelledby="included-folders-heading">
-        <h3 id="included-folders-heading">포함된 폴더</h3>
+        <h3 id="included-folders-heading">{t("포함된 폴더")}</h3>
         {folders.length === 0 ? (
-          <p>등록된 폴더가 없습니다.</p>
+          <p>{t("등록된 폴더가 없습니다.")}</p>
         ) : (
           <ul>
             {folders.map((folder) => (
@@ -108,10 +107,10 @@ export function SearchSettings({
         )}
       </section>
       <label>
-        제외할 경로 패턴
+        {t("제외할 경로 패턴")}
         <textarea
           aria-describedby="exclude-path-help"
-          placeholder="예: **/node_modules/**"
+          placeholder={t("예: **/node_modules/**")}
           rows={3}
           value={(settings.excludedPathPatterns ?? []).join("\n")}
           onChange={(event) =>
@@ -124,7 +123,7 @@ export function SearchSettings({
             })
           }
         />
-        <small id="exclude-path-help">한 줄에 하나씩 입력합니다.</small>
+        <small id="exclude-path-help">{t("한 줄에 하나씩 입력합니다.")}</small>
       </label>
     </div>
   );

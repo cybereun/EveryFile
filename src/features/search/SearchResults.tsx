@@ -6,9 +6,9 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import type { SearchHistoryRecord, SearchHit } from "../../lib/types";
+import type { SearchHit } from "../../lib/types";
 import { exportResults } from "../../lib/ipc";
-import { BrandMark } from "../../components/BrandMark";
+import { useI18n } from "../../app/translations";
 
 interface SearchResultsProps {
   hits: SearchHit[];
@@ -21,11 +21,9 @@ interface SearchResultsProps {
   onOpen: (documentId: string) => Promise<void>;
   onOpenLocation?: (documentId: string) => Promise<void>;
   onSelect: (documentId: string) => void;
-  onRecentSearch?: (query: string) => void;
+  onAddFolder?: () => void;
   clickBehavior?: "preview" | "open";
   dateDisplay?: "relative" | "absolute";
-  workspaceStats?: { documents: number; folders: number };
-  recentSearches?: SearchHistoryRecord[];
 }
 
 function formatSize(bytes: number) {
@@ -69,9 +67,9 @@ function parseDate(value: string) {
   return Number.isFinite(parsed.getTime()) ? parsed : null;
 }
 
-function relativeDate(value: string) {
+function relativeDate(value: string, locale: "ko" | "en") {
   const parsed = parseDate(value);
-  if (!parsed) return "날짜 없음";
+  if (!parsed) return locale === "en" ? "Unknown date" : "날짜 없음";
   const elapsed = parsed.getTime() - Date.now();
   const units = [
     ["year", 365 * 24 * 60 * 60 * 1000],
@@ -80,17 +78,17 @@ function relativeDate(value: string) {
     ["hour", 60 * 60 * 1000],
     ["minute", 60 * 1000],
   ] as const;
-  const formatter = new Intl.RelativeTimeFormat("ko-KR", { numeric: "auto" });
+  const formatter = new Intl.RelativeTimeFormat(locale === "en" ? "en-US" : "ko-KR", { numeric: "auto" });
   for (const [unit, milliseconds] of units) {
     if (Math.abs(elapsed) >= milliseconds) {
       return formatter.format(Math.round(elapsed / milliseconds), unit);
     }
   }
-  return "방금";
+  return formatter.format(0, "second");
 }
 
-function absoluteDate(value: string) {
-  return parseDate(value)?.toLocaleString("ko-KR") ?? "날짜 없음";
+function absoluteDate(value: string, locale: "ko" | "en") {
+  return parseDate(value)?.toLocaleString(locale === "en" ? "en-US" : "ko-KR") ?? (locale === "en" ? "Unknown date" : "날짜 없음");
 }
 
 const MATCH_GROUP_ORDER: SearchHit["matchKind"][] = [
@@ -167,6 +165,8 @@ function ResultRow({
   compareSelected,
   clickBehavior,
   dateDisplay,
+  locale,
+  t,
 }: {
   hit: SearchHit;
   selected: boolean;
@@ -178,6 +178,8 @@ function ResultRow({
   compareSelected: boolean;
   clickBehavior: "preview" | "open";
   dateDisplay: "relative" | "absolute";
+  locale: "ko" | "en";
+  t: (source: string) => string;
 }) {
   const parent = hit.path.replace(/[\\/][^\\/]+$/, "");
   return (
@@ -196,29 +198,29 @@ function ResultRow({
       <span className="result-heading">
         <strong>{hit.fileName}</strong>
         <span className="extension-badge">{hit.extension.toUpperCase()}</span>
-        {hit.matchKind === "both" && <span className="match-count-badge">2개 매칭</span>}
-        {compareSelected && <span className="compare-target-badge">비교 대상</span>}
+        {hit.matchKind === "both" && <span className="match-count-badge">2{t("개")} 매칭</span>}
+        {compareSelected && <span className="compare-target-badge">{t("비교 대상으로 선택")}</span>}
         <span className="result-actions">
           <button
-            aria-label={`${hit.fileName} 경로 복사`}
+            aria-label={`${hit.fileName} ${t("경로 복사")}`}
             className="result-action"
             onClick={(event) => {
               event.stopPropagation();
               onCopyPath();
             }}
-            title="경로 복사"
+            title={t("경로 복사")}
             type="button"
           >
             <CopyPathIcon />
           </button>
           <button
-            aria-label={`${hit.fileName} 파일 위치 열기`}
+            aria-label={`${hit.fileName} ${t("파일 위치 열기")}`}
             className="result-action"
             onClick={(event) => {
               event.stopPropagation();
               onOpenLocation();
             }}
-            title="파일 위치 열기"
+            title={t("파일 위치 열기")}
             type="button"
           >
             <FolderOpenIcon />
@@ -231,8 +233,8 @@ function ResultRow({
         </span>
         <time dateTime={parseDate(hit.modifiedAt)?.toISOString()}>
           {dateDisplay === "relative"
-            ? relativeDate(hit.modifiedAt)
-            : absoluteDate(hit.modifiedAt)}
+            ? relativeDate(hit.modifiedAt, locale)
+            : absoluteDate(hit.modifiedAt, locale)}
         </time>
         <span>{formatSize(hit.sizeBytes)}</span>
       </span>
@@ -254,12 +256,11 @@ export function SearchResults({
   onOpen,
   onOpenLocation = async () => undefined,
   onSelect,
-  onRecentSearch,
+  onAddFolder,
   clickBehavior = "preview",
   dateDisplay = "absolute",
-  workspaceStats = { documents: 0, folders: 0 },
-  recentSearches = [],
 }: SearchResultsProps) {
+  const { locale, t } = useI18n();
   const groupedHits = useMemo(() => {
     const groups = new Map<SearchHit["matchKind"], SearchHit[]>();
     for (const hit of hits) {
@@ -324,7 +325,7 @@ export function SearchResults({
     try {
       await onOpen(documentId);
     } catch (caught) {
-      setOpenError(caught instanceof Error ? caught.message : "파일을 열지 못했습니다.");
+      setOpenError(caught instanceof Error ? caught.message : t("파일을 열지 못했습니다."));
     }
   };
 
@@ -334,7 +335,7 @@ export function SearchResults({
     try {
       await onOpenLocation(documentId);
     } catch (caught) {
-      setOpenError(caught instanceof Error ? caught.message : "파일 위치를 열지 못했습니다.");
+      setOpenError(caught instanceof Error ? caught.message : t("파일 위치를 열지 못했습니다."));
     }
   };
 
@@ -355,10 +356,10 @@ export function SearchResults({
         textarea.remove();
         if (!copied) throw new Error("clipboard unavailable");
       }
-      setActionNotice("경로를 클립보드에 복사했습니다.");
+      setActionNotice(t("경로를 클립보드에 복사했습니다."));
       window.setTimeout(() => setActionNotice(null), 2200);
     } catch {
-      setOpenError("경로를 복사하지 못했습니다.");
+      setOpenError(t("경로를 복사하지 못했습니다."));
     }
   };
 
@@ -408,57 +409,37 @@ export function SearchResults({
     return (
       <div className="workspace-empty">
         <div className="workspace-empty__content">
-          <div className="workspace-empty__brand">
-            <BrandMark className="brand-mark--hero" />
-            <strong>EveryFile<span aria-hidden="true">.</span></strong>
-          </div>
-          <p>내 PC 깊숙이 흩어진 문서들.<br />이제 빠르게 찾아보세요.</p>
-          <div className="workspace-empty__stats" aria-label="문서 통계">
-            <span><strong>{workspaceStats.documents.toLocaleString()}</strong><small>문서</small></span>
-            <i aria-hidden="true" />
-            <span><strong>{workspaceStats.folders.toLocaleString()}</strong><small>등록 폴더</small></span>
-          </div>
-          {recentSearches.length > 0 && (
-            <section className="workspace-empty__recent" aria-label="최근 검색">
-              <div className="workspace-empty__recent-heading">
-                <span aria-hidden="true">⌕</span>
-                <strong>최근 검색</strong>
-                <small>다시 검색하려면 항목을 선택하세요</small>
-              </div>
-              <div className="workspace-empty__recent-list">
-                {recentSearches.slice(0, 3).map((item) => (
-                  <button
-                    key={item.id}
-                    title={item.query}
-                    type="button"
-                    onClick={() => onRecentSearch?.(item.query)}
-                  >
-                    <span aria-hidden="true">⌕</span>
-                    <span>{item.query}</span>
-                    <time dateTime={item.searchedAt}>{relativeDate(item.searchedAt)}</time>
-                  </button>
-                ))}
-              </div>
-            </section>
-          )}
+          <button
+            className="workspace-empty__folder-register"
+            type="button"
+            onClick={onAddFolder}
+            disabled={!onAddFolder}
+            aria-label={t("폴더 등록")}
+          >
+            <svg aria-hidden="true" fill="none" viewBox="0 0 48 48">
+              <path d="M6 14a4 4 0 0 1 4-4h11l4 5h13a4 4 0 0 1 4 4v17a4 4 0 0 1-4 4H10a4 4 0 0 1-4-4V14Z" />
+              <path d="M24 20v14m-7-7h14" />
+            </svg>
+          </button>
+          <p>{t("폴더를 등록하면 문서를 검색할 수 있습니다.")}</p>
         </div>
       </div>
     );
   }
 
   return (
-    <section className="search-results" aria-label="검색 결과 영역">
+    <section className="search-results" aria-label={t("검색 결과 영역")}>
       <div className="results-summary" aria-live="polite">
-        <strong>{total.toLocaleString()}개</strong>
+        <strong>{total.toLocaleString()}{t("개")}</strong>
         <span>{elapsedMs.toLocaleString()}ms</span>
-        {loading && <span>검색 중…</span>}
+        {loading && <span>{t("검색 중…")}</span>}
         {groupedHits.length > 0 && (
           <span className="results-export">
             <button
               type="button"
               onClick={() =>
                 void exportResults({ kind: "searchResults", hits: groupedHits }, "csv").catch(
-                  () => setOpenError("CSV 내보내기에 실패했습니다."),
+                  () => setOpenError(t("CSV 내보내기에 실패했습니다.")),
                 )
               }
             >
@@ -468,7 +449,7 @@ export function SearchResults({
               type="button"
               onClick={() =>
                 void exportResults({ kind: "searchResults", hits: groupedHits }, "xlsx").catch(
-                  () => setOpenError("Excel 내보내기에 실패했습니다."),
+                  () => setOpenError(t("Excel 내보내기에 실패했습니다.")),
                 )
               }
             >
@@ -481,7 +462,7 @@ export function SearchResults({
         aria-activedescendant={
           selectedDocumentId ? `search-result-${selectedDocumentId}` : undefined
         }
-        aria-label="검색 결과"
+        aria-label={t("검색 결과")}
         className="search-results-list"
         onKeyDown={handleKeyDown}
         role="listbox"
@@ -493,7 +474,7 @@ export function SearchResults({
             <div className="search-result-item" key={hit.documentId}>
               {previousKind !== hit.matchKind && (
                 <h3 className={`result-group-heading${index > 0 ? " is-continuation" : ""}`}>
-                  {MATCH_GROUP_LABELS[hit.matchKind]}
+                  {t(MATCH_GROUP_LABELS[hit.matchKind])}
                 </h3>
               )}
               <ResultRow
@@ -508,9 +489,11 @@ export function SearchResults({
                 onOpenLocation={() => void openLocation(hit.documentId)}
                 onCopyPath={() => void copyPath(hit)}
                 onContextMenu={(event) => showContextMenu(event, hit)}
-                onSelect={() => {
-                  selectDocument(hit.documentId);
-                }}
+          onSelect={() => {
+            selectDocument(hit.documentId);
+          }}
+                locale={locale}
+                t={t}
                 selected={selectedDocumentId === hit.documentId}
               />
             </div>
@@ -524,31 +507,31 @@ export function SearchResults({
         const top = Math.min(contextMenu.y, Math.max(8, window.innerHeight - 300));
         return (
           <div
-            aria-label="검색 결과 메뉴"
+            aria-label={t("검색 결과 메뉴")}
             className="search-result-context-menu"
             ref={contextMenuRef}
             role="menu"
             style={{ left, top }}
           >
-            <button aria-label="파일 열기" onClick={() => runContextAction(() => void openDocument(contextHit.documentId))} role="menuitem" type="button">
-              <span aria-hidden="true">↗</span><span>파일 열기</span><kbd>Enter</kbd>
+            <button aria-label={t("파일 열기")} onClick={() => runContextAction(() => void openDocument(contextHit.documentId))} role="menuitem" type="button">
+              <span aria-hidden="true">↗</span><span>{t("파일 열기")}</span><kbd>Enter</kbd>
             </button>
-            <button aria-label="파일 위치 열기" onClick={() => runContextAction(() => void openLocation(contextHit.documentId))} role="menuitem" type="button">
-              <span aria-hidden="true"><FolderOpenIcon /></span><span>파일 위치 열기</span><span />
+            <button aria-label={t("파일 위치 열기")} onClick={() => runContextAction(() => void openLocation(contextHit.documentId))} role="menuitem" type="button">
+              <span aria-hidden="true"><FolderOpenIcon /></span><span>{t("파일 위치 열기")}</span><span />
             </button>
-            <button aria-label="경로 복사" onClick={() => runContextAction(() => void copyPath(contextHit))} role="menuitem" type="button">
-              <span aria-hidden="true"><CopyPathIcon /></span><span>경로 복사</span><kbd>Ctrl+C</kbd>
+            <button aria-label={t("경로 복사")} onClick={() => runContextAction(() => void copyPath(contextHit))} role="menuitem" type="button">
+              <span aria-hidden="true"><CopyPathIcon /></span><span>{t("경로 복사")}</span><kbd>Ctrl+C</kbd>
             </button>
             <div className="search-result-context-menu__separator" role="separator" />
-            <button aria-label="유사 문서 찾기" disabled role="menuitem" type="button">
-              <span aria-hidden="true">⌕</span><span>유사 문서 찾기</span><small>시맨틱 OFF</small>
+            <button aria-label={t("유사 문서 찾기")} disabled role="menuitem" type="button">
+              <span aria-hidden="true">⌕</span><span>{t("유사 문서 찾기")}</span><small>{t("시맨틱 OFF")}</small>
             </button>
-            <button aria-label="비교 대상으로 선택" onClick={() => runContextAction(() => {
+            <button aria-label={t("비교 대상으로 선택")} onClick={() => runContextAction(() => {
               setCompareTargetId(contextHit.documentId);
-              setActionNotice("비교 대상으로 선택했습니다.");
+              setActionNotice(t("비교 대상으로 선택했습니다."));
               window.setTimeout(() => setActionNotice(null), 2200);
             })} role="menuitem" type="button">
-              <span aria-hidden="true">⌘</span><span>비교 대상으로 선택</span><span />
+              <span aria-hidden="true">⌘</span><span>{t("비교 대상으로 선택")}</span><span />
             </button>
           </div>
         );
@@ -561,7 +544,7 @@ export function SearchResults({
       {actionNotice && <div className="search-action-notice" role="status">{actionNotice}</div>}
       {hasMore && (
         <button className="load-more" disabled={loading} onClick={onLoadMore} type="button">
-          결과 더 보기
+          {t("결과 더 보기")}
         </button>
       )}
     </section>

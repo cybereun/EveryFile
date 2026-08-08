@@ -2,6 +2,7 @@ import initRhwp, { HwpDocument } from "@rhwp/core";
 import wasmUrl from "@rhwp/core/rhwp_bg.wasm?url";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { cancelPdfRead, getLayoutBytes } from "../../lib/ipc";
+import { useI18n, type Translator } from "../../app/translations";
 
 let rhwpReady: Promise<unknown> | null = null;
 let requestSequence = 0;
@@ -45,14 +46,14 @@ function nextRequestId() {
   return `hwp-layout-${Date.now().toString(36)}-${requestSequence.toString(36)}`;
 }
 
-function safeMessage(caught: unknown) {
+function safeMessage(caught: unknown, t: Translator) {
   const code = caught && typeof caught === "object" && "code" in caught ? String(caught.code) : "";
-  if (code === "SOURCE_LAYOUT_UNSUPPORTED") return "이 파일은 원본 레이아웃으로 표시할 수 없습니다.";
-  if (code === "SOURCE_PDF_TOO_LARGE") return "문서가 원본 미리보기 크기 제한을 초과했습니다.";
+  if (code === "SOURCE_LAYOUT_UNSUPPORTED") return t("이 파일은 원본 레이아웃으로 표시할 수 없습니다.");
+  if (code === "SOURCE_PDF_TOO_LARGE") return t("문서가 원본 미리보기 크기 제한을 초과했습니다.");
   if (/CANCELLED/.test(code)) return null;
   return caught instanceof Error && caught.message
     ? caught.message
-    : "HWP 원본 레이아웃을 불러오지 못했습니다.";
+    : t("HWP 원본 레이아웃을 불러오지 못했습니다.");
 }
 
 function sanitizeAndHighlightSvg(raw: string, query: string, activeMatch: number) {
@@ -125,6 +126,7 @@ export function HwpLayoutView({
   cancelReadApi = cancelPdfRead,
   loader = loadHwp,
 }: HwpLayoutViewProps) {
+  const { t } = useI18n();
   const container = useRef<HTMLElement>(null);
   const [hwp, setHwp] = useState<HwpDocumentLike | null>(null);
   const [pageNumber, setPageNumber] = useState(1);
@@ -164,7 +166,7 @@ export function HwpLayoutView({
       })
       .catch((caught) => {
         if (!active) return;
-        const message = safeMessage(caught);
+        const message = safeMessage(caught, t);
         if (message) setError(message);
       })
       .finally(() => { if (active) setLoading(false); });
@@ -173,16 +175,16 @@ export function HwpLayoutView({
       void cancelReadApi(requestId).catch(() => undefined);
       documentHandle?.free();
     };
-  }, [cancelReadApi, documentId, getBytesApi, loader]);
+  }, [cancelReadApi, documentId, getBytesApi, loader, t]);
 
   const rendered = useMemo(() => {
     if (!hwp) return { svg: "", matches: 0 };
     try {
       return sanitizeAndHighlightSvg(hwp.renderPageSvg(pageNumber - 1), query, activeMatch);
     } catch (caught) {
-      return { svg: "", matches: 0, error: safeMessage(caught) ?? "원본 페이지 렌더링에 실패했습니다." };
+      return { svg: "", matches: 0, error: safeMessage(caught, t) ?? t("원본 페이지 렌더링에 실패했습니다.") };
     }
-  }, [activeMatch, hwp, pageNumber, query]);
+  }, [activeMatch, hwp, pageNumber, query, t]);
 
   useEffect(() => {
     const active = container.current?.querySelector(".hwp-search-match.is-active");
@@ -212,7 +214,7 @@ export function HwpLayoutView({
     }
   };
 
-  if (loading) return <div className="preview-message">HWP 원본 불러오는 중…</div>;
+  if (loading) return <div className="preview-message">{t("HWP 원본 불러오는 중…")}</div>;
   const renderError = "error" in rendered ? rendered.error : null;
   if (error || renderError) {
     return <div className="preview-message preview-message--error" role="alert">{error ?? renderError}</div>;
@@ -226,15 +228,15 @@ export function HwpLayoutView({
 
   return (
     <section className="hwp-layout-view" ref={container}>
-      <div className="pdf-controls" aria-label="HWP 보기 도구">
-        <button aria-label="이전 페이지" disabled={pageNumber <= 1} onClick={() => setPageNumber((page) => Math.max(1, page - 1))} type="button">‹</button>
+      <div className="pdf-controls" aria-label={t("HWP 보기 도구")}>
+        <button aria-label={t("이전 페이지")} disabled={pageNumber <= 1} onClick={() => setPageNumber((page) => Math.max(1, page - 1))} type="button">‹</button>
         <span>{pageNumber} / {pageCount}</span>
-        <button aria-label="다음 페이지" disabled={pageNumber >= pageCount} onClick={() => setPageNumber((page) => Math.min(pageCount, page + 1))} type="button">›</button>
-        <button aria-label="축소" onClick={() => { setFitWidth(false); setZoom((value) => Math.max(0.5, value - 0.1)); }} type="button">−</button>
-        <button aria-pressed={fitWidth} onClick={() => setFitWidth(true)} type="button">맞춤</button>
-        <button aria-label="확대" onClick={() => { setFitWidth(false); setZoom((value) => Math.min(3, value + 0.1)); }} type="button">+</button>
+        <button aria-label={t("다음 페이지")} disabled={pageNumber >= pageCount} onClick={() => setPageNumber((page) => Math.min(pageCount, page + 1))} type="button">›</button>
+        <button aria-label={t("축소")} onClick={() => { setFitWidth(false); setZoom((value) => Math.max(0.5, value - 0.1)); }} type="button">−</button>
+        <button aria-pressed={fitWidth} onClick={() => setFitWidth(true)} type="button">{t("맞춤")}</button>
+        <button aria-label={t("확대")} onClick={() => { setFitWidth(false); setZoom((value) => Math.min(3, value + 0.1)); }} type="button">+</button>
         <button
-          aria-label={isFullscreen ? "원래 크기로" : "전체 화면"}
+          aria-label={isFullscreen ? t("원래 크기로") : t("전체 화면")}
           aria-pressed={isFullscreen}
           onClick={() => void toggleFullscreen()}
           type="button"
@@ -244,16 +246,16 @@ export function HwpLayoutView({
       </div>
       {findOpen && (
         <div className="document-find hwp-layout-find">
-          <input aria-label="원본에서 찾기" onChange={(event) => { setQuery(event.target.value); setActiveMatch(0); }} placeholder="원본에서 찾기" type="search" value={query} />
+          <input aria-label={t("원본에서 찾기")} onChange={(event) => { setQuery(event.target.value); setActiveMatch(0); }} placeholder={t("원본에서 찾기")} type="search" value={query} />
           <span aria-live="polite">{rendered.matches ? `${activeMatch + 1} / ${rendered.matches}` : "0 / 0"}</span>
-          <button aria-label="이전 일치" onClick={() => moveMatch(-1)} type="button">↑</button>
-          <button aria-label="다음 일치" onClick={() => moveMatch(1)} type="button">↓</button>
-          <button aria-label="찾기 닫기" onClick={() => setFindOpen(false)} type="button">×</button>
+          <button aria-label={t("이전 일치")} onClick={() => moveMatch(-1)} type="button">↑</button>
+          <button aria-label={t("다음 일치")} onClick={() => moveMatch(1)} type="button">↓</button>
+          <button aria-label={t("찾기 닫기")} onClick={() => setFindOpen(false)} type="button">×</button>
         </div>
       )}
       <div className="hwp-page-wrap">
         <div
-          aria-label={`HWP ${pageNumber}페이지`}
+          aria-label={`HWP ${pageNumber}${t("페이지")}`}
           className={`hwp-page${fitWidth ? " is-fit" : ""}`}
           dangerouslySetInnerHTML={{ __html: rendered.svg }}
           style={fitWidth ? undefined : { width: `${zoom * 100}%` }}

@@ -1,3 +1,5 @@
+import { useI18n } from "../app/translations";
+
 export type CommandStatusKind = "info" | "success" | "error";
 
 export interface CommandStatusMessage {
@@ -11,6 +13,7 @@ interface CommandStatusProps {
 }
 
 export function CommandStatus({ message, onDismiss }: CommandStatusProps) {
+  const { t } = useI18n();
   if (!message) return null;
 
   return (
@@ -21,7 +24,7 @@ export function CommandStatus({ message, onDismiss }: CommandStatusProps) {
     >
       <span>{message.text}</span>
       {onDismiss && (
-        <button type="button" onClick={onDismiss} aria-label="알림 닫기 / Dismiss">
+        <button type="button" onClick={onDismiss} aria-label={`${t("알림 닫기")} / Dismiss`}>
           ×
         </button>
       )}

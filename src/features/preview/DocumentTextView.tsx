@@ -7,6 +7,7 @@ import {
   type ReactNode,
 } from "react";
 import type { PreviewBlock } from "../../lib/types";
+import { useI18n } from "../../app/translations";
 
 interface DocumentTextViewProps {
   blocks: PreviewBlock[];
@@ -74,6 +75,7 @@ export function DocumentTextView({
   initialQuery = "",
   preserveWhitespace = false,
 }: DocumentTextViewProps) {
+  const { t } = useI18n();
   const [findOpen, setFindOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [activeMatch, setActiveMatch] = useState(0);
@@ -224,7 +226,7 @@ export function DocumentTextView({
       case "separator":
         return <hr key={key} />;
       case "image":
-        return <p key={key}>[이미지] {linkedText(block)}</p>;
+        return <p key={key}>[{t("이미지")}] {linkedText(block)}</p>;
       case "paragraph":
       default:
         return <p key={key}>{linkedText(block)}</p>;
@@ -239,14 +241,14 @@ export function DocumentTextView({
   return (
     <section
       className={`document-text-view${preserveWhitespace ? " document-text-view--plain" : ""}`}
-      aria-label="문서 텍스트"
+      aria-label={t("문서 텍스트")}
     >
       {findOpen && (
         <div className="document-find">
           <input
-            aria-label="문서 내 찾기"
+            aria-label={t("문서 내 찾기")}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="문서 내 찾기"
+            placeholder={t("문서 내 찾기")}
             ref={searchInput}
             type="search"
             value={query}
@@ -254,9 +256,9 @@ export function DocumentTextView({
           <span aria-live="polite">
             {totalMatches ? `${activeMatch + 1} / ${totalMatches}` : "0 / 0"}
           </span>
-          <button aria-label="이전 일치" onClick={() => moveMatch(-1)} type="button">↑</button>
-          <button aria-label="다음 일치" onClick={() => moveMatch(1)} type="button">↓</button>
-          <button aria-label="찾기 닫기" onClick={() => setFindOpen(false)} type="button">×</button>
+          <button aria-label={t("이전 일치")} onClick={() => moveMatch(-1)} type="button">↑</button>
+          <button aria-label={t("다음 일치")} onClick={() => moveMatch(1)} type="button">↓</button>
+          <button aria-label={t("찾기 닫기")} onClick={() => setFindOpen(false)} type="button">×</button>
         </div>
       )}
       <div className="document-blocks">

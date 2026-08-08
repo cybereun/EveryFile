@@ -457,35 +457,14 @@ select:focus-visible,
 
 .sidebar-section__action:hover { background: var(--color-surface); color: var(--color-accent); }
 .sidebar-trash-icon {
-  position: relative;
-  display: inline-block;
-  width: 0.56rem;
-  height: 0.64rem;
-  margin-top: 0.12rem;
-  border: 1px solid currentColor;
-  border-top: 0;
-  border-radius: 0 0 2px 2px;
+  display: block;
+  width: 1.05rem;
+  height: 1.05rem;
+  overflow: visible;
+  filter: drop-shadow(0 1px 1px rgb(91 66 47 / 16%));
+  transition: transform 120ms ease, filter 120ms ease;
 }
-.sidebar-trash-icon::before {
-  position: absolute;
-  top: -0.18rem;
-  left: -0.12rem;
-  width: 0.78rem;
-  height: 1px;
-  border-radius: 2px;
-  background: currentColor;
-  content: "";
-}
-.sidebar-trash-icon::after {
-  position: absolute;
-  top: -0.28rem;
-  left: 0.14rem;
-  width: 0.26rem;
-  height: 1px;
-  border-radius: 2px 2px 0 0;
-  background: currentColor;
-  content: "";
-}
+.sidebar-section__action:hover .sidebar-trash-icon { transform: translateY(-1px); filter: drop-shadow(0 2px 2px rgb(91 66 47 / 20%)); }
 .sidebar-section__body { padding-top: 0.2rem; }
 
 .folder-list { gap: 0.12rem; }
@@ -1386,6 +1365,34 @@ select:focus-visible,
   width: min(52rem, 100%);
   justify-items: center;
   gap: clamp(0.8rem, 1.7vh, 1.35rem);
+}
+
+.workspace-empty__folder-register {
+  display: grid;
+  width: clamp(5rem, 10vw, 7rem);
+  height: clamp(5rem, 10vw, 7rem);
+  place-items: center;
+  border: 1px solid var(--color-border);
+  border-radius: 1.5rem;
+  background: var(--color-surface-muted);
+  color: var(--color-accent);
+  box-shadow: 0 0.8rem 2rem rgb(70 55 45 / 7%);
+  cursor: pointer;
+}
+
+.workspace-empty__folder-register:hover,
+.workspace-empty__folder-register:focus-visible {
+  border-color: var(--color-accent);
+  background: var(--color-surface);
+}
+
+.workspace-empty__folder-register svg {
+  width: 3rem;
+  height: 3rem;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
 }
 
 .workspace-empty__brand {

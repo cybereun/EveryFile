@@ -9,7 +9,6 @@ import type {
   FolderRecord,
   SearchRequest,
   SearchResponse,
-  SearchHistoryRecord,
   StatisticsSearchFilter,
 } from "../../lib/types";
 import {
@@ -26,6 +25,7 @@ import { useImmediateSearch } from "./useImmediateSearch";
 
 export interface SearchWorkspaceProps {
   folders: FolderRecord[];
+  onAddFolder?: () => void;
   onSelectDocument?: (documentId: string, query: string) => void;
   searchApi?: (request: SearchRequest) => Promise<SearchResponse>;
   cancelApi?: (requestId: string) => Promise<boolean>;
@@ -48,6 +48,7 @@ export const SearchWorkspace = forwardRef<HTMLInputElement, SearchWorkspaceProps
   function SearchWorkspace(
     {
       folders,
+      onAddFolder,
       onSelectDocument = () => undefined,
       searchApi = searchDocuments,
       cancelApi = cancelSearch,
@@ -68,7 +69,6 @@ export const SearchWorkspace = forwardRef<HTMLInputElement, SearchWorkspaceProps
     ref: Ref<HTMLInputElement>,
   ) {
     const [withinResults, setWithinResults] = useState("");
-    const [recentSearches, setRecentSearches] = useState<SearchHistoryRecord[]>([]);
     const search = useImmediateSearch({
       search: searchApi,
       cancel: cancelApi,
@@ -76,13 +76,6 @@ export const SearchWorkspace = forwardRef<HTMLInputElement, SearchWorkspaceProps
       pageSize,
     });
     const within = withinResults.trim().toLocaleLowerCase();
-    const workspaceStats = useMemo(
-      () => ({
-        documents: folders.reduce((total, folder) => total + folder.documentCount, 0),
-        folders: folders.length,
-      }),
-      [folders],
-    );
     useEffect(() => {
       if (!statisticsFilter) return;
       search.patchFilters(statisticsFilter);
@@ -98,25 +91,10 @@ export const SearchWorkspace = forwardRef<HTMLInputElement, SearchWorkspaceProps
     }, [homeRequest, search.reset]);
 
     useEffect(() => {
-      let active = true;
-      void listSearchHistory(5, 0)
-        .then((records) => {
-          if (active) setRecentSearches(records);
-        })
-        .catch(() => undefined);
-      return () => {
-        active = false;
-      };
-    }, []);
-
-    useEffect(() => {
       if (search.loading || !search.query.trim()) return;
       const refresh = window.setTimeout(() => {
         void listSearchHistory(5, 0)
-          .then((records) => {
-            setRecentSearches(records);
-            onHistoryChanged?.();
-          })
+          .then(() => onHistoryChanged?.())
           .catch(() => undefined);
       }, 250);
       return () => window.clearTimeout(refresh);
@@ -162,9 +140,7 @@ export const SearchWorkspace = forwardRef<HTMLInputElement, SearchWorkspaceProps
           onOpenLocation={openLocationApi}
           onSelect={(documentId) => onSelectDocument(documentId, search.query)}
           total={within ? visibleHits.length : search.total}
-          recentSearches={recentSearches}
-          onRecentSearch={search.setQuery}
-          workspaceStats={workspaceStats}
+          onAddFolder={onAddFolder}
         />
       </section>
     );

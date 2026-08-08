@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { cancelDocumentAi, runDocumentAi } from "../../lib/ipc";
+import { useI18n } from "../../app/translations";
 
 interface DocumentAiPanelProps {
   documentId: string;
@@ -22,6 +23,7 @@ export function DocumentAiPanel({
   runApi = runDocumentAi,
   cancelApi = cancelDocumentAi,
 }: DocumentAiPanelProps) {
+  const { t } = useI18n();
   const [question, setQuestion] = useState("");
   const [consent, setConsent] = useState(false);
   const [answer, setAnswer] = useState("");
@@ -59,7 +61,7 @@ export function DocumentAiPanel({
       if (requestId.current === active) setAnswer(result);
     } catch (caught) {
       if (requestId.current === active) {
-        setError(caught instanceof Error ? caught.message : "AI 요청에 실패했습니다.");
+        setError(caught instanceof Error ? caught.message : t("AI 요청에 실패했습니다."));
       }
     } finally {
       if (requestId.current === active) {
@@ -70,17 +72,17 @@ export function DocumentAiPanel({
   };
 
   return (
-    <section className="document-ai-panel" aria-label="문서 AI">
+    <section className="document-ai-panel" aria-label={t("문서 AI")}>
       <header>
-        <strong>{mode === "summary" ? "AI 요약" : "이 파일에 대한 질문"}</strong>
-        <button type="button" onClick={onClose} aria-label="AI 패널 닫기">
+        <strong>{mode === "summary" ? t("AI 요약") : t("이 파일에 대한 질문")}</strong>
+        <button type="button" onClick={onClose} aria-label={t("AI 패널 닫기")}>
           ×
         </button>
       </header>
       {mode === "question" && (
         <textarea
-          aria-label="문서에 대한 질문"
-          placeholder="이 문서에서 무엇을 알고 싶나요?"
+          aria-label={t("문서에 대한 질문")}
+          placeholder={t("이 문서에서 무엇을 알고 싶나요?")}
           value={question}
           onChange={(event) => setQuestion(event.target.value)}
         />
@@ -92,8 +94,8 @@ export function DocumentAiPanel({
             checked={consent}
             onChange={(event) => setConsent(event.target.checked)}
           />
-          선택한 문서의 필요한 일부를 {provider === "gemini" ? "Google Gemini" : "OpenAI"}로
-          전송하는 데 동의합니다.
+          {t("선택한 문서의 필요한 일부를")} {provider === "gemini" ? "Google Gemini" : "OpenAI"}
+          {t("로 전송하는 데 동의합니다.")}
         </label>
       )}
       <div className="document-ai-actions">
@@ -107,11 +109,11 @@ export function DocumentAiPanel({
           }
           onClick={() => void submit()}
         >
-          {loading ? "생성 중…" : "실행"}
+          {loading ? t("생성 중…") : t("실행")}
         </button>
         {loading && (
           <button type="button" onClick={() => void cancel()}>
-            취소
+            {t("취소")}
           </button>
         )}
       </div>
