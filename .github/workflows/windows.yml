@@ -45,9 +45,11 @@ jobs:
       - run: npm ci
       - run: npm test -- --run
       - run: npm run build
+      # Tauri validates externalBin resources during Cargo/Clippy. Build the
+      # parser sidecar first on clean runners so the gate can inspect them.
+      - run: node scripts/build-parser-sidecar.mjs
       - run: cargo fmt --manifest-path src-tauri\Cargo.toml -- --check
       - run: cargo clippy --manifest-path src-tauri\Cargo.toml --all-targets -- -D warnings
-      - run: node scripts/build-parser-sidecar.mjs
       - run: npm run tauri build
       - run: powershell -ExecutionPolicy Bypass -File scripts/test-rust.ps1
       - run: powershell -ExecutionPolicy Bypass -File scripts/build-portable.ps1

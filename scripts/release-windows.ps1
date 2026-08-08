@@ -16,11 +16,14 @@ if ($null -eq (Get-Command perl -ErrorAction SilentlyContinue)) {
 }
 Push-Location -LiteralPath $repoRoot
 try {
-    & powershell -ExecutionPolicy Bypass -File scripts/release-gate.ps1
-    if ($LASTEXITCODE -ne 0) { throw 'Release gate failed.' }
-
+    # Tauri's externalBin entries are validated while Cargo runs clippy. Build
+    # the parser sidecar before the release gate so clean GitHub runners have
+    # the resource that the Tauri build script expects.
     & node scripts/build-parser-sidecar.mjs
     if ($LASTEXITCODE -ne 0) { throw 'Parser sidecar build failed.' }
+
+    & powershell -ExecutionPolicy Bypass -File scripts/release-gate.ps1
+    if ($LASTEXITCODE -ne 0) { throw 'Release gate failed.' }
 
     & powershell -ExecutionPolicy Bypass -File scripts/build-ocr-sidecar.ps1
     if ($LASTEXITCODE -ne 0) { throw 'OCR sidecar build failed.' }
