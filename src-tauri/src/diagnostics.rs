@@ -1383,7 +1383,12 @@ where
         return Err(DiagnosticError::InvalidResetRequest);
     }
     on_event(ResetEvent::BeforeStateWrite(step))?;
-    local_guard.revalidate()?;
+    let result = local_guard.revalidate();
+    #[cfg(test)]
+    if let Err(ref error) = result {
+        report_reset_test_error("guard-revalidate-before-temp", error);
+    }
+    result?;
     if path.exists() {
         return Err(DiagnosticError::Io(io::Error::new(
             io::ErrorKind::AlreadyExists,
@@ -1436,11 +1441,23 @@ where
         step,
         point: ResetStateWritePoint::AfterTempSync,
     })?;
-    let (written_identity, attributes) = file_information(raw_handle)?;
+    let (written_identity, attributes) = match file_information(raw_handle) {
+        Ok(information) => information,
+        Err(error) => {
+            #[cfg(test)]
+            report_reset_test_error("temp-information", &error);
+            return Err(error);
+        }
+    };
     if attributes & 0x0000_0400 != 0 || attributes & 0x0000_0010 != 0 {
         return Err(DiagnosticError::InvalidResetRequest);
     }
-    local_guard.revalidate()?;
+    let result = local_guard.revalidate();
+    #[cfg(test)]
+    if let Err(ref error) = result {
+        report_reset_test_error("guard-revalidate-before-rename", error);
+    }
+    result?;
     on_event(ResetEvent::StateWritePoint {
         step,
         point: ResetStateWritePoint::BeforeRename,
@@ -1474,7 +1491,12 @@ where
         return Err(DiagnosticError::InvalidResetRequest);
     }
     drop(published);
-    local_guard.revalidate()?;
+    let result = local_guard.revalidate();
+    #[cfg(test)]
+    if let Err(ref error) = result {
+        report_reset_test_error("guard-revalidate-after-published-open", error);
+    }
+    result?;
     let result = file.sync_all().map_err(DiagnosticError::Io);
     #[cfg(test)]
     if let Err(ref error) = result {
@@ -1487,7 +1509,12 @@ where
         report_reset_test_error("directory-sync-final", error);
     }
     result?;
-    local_guard.revalidate()?;
+    let result = local_guard.revalidate();
+    #[cfg(test)]
+    if let Err(ref error) = result {
+        report_reset_test_error("guard-revalidate-final", error);
+    }
+    result?;
     drop(file);
     on_event(ResetEvent::AfterStateWrite(step))
 }

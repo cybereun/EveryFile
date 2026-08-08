@@ -85,6 +85,10 @@ jobs:
         if: ${{ inputs.diagnostics_only }}
         shell: pwsh
         run: |
+          New-Item -ItemType Directory -Force src-tauri\\binaries | Out-Null
+          foreach ($name in @('everyfile-parser-x86_64-pc-windows-msvc.exe', 'everyfile-ocr-x86_64-pc-windows-msvc.exe')) {
+            [System.IO.File]::WriteAllBytes((Join-Path 'src-tauri\\binaries' $name), [byte[]](0))
+          }
           cargo test --manifest-path src-tauri\Cargo.toml -j1 diagnostics::windows_reset_tests::durable_state_write_faults_never_publish_partial_json -- --nocapture --test-threads=1
 
       - shell: pwsh
