@@ -1361,7 +1361,8 @@ where
     use std::os::windows::io::AsRawHandle;
     use windows::Win32::Foundation::HANDLE;
     use windows::Win32::Storage::FileSystem::{
-        DELETE, FILE_FLAG_OPEN_REPARSE_POINT, FILE_GENERIC_WRITE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+        DELETE, FILE_FLAG_OPEN_REPARSE_POINT, FILE_GENERIC_WRITE, FILE_SHARE_DELETE,
+        FILE_SHARE_READ, FILE_SHARE_WRITE,
     };
 
     if path
@@ -1387,7 +1388,12 @@ where
     let mut file = OpenOptions::new()
         .write(true)
         .access_mode((FILE_GENERIC_WRITE | DELETE).0)
-        .share_mode((FILE_SHARE_READ | FILE_SHARE_WRITE).0)
+        // The state marker is atomically renamed while this handle is still open.
+        // Windows requires the handle's share mode to permit delete/rename; this
+        // is enforced more strictly on the hosted Windows runners than on some
+        // desktop versions and otherwise surfaces as ERROR_FILE_NOT_FOUND from
+        // SetFileInformationByHandle.
+        .share_mode((FILE_SHARE_DELETE | FILE_SHARE_READ | FILE_SHARE_WRITE).0)
         .create_new(true)
         .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT.0)
         .open(&temporary)
