@@ -1344,12 +1344,6 @@ where
 }
 
 #[cfg(windows)]
-#[cfg(test)]
-fn report_reset_test_error(stage: &str, error: &DiagnosticError) {
-    eprintln!("reset test stage {stage}: {error:?}");
-}
-
-#[cfg(windows)]
 fn write_reset_state_with_events<T, F>(
     local_guard: &ResetRootGuard,
     local_appdata: &Path,
@@ -1383,12 +1377,7 @@ where
         return Err(DiagnosticError::InvalidResetRequest);
     }
     on_event(ResetEvent::BeforeStateWrite(step))?;
-    let result = local_guard.revalidate();
-    #[cfg(test)]
-    if let Err(ref error) = result {
-        report_reset_test_error("guard-revalidate-before-temp", error);
-    }
-    result?;
+    local_guard.revalidate()?;
     if path.exists() {
         return Err(DiagnosticError::Io(io::Error::new(
             io::ErrorKind::AlreadyExists,
@@ -1396,7 +1385,7 @@ where
         )));
     }
     let temporary = reset_state_temp_path(local_appdata, nonce, step)?;
-    let mut file = match OpenOptions::new()
+    let mut file = OpenOptions::new()
         .write(true)
         .access_mode((FILE_GENERIC_WRITE | DELETE).0)
         // The state marker is atomically renamed while this handle is still open.
@@ -1408,15 +1397,7 @@ where
         .create_new(true)
         .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT.0)
         .open(&temporary)
-    {
-        Ok(file) => file,
-        Err(error) => {
-            let error = DiagnosticError::Io(error);
-            #[cfg(test)]
-            report_reset_test_error("temp-open", &error);
-            return Err(error);
-        }
-    };
+        .map_err(DiagnosticError::Io)?;
     on_event(ResetEvent::StateWritePoint {
         step,
         point: ResetStateWritePoint::AfterTempCreate,
@@ -1431,86 +1412,32 @@ where
     })?;
     file.write_all(&bytes[split..])
         .map_err(DiagnosticError::Io)?;
-    let result = file.sync_all().map_err(DiagnosticError::Io);
-    #[cfg(test)]
-    if let Err(ref error) = result {
-        report_reset_test_error("temp-sync", error);
-    }
-    result?;
+    file.sync_all().map_err(DiagnosticError::Io)?;
     on_event(ResetEvent::StateWritePoint {
         step,
         point: ResetStateWritePoint::AfterTempSync,
     })?;
-    let (written_identity, attributes) = match file_information(raw_handle) {
-        Ok(information) => information,
-        Err(error) => {
-            #[cfg(test)]
-            report_reset_test_error("temp-information", &error);
-            return Err(error);
-        }
-    };
+    let (written_identity, attributes) = file_information(raw_handle)?;
     if attributes & 0x0000_0400 != 0 || attributes & 0x0000_0010 != 0 {
         return Err(DiagnosticError::InvalidResetRequest);
     }
-    let result = local_guard.revalidate();
-    #[cfg(test)]
-    if let Err(ref error) = result {
-        report_reset_test_error("guard-revalidate-before-rename", error);
-    }
-    result?;
+    local_guard.revalidate()?;
     on_event(ResetEvent::StateWritePoint {
         step,
         point: ResetStateWritePoint::BeforeRename,
     })?;
-    let result = rename_windows_handle_to(raw_handle, path).map_err(classify_reset_error);
-    #[cfg(test)]
-    if let Err(ref error) = result {
-        report_reset_test_error("rename", error);
-    }
-    result?;
+    rename_windows_handle_to(raw_handle, path).map_err(classify_reset_error)?;
     on_event(ResetEvent::StateWritePoint {
         step,
         point: ResetStateWritePoint::AfterRename,
     })?;
-    let result = local_guard.sync_directory_supported();
-    #[cfg(test)]
-    if let Err(ref error) = result {
-        report_reset_test_error("directory-sync-after-rename", error);
-    }
-    result?;
-    let result = local_guard.revalidate();
-    #[cfg(test)]
-    if let Err(ref error) = result {
-        report_reset_test_error("guard-revalidate-before-final-sync", error);
-    }
-    result?;
-    let result = file.sync_all().map_err(DiagnosticError::Io);
-    #[cfg(test)]
-    if let Err(ref error) = result {
-        report_reset_test_error("published-sync", error);
-    }
-    result?;
-    let result = local_guard.sync_directory_supported();
-    #[cfg(test)]
-    if let Err(ref error) = result {
-        report_reset_test_error("directory-sync-final", error);
-    }
-    result?;
-    let result = local_guard.revalidate();
-    #[cfg(test)]
-    if let Err(ref error) = result {
-        report_reset_test_error("guard-revalidate-final", error);
-    }
-    result?;
+    local_guard.sync_directory_supported()?;
+    local_guard.revalidate()?;
+    file.sync_all().map_err(DiagnosticError::Io)?;
+    local_guard.sync_directory_supported()?;
+    local_guard.revalidate()?;
     drop(file);
-    let published = match WindowsFileHandle::open_for_identity(path) {
-        Ok(file) => file,
-        Err(error) => {
-            #[cfg(test)]
-            report_reset_test_error("published-open", &error);
-            return Err(error);
-        }
-    };
+    let published = WindowsFileHandle::open_for_identity(path)?;
     if published.identity != written_identity || published.is_reparse() || published.is_directory()
     {
         return Err(DiagnosticError::InvalidResetRequest);
@@ -3091,11 +3018,7 @@ mod windows_reset_tests {
                     step,
                     &mut no_fault,
                 )
-                .unwrap_or_else(|error| {
-                    panic!(
-                        "retry write failed for case {case} at {step:?}/{fault_point:?}: {error:?}"
-                    )
-                });
+                .unwrap();
             }
             assert_eq!(
                 read_reset_state::<ResetRequest>(&local_guard, &local, &final_path).unwrap(),
