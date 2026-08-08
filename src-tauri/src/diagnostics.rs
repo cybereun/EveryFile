@@ -1478,23 +1478,10 @@ where
         report_reset_test_error("directory-sync-after-rename", error);
     }
     result?;
-    let published = match WindowsFileHandle::open_for_identity(path) {
-        Ok(file) => file,
-        Err(error) => {
-            #[cfg(test)]
-            report_reset_test_error("published-open", &error);
-            return Err(error);
-        }
-    };
-    if published.identity != written_identity || published.is_reparse() || published.is_directory()
-    {
-        return Err(DiagnosticError::InvalidResetRequest);
-    }
-    drop(published);
     let result = local_guard.revalidate();
     #[cfg(test)]
     if let Err(ref error) = result {
-        report_reset_test_error("guard-revalidate-after-published-open", error);
+        report_reset_test_error("guard-revalidate-before-final-sync", error);
     }
     result?;
     let result = file.sync_all().map_err(DiagnosticError::Io);
@@ -1516,6 +1503,19 @@ where
     }
     result?;
     drop(file);
+    let published = match WindowsFileHandle::open_for_identity(path) {
+        Ok(file) => file,
+        Err(error) => {
+            #[cfg(test)]
+            report_reset_test_error("published-open", &error);
+            return Err(error);
+        }
+    };
+    if published.identity != written_identity || published.is_reparse() || published.is_directory()
+    {
+        return Err(DiagnosticError::InvalidResetRequest);
+    }
+    drop(published);
     on_event(ResetEvent::AfterStateWrite(step))
 }
 
