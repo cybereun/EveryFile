@@ -48,6 +48,9 @@ jobs:
       # Tauri validates externalBin resources during Cargo/Clippy. Build the
       # parser sidecar first on clean runners so the gate can inspect them.
       - run: node scripts/build-parser-sidecar.mjs
+      - name: Build OCR sidecar
+        shell: pwsh
+        run: powershell -ExecutionPolicy Bypass -File scripts/build-ocr-sidecar.ps1
       - run: cargo fmt --manifest-path src-tauri\Cargo.toml -- --check
       - run: cargo clippy --manifest-path src-tauri\Cargo.toml --all-targets -- -D warnings
       - run: npm run tauri build

@@ -22,11 +22,14 @@ try {
     & node scripts/build-parser-sidecar.mjs
     if ($LASTEXITCODE -ne 0) { throw 'Parser sidecar build failed.' }
 
-    & powershell -ExecutionPolicy Bypass -File scripts/release-gate.ps1
-    if ($LASTEXITCODE -ne 0) { throw 'Release gate failed.' }
-
+    # The Tauri configuration validates both externalBin resources during the
+    # release gate. Build OCR before Cargo checks for the same reason as the
+    # parser sidecar above.
     & powershell -ExecutionPolicy Bypass -File scripts/build-ocr-sidecar.ps1
     if ($LASTEXITCODE -ne 0) { throw 'OCR sidecar build failed.' }
+
+    & powershell -ExecutionPolicy Bypass -File scripts/release-gate.ps1
+    if ($LASTEXITCODE -ne 0) { throw 'Release gate failed.' }
 
     & npm run tauri build
     if ($LASTEXITCODE -ne 0) { throw 'Tauri release build failed.' }
