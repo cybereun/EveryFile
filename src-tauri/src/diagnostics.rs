@@ -3018,7 +3018,11 @@ mod windows_reset_tests {
                     step,
                     &mut no_fault,
                 )
-                .unwrap();
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "retry write failed for case {case} at {step:?}/{fault_point:?}: {error:?}"
+                    )
+                });
             }
             assert_eq!(
                 read_reset_state::<ResetRequest>(&local_guard, &local, &final_path).unwrap(),
