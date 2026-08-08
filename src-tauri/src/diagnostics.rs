@@ -1344,6 +1344,12 @@ where
 }
 
 #[cfg(windows)]
+#[cfg(test)]
+fn report_reset_test_error(stage: &str, error: &DiagnosticError) {
+    eprintln!("reset test stage {stage}: {error:?}");
+}
+
+#[cfg(windows)]
 fn write_reset_state_with_events<T, F>(
     local_guard: &ResetRootGuard,
     local_appdata: &Path,
@@ -1385,7 +1391,7 @@ where
         )));
     }
     let temporary = reset_state_temp_path(local_appdata, nonce, step)?;
-    let mut file = OpenOptions::new()
+    let mut file = match OpenOptions::new()
         .write(true)
         .access_mode((FILE_GENERIC_WRITE | DELETE).0)
         // The state marker is atomically renamed while this handle is still open.
@@ -1397,7 +1403,15 @@ where
         .create_new(true)
         .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT.0)
         .open(&temporary)
-        .map_err(DiagnosticError::Io)?;
+    {
+        Ok(file) => file,
+        Err(error) => {
+            let error = DiagnosticError::Io(error);
+            #[cfg(test)]
+            report_reset_test_error("temp-open", &error);
+            return Err(error);
+        }
+    };
     on_event(ResetEvent::StateWritePoint {
         step,
         point: ResetStateWritePoint::AfterTempCreate,
@@ -1412,7 +1426,12 @@ where
     })?;
     file.write_all(&bytes[split..])
         .map_err(DiagnosticError::Io)?;
-    file.sync_all().map_err(DiagnosticError::Io)?;
+    let result = file.sync_all().map_err(DiagnosticError::Io);
+    #[cfg(test)]
+    if let Err(ref error) = result {
+        report_reset_test_error("temp-sync", error);
+    }
+    result?;
     on_event(ResetEvent::StateWritePoint {
         step,
         point: ResetStateWritePoint::AfterTempSync,
@@ -1426,21 +1445,48 @@ where
         step,
         point: ResetStateWritePoint::BeforeRename,
     })?;
-    rename_windows_handle_to(raw_handle, path).map_err(classify_reset_error)?;
+    let result = rename_windows_handle_to(raw_handle, path).map_err(classify_reset_error);
+    #[cfg(test)]
+    if let Err(ref error) = result {
+        report_reset_test_error("rename", error);
+    }
+    result?;
     on_event(ResetEvent::StateWritePoint {
         step,
         point: ResetStateWritePoint::AfterRename,
     })?;
-    local_guard.sync_directory_supported()?;
-    let published = WindowsFileHandle::open_for_identity(path)?;
+    let result = local_guard.sync_directory_supported();
+    #[cfg(test)]
+    if let Err(ref error) = result {
+        report_reset_test_error("directory-sync-after-rename", error);
+    }
+    result?;
+    let published = match WindowsFileHandle::open_for_identity(path) {
+        Ok(file) => file,
+        Err(error) => {
+            #[cfg(test)]
+            report_reset_test_error("published-open", &error);
+            return Err(error);
+        }
+    };
     if published.identity != written_identity || published.is_reparse() || published.is_directory()
     {
         return Err(DiagnosticError::InvalidResetRequest);
     }
     drop(published);
     local_guard.revalidate()?;
-    file.sync_all().map_err(DiagnosticError::Io)?;
-    local_guard.sync_directory_supported()?;
+    let result = file.sync_all().map_err(DiagnosticError::Io);
+    #[cfg(test)]
+    if let Err(ref error) = result {
+        report_reset_test_error("published-sync", error);
+    }
+    result?;
+    let result = local_guard.sync_directory_supported();
+    #[cfg(test)]
+    if let Err(ref error) = result {
+        report_reset_test_error("directory-sync-final", error);
+    }
+    result?;
     local_guard.revalidate()?;
     drop(file);
     on_event(ResetEvent::AfterStateWrite(step))
@@ -3018,7 +3064,11 @@ mod windows_reset_tests {
                     step,
                     &mut no_fault,
                 )
-                .unwrap();
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "retry write failed for case {case} at {step:?}/{fault_point:?}: {error:?}"
+                    )
+                });
             }
             assert_eq!(
                 read_reset_state::<ResetRequest>(&local_guard, &local, &final_path).unwrap(),
