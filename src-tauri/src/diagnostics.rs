@@ -2438,7 +2438,7 @@ impl ResetRootGuard {
                 };
                 // Windows filesystems do not universally permit flushing directory
                 // handles. The pinned identity still closes the substitution race.
-                if matches!(os_code, 1 | 5 | 6 | 50 | 87) {
+                if matches!(os_code, 1 | 2 | 5 | 6 | 50 | 87) {
                     Ok(())
                 } else {
                     Err(windows_error(error))
@@ -3018,11 +3018,7 @@ mod windows_reset_tests {
                     step,
                     &mut no_fault,
                 )
-                .unwrap_or_else(|error| {
-                    panic!(
-                        "retry write failed for case {case} at {step:?}/{fault_point:?}: {error:?}"
-                    )
-                });
+                .unwrap();
             }
             assert_eq!(
                 read_reset_state::<ResetRequest>(&local_guard, &local, &final_path).unwrap(),
