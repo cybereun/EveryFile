@@ -37,6 +37,7 @@ impl FolderRepository {
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_else(|| canonical_path.clone());
+        let display_name = strip_extended_path_prefix(&display_name);
         let id = random_id();
         let connection = self.database.connection();
         let result = connection.execute(
@@ -79,10 +80,12 @@ impl FolderRepository {
         let folders = statement
             .query_map([], |row| {
                 let document_count: i64 = row.get(3)?;
+                let canonical_path: String = row.get(1)?;
+                let display_name: String = row.get(2)?;
                 Ok(FolderRecord {
                     id: row.get(0)?,
-                    canonical_path: row.get(1)?,
-                    display_name: row.get(2)?,
+                    canonical_path,
+                    display_name: strip_extended_path_prefix(&display_name),
                     document_count: u64::try_from(document_count).unwrap_or(0),
                     index_state: row.get(4)?,
                 })
@@ -139,6 +142,13 @@ fn random_id() -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
+fn strip_extended_path_prefix(path: &str) -> String {
+    if let Some(unc_path) = path.strip_prefix(r"\\?\UNC\") {
+        return format!(r"\\{unc_path}");
+    }
+    path.strip_prefix(r"\\?\").unwrap_or(path).to_owned()
+}
+
 fn is_unique_constraint(error: &rusqlite::Error) -> bool {
     matches!(
         error,
@@ -153,6 +163,25 @@ fn is_busy_or_locked(error: &rusqlite::Error) -> bool {
         rusqlite::Error::SqliteFailure(inner, _)
             if matches!(inner.code, ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked)
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::strip_extended_path_prefix;
+
+    #[test]
+    fn display_paths_hide_windows_extended_prefixes() {
+        assert_eq!(strip_extended_path_prefix("\\\\?\\D:\\"), "D:\\");
+        assert_eq!(
+            strip_extended_path_prefix("\\\\?\\C:\\Users\\Lebi"),
+            "C:\\Users\\Lebi"
+        );
+        assert_eq!(
+            strip_extended_path_prefix("\\\\?\\UNC\\server\\share"),
+            "\\\\server\\share"
+        );
+        assert_eq!(strip_extended_path_prefix("D:\\Documents"), "D:\\Documents");
+    }
 }
 
 #[derive(Debug, Error)]

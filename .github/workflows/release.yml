@@ -50,6 +50,20 @@ jobs:
         run: npm run release:windows
       - name: Generate Tauri update manifest
         run: npm run generate:update-manifest
+      - name: Verify installer assets are identical
+        shell: pwsh
+        run: |
+          $version = $env:GITHUB_REF_NAME.Substring(1)
+          $friendly = "artifacts/release/EveryFile-Setup-v$version.exe"
+          $updater = "artifacts/release/EveryFile_${version}_x64-setup.exe"
+          foreach ($path in @($friendly, $updater)) {
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Missing installer asset: $path" }
+          }
+          $friendlyHash = (Get-FileHash -LiteralPath $friendly -Algorithm SHA256).Hash
+          $updaterHash = (Get-FileHash -LiteralPath $updater -Algorithm SHA256).Hash
+          if ($friendlyHash -ne $updaterHash) {
+            throw "Installer assets differ: $friendlyHash vs $updaterHash"
+          }
       - name: Verify release assets
         shell: pwsh
         run: |

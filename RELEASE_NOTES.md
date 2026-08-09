@@ -1,3 +1,14 @@
+# EveryFile v1.0.2
+
+## Reliable signed release assets
+
+- Rebuilt the Windows installer and portable package from the same source
+  revision so direct installs and signed automatic updates use identical code.
+- Added release-time hash verification to prevent stale installer assets from
+  being published under the same version.
+- Displayed Windows extended-length paths such as `\\?\D:\` as `D:\` in the
+  folder list and tooltips while retaining the safe internal path.
+
 # EveryFile v1.0.1
 
 ## Signed automatic updates

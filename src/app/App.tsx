@@ -53,8 +53,14 @@ const RIGHT_PANE_MAX = 720;
 const CENTER_PANE_MIN = 520;
 const PREVIEW_BREAKPOINT = 1100;
 const COMPACT_HEADER_BREAKPOINT = 560;
-const APP_VERSION = "v1.0.1";
+const APP_VERSION = "v1.0.2";
 const UPDATE_INTERVAL_MS = 6 * 60 * 60 * 1000;
+
+function displayPath(path: string) {
+  return path
+    .replace(/^\\\\\?\\UNC\\/i, "\\\\")
+    .replace(/^\\\\\?\\/, "");
+}
 
 function relativeSearchTime(value: string, locale: Locale = defaultLocale) {
   const timestamp = new Date(value).getTime();
@@ -425,7 +431,7 @@ function FolderPane({
               {folders.map((folder) => (
                 <div className="folder-item" key={folder.id}>
                   <span className="sidebar-item__icon" aria-hidden="true">▰</span>
-                  <span className="sidebar-item__label" title={folder.canonicalPath}>{folder.displayName}</span>
+                  <span className="sidebar-item__label" title={displayPath(folder.canonicalPath)}>{folder.displayName}</span>
                   <span className="folder-count">{folder.documentCount.toLocaleString()}</span>
                   <div className="folder-item__menu-wrap">
                     <button
