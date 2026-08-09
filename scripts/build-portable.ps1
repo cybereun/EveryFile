@@ -26,6 +26,22 @@ $portableRoot = Join-Path $repoRoot 'artifacts\portable'
 $stageRoot = Join-Path $portableRoot 'EveryFile'
 $zipPath = Join-Path $releaseRoot "EveryFile-Portable-v$version.zip"
 
+function Get-Sha256Hex {
+    param([Parameter(Mandatory)][string]$Path)
+
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $stream = [System.IO.File]::OpenRead($Path)
+        try {
+            return (($sha256.ComputeHash($stream) | ForEach-Object { $_.ToString('x2') }) -join '')
+        } finally {
+            $stream.Dispose()
+        }
+    } finally {
+        $sha256.Dispose()
+    }
+}
+
 $required = @(
     $appExe, $sidecarSource, $ocrSource, $modelManifest, $modelConfig,
     $ocrRequirements, $license, $kordocLicense, $kordocNotice, $rhwpLicense, $notice, $readme,
@@ -110,8 +126,7 @@ $installerPath = Join-Path $releaseRoot "EveryFile-Setup-v$version.exe"
 Copy-Item -LiteralPath $installerCandidates[0].FullName -Destination $installerPath -Force
 
 $checksums = @($installerPath, $zipPath) | ForEach-Object {
-    $hash = Get-FileHash -LiteralPath $_ -Algorithm SHA256
-    "$($hash.Hash.ToLowerInvariant())  $([System.IO.Path]::GetFileName($_))"
+    "$(Get-Sha256Hex -Path $_)  $([System.IO.Path]::GetFileName($_))"
 }
 $checksumPath = Join-Path $releaseRoot 'SHA256SUMS.txt'
 [System.IO.File]::WriteAllLines($checksumPath, $checksums, [System.Text.UTF8Encoding]::new($false))

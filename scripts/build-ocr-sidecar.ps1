@@ -16,6 +16,22 @@ $distRoot = Join-Path $cacheRoot 'dist'
 $targetName = 'everyfile-ocr-x86_64-pc-windows-msvc.exe'
 $targetPath = Join-Path $repoRoot "src-tauri\binaries\$targetName"
 
+function Get-Sha256Hex {
+    param([Parameter(Mandatory)][string]$Path)
+
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $stream = [System.IO.File]::OpenRead($Path)
+        try {
+            return (($sha256.ComputeHash($stream) | ForEach-Object { $_.ToString('x2') }) -join '')
+        } finally {
+            $stream.Dispose()
+        }
+    } finally {
+        $sha256.Dispose()
+    }
+}
+
 $models = @(
     [ordered]@{
         name = 'PP-OCRv5_mobile_det'
@@ -80,7 +96,7 @@ $manifestFiles = foreach ($file in Get-ChildItem -LiteralPath $modelsRoot -File 
     [ordered]@{
         path = $relative
         size = $file.Length
-        sha256 = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+        sha256 = Get-Sha256Hex -Path $file.FullName
     }
 }
 $manifest = [ordered]@{
@@ -92,7 +108,7 @@ $manifest = [ordered]@{
             version = $_.version
             license = $_.license
             source = $_.url
-            archiveSha256 = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+            archiveSha256 = Get-Sha256Hex -Path $archive
         }
     })
     files = @($manifestFiles)
