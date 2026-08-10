@@ -1,3 +1,19 @@
+# EveryFile v1.0.3
+
+## Two-track indexing
+
+- Filename, path, extension, size, and modified-time metadata are committed
+  in small discovery batches, so they become searchable before document
+  parsing finishes.
+- Text extraction and OCR start as soon as the first metadata batch is ready
+  and continue in the background while the folder walk is still running.
+- Discovery no longer sorts an entire directory tree up front, which avoids a
+  long initial pause on Google Drive and other virtual drives.
+- Unchanged documents reuse their existing parsed content on subsequent
+  indexing runs instead of invoking the parser again.
+- The progress bar now reports discovered candidates continuously and uses an
+  indeterminate state while the total is still being discovered.
+
 # EveryFile v1.0.2
 
 ## Reliable signed release assets

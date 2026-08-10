@@ -3,7 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, RwLock, Weak};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use rand::RngExt;
 use rusqlite::{params, OptionalExtension};
@@ -19,6 +19,7 @@ use crate::ocr::{OcrClient, OcrError, OcrMode};
 use crate::parsing::{ParseErrorCode, ParsedDocument, ParserClient, ParserError};
 
 const PIPELINE_CAPACITY: usize = 16;
+const DISCOVERY_PERSIST_BATCH_SIZE: usize = 32;
 const MAX_PARSER_CONCURRENCY: usize = 3;
 const MAX_TERMINAL_ERROR_DETAILS: i64 = 100;
 const MAX_PARSE_ATTEMPT_TOKEN_CLAIMS: usize = 4;
@@ -1074,21 +1075,57 @@ impl IndexCoordinator {
         }
         self.emit_status(&job_id);
 
+        let mut discovery_task = None;
         if matches!(self.job_state(&job_id), Ok(JobState::Discovering)) {
-            if let Err(error) = self.run_discovery(&job_id, &runtime).await {
-                if !runtime.stop.load(Ordering::Acquire) {
-                    let _ = runtime.with_mutation(|| self.fail_active_job(&job_id, &error));
+            let coordinator = self.clone();
+            let discovery_job_id = job_id.clone();
+            let discovery_runtime = Arc::clone(&runtime);
+            discovery_task = Some(tokio::spawn(async move {
+                coordinator
+                    .run_discovery(&discovery_job_id, &discovery_runtime)
+                    .await
+            }));
+
+            // Discovery promotes the job to `parsing` as soon as its first
+            // metadata batch is committed. That lets the parser pipeline
+            // start while the directory walk is still producing candidates.
+            loop {
+                if runtime.stop.load(Ordering::Acquire)
+                    || !matches!(self.job_state(&job_id), Ok(JobState::Discovering))
+                {
+                    break;
                 }
-                self.emit_status(&job_id);
-                return;
+                if discovery_task
+                    .as_ref()
+                    .is_some_and(|handle| handle.is_finished())
+                {
+                    let result = discovery_task
+                        .take()
+                        .expect("discovery task must exist")
+                        .await
+                        .unwrap_or(Err(IndexingError::WorkerStopped));
+                    if let Err(error) = result {
+                        if !runtime.stop.load(Ordering::Acquire) {
+                            let _ = runtime.with_mutation(|| self.fail_active_job(&job_id, &error));
+                        }
+                        self.emit_status(&job_id);
+                        return;
+                    }
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
             }
         }
         if runtime.stop.load(Ordering::Acquire)
             || !matches!(self.job_state(&job_id), Ok(JobState::Parsing))
         {
+            if let Some(task) = discovery_task {
+                let _ = task.await;
+            }
             return;
         }
 
+        reset_in_flight_candidates(&self.database, &job_id);
         let (sender, mut receiver) = mpsc::channel::<PersistedCandidate>(PIPELINE_CAPACITY);
         let database = Arc::clone(&self.database);
         let producer_job_id = job_id.clone();
@@ -1142,6 +1179,17 @@ impl IndexCoordinator {
         drop(receiver);
         let _ = producer.await;
 
+        if let Some(task) = discovery_task {
+            let result = task.await.unwrap_or(Err(IndexingError::WorkerStopped));
+            if let Err(error) = result {
+                if !runtime.stop.load(Ordering::Acquire) {
+                    let _ = runtime.with_mutation(|| self.fail_active_job(&job_id, &error));
+                }
+                self.emit_status(&job_id);
+                return;
+            }
+        }
+
         if let Some(error) = fatal_error {
             runtime.stop.store(false, Ordering::Release);
             let _ = runtime.with_mutation(|| self.fail_active_job(&job_id, &error));
@@ -1175,14 +1223,37 @@ impl IndexCoordinator {
         let probe = Arc::clone(&self.discovery_probe);
         let discovery_job_id = job_id.to_owned();
         let discovery_options = self.discovery_options()?;
+        let status_coordinator = self.clone();
         tokio::task::spawn_blocking(move || {
             let stream = discover(&folder, discovery_options)?;
+            let mut pending = Vec::with_capacity(DISCOVERY_PERSIST_BATCH_SIZE);
+            let mut last_status = Instant::now();
             for candidate in stream {
                 if stop.stop.load(Ordering::Acquire) {
                     return Ok::<(), IndexingError>(());
                 }
-                persist_discovered_candidate(&database, &discovery_job_id, &candidate)?;
-                probe.candidate_persisted(1);
+                pending.push(candidate);
+                if pending.len() < DISCOVERY_PERSIST_BATCH_SIZE {
+                    continue;
+                }
+                let persisted =
+                    persist_discovered_candidates(&database, &discovery_job_id, &pending)?;
+                for _ in 0..persisted {
+                    probe.candidate_persisted(1);
+                }
+                pending.clear();
+                if persisted > 0 || last_status.elapsed() >= Duration::from_millis(250) {
+                    status_coordinator.emit_status(&discovery_job_id);
+                    last_status = Instant::now();
+                }
+            }
+            if !pending.is_empty() {
+                let persisted =
+                    persist_discovered_candidates(&database, &discovery_job_id, &pending)?;
+                for _ in 0..persisted {
+                    probe.candidate_persisted(1);
+                }
+                status_coordinator.emit_status(&discovery_job_id);
             }
             if stop.stop.load(Ordering::Acquire) {
                 return Ok(());
@@ -1193,7 +1264,7 @@ impl IndexCoordinator {
                 "UPDATE index_job_recovery SET discovery_complete = 1 WHERE job_id = ?1",
                 [&discovery_job_id],
             )?;
-            let changed = transaction.execute(
+            transaction.execute(
                 "UPDATE index_jobs
                  SET state = 'parsing',
                      updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
@@ -1201,9 +1272,8 @@ impl IndexCoordinator {
                 [&discovery_job_id],
             )?;
             transaction.commit()?;
-            if changed != 1 {
-                return Err(IndexingError::StateChanged);
-            }
+            drop(connection);
+            status_coordinator.emit_status(&discovery_job_id);
             Ok(())
         })
         .await
@@ -1231,9 +1301,14 @@ impl IndexCoordinator {
             .read()
             .map_err(|_| IndexingError::RuntimeSettingsUnavailable)?
             .clone();
+        let extraction_required = !candidate.metadata_only
+            && candidate_requires_extraction(&candidate.canonical_path, &runtime_settings);
+        if self.candidate_is_current(&candidate, extraction_required)? {
+            return runtime.with_mutation(|| self.complete_cached_candidate(job_id, &candidate));
+        }
         if candidate.metadata_only
             || path_is_metadata_only(&candidate.canonical_path)?
-            || !candidate_requires_extraction(&candidate.canonical_path, &runtime_settings)
+            || !extraction_required
         {
             return runtime.with_mutation(|| self.complete_metadata_only(job_id, &candidate));
         }
@@ -1363,6 +1438,60 @@ impl IndexCoordinator {
             ParseAttemptMutation::Applied => Ok(()),
             ParseAttemptMutation::Stale => self.complete_stale_attempt(job_id, &candidate),
         }
+    }
+
+    fn candidate_is_current(
+        &self,
+        candidate: &PersistedCandidate,
+        extraction_required: bool,
+    ) -> Result<bool, IndexingError> {
+        let connection = self.database.connection();
+        let Some((size_bytes, modified_at, parse_state, has_content, has_fts)) = connection
+            .query_row(
+                "SELECT d.size_bytes, d.modified_at, d.parse_state,
+                        EXISTS (
+                          SELECT 1 FROM document_content c WHERE c.document_id = d.id
+                        ),
+                        EXISTS (
+                          SELECT 1 FROM document_fts f WHERE f.document_id = d.id
+                        )
+                 FROM documents d WHERE d.canonical_path = ?1",
+                [candidate.canonical_path.to_string_lossy()],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, bool>(3)?,
+                        row.get::<_, bool>(4)?,
+                    ))
+                },
+            )
+            .optional()?
+        else {
+            return Ok(false);
+        };
+        if size_bytes != candidate.size_bytes || modified_at != candidate.modified_at {
+            return Ok(false);
+        }
+        if extraction_required {
+            Ok(parse_state == "parsed" && has_content && has_fts)
+        } else {
+            Ok(parse_state == "metadata_only")
+        }
+    }
+
+    fn complete_cached_candidate(
+        &self,
+        job_id: &str,
+        candidate: &PersistedCandidate,
+    ) -> Result<(), IndexingError> {
+        let mut connection = self.database.connection();
+        let transaction = connection.transaction()?;
+        ensure_job_parsing(&transaction, job_id)?;
+        advance_file_transaction(&transaction, job_id, candidate)?;
+        transaction.commit()?;
+        Ok(())
     }
 
     fn validate_immediately_before_parse(
@@ -2469,38 +2598,163 @@ impl Drop for ReconciliationScratch {
     }
 }
 
-fn persist_discovered_candidate(
+fn persist_discovered_candidates(
     database: &Database,
     job_id: &str,
-    candidate: &FileCandidate,
-) -> Result<(), IndexingError> {
+    candidates: &[FileCandidate],
+) -> Result<usize, IndexingError> {
     let mut connection = database.connection();
     let transaction = connection.transaction()?;
-    let inserted = transaction.execute(
-        "INSERT OR IGNORE INTO index_job_files
-         (job_id, canonical_path, relative_path, size_bytes, modified_at,
-          metadata_only, state)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'queued')",
-        params![
-            job_id,
-            candidate.canonical_path.to_string_lossy(),
-            candidate.relative_path,
-            i64::try_from(candidate.size_bytes).unwrap_or(i64::MAX),
-            modified_at_string(candidate.modified_at),
-            candidate.metadata_only,
-        ],
+    let folder_id: String = transaction.query_row(
+        "SELECT folder_id FROM index_jobs WHERE id = ?1",
+        [job_id],
+        |row| row.get(0),
     )?;
-    if inserted == 1 {
+    let mut inserted_total = 0usize;
+    for candidate in candidates {
+        let inserted = transaction.execute(
+            "INSERT OR IGNORE INTO index_job_files
+             (job_id, canonical_path, relative_path, size_bytes, modified_at,
+              metadata_only, state)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'queued')",
+            params![
+                job_id,
+                candidate.canonical_path.to_string_lossy(),
+                candidate.relative_path,
+                i64::try_from(candidate.size_bytes).unwrap_or(i64::MAX),
+                modified_at_string(candidate.modified_at),
+                candidate.metadata_only,
+            ],
+        )?;
+        if inserted == 1 {
+            inserted_total += 1;
+        }
+        upsert_discovered_metadata_transaction(&transaction, &folder_id, candidate)?;
+    }
+    if inserted_total > 0 {
         transaction.execute(
             "UPDATE index_jobs
-             SET total_files = total_files + 1,
+              SET total_files = total_files + ?2,
+                  updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+             WHERE id = ?1 AND state IN ('discovering', 'parsing')",
+            params![job_id, i64::try_from(inserted_total).unwrap_or(i64::MAX)],
+        )?;
+        // The parser can consume this batch immediately. The recovery flag
+        // remains false until the walk has fully completed.
+        transaction.execute(
+            "UPDATE index_jobs
+             SET state = 'parsing',
                  updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
              WHERE id = ?1 AND state = 'discovering'",
             [job_id],
         )?;
     }
     transaction.commit()?;
+    Ok(inserted_total)
+}
+
+fn upsert_discovered_metadata_transaction(
+    transaction: &rusqlite::Transaction<'_>,
+    folder_id: &str,
+    candidate: &FileCandidate,
+) -> Result<(), IndexingError> {
+    let canonical_path = candidate.canonical_path.to_string_lossy().into_owned();
+    let name = file_name(&candidate.canonical_path);
+    let extension = candidate
+        .canonical_path
+        .extension()
+        .map(|value| value.to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_default();
+    let modified_at = modified_at_string(candidate.modified_at);
+    let previous: Option<(String, i64, String, String)> = transaction
+        .query_row(
+            "SELECT id, size_bytes, modified_at, parse_state
+             FROM documents WHERE canonical_path = ?1",
+            [&canonical_path],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .optional()?;
+    let unchanged_parsed = previous
+        .as_ref()
+        .is_some_and(|(_, size, timestamp, state)| {
+            *size == i64::try_from(candidate.size_bytes).unwrap_or(i64::MAX)
+                && timestamp == &modified_at
+                && matches!(state.as_str(), "parsed" | "metadata_only")
+        });
+    transaction.execute(
+        "INSERT INTO documents
+         (id, folder_id, canonical_path, file_name, extension, size_bytes,
+          modified_at, parse_state, parse_error_code, parse_attempt_token)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'pending', NULL, NULL)
+         ON CONFLICT(canonical_path) DO UPDATE SET
+           folder_id = excluded.folder_id,
+           file_name = excluded.file_name,
+           extension = excluded.extension,
+           size_bytes = excluded.size_bytes,
+           modified_at = excluded.modified_at,
+           parse_state = CASE
+             WHEN documents.size_bytes = excluded.size_bytes
+              AND documents.modified_at = excluded.modified_at
+              AND documents.parse_state IN ('parsed', 'metadata_only')
+             THEN documents.parse_state
+             ELSE 'pending'
+           END,
+           parse_error_code = CASE
+             WHEN documents.size_bytes = excluded.size_bytes
+              AND documents.modified_at = excluded.modified_at
+              AND documents.parse_state IN ('parsed', 'metadata_only')
+             THEN documents.parse_error_code
+             ELSE NULL
+           END,
+           parse_attempt_token = NULL
+         WHERE documents.parse_attempt_token IS NULL",
+        params![
+            random_id(),
+            folder_id,
+            canonical_path,
+            name,
+            extension,
+            i64::try_from(candidate.size_bytes).unwrap_or(i64::MAX),
+            modified_at,
+        ],
+    )?;
+
+    let document_id: String = transaction.query_row(
+        "SELECT id FROM documents WHERE canonical_path = ?1",
+        [&canonical_path],
+        |row| row.get(0),
+    )?;
+    if !unchanged_parsed {
+        transaction.execute(
+            "DELETE FROM document_content WHERE document_id = ?1",
+            [&document_id],
+        )?;
+        transaction.execute(
+            "DELETE FROM document_fts WHERE document_id = ?1",
+            [&document_id],
+        )?;
+    }
+    // Insert a filename-only FTS row now. The parser replaces it with the
+    // full title/body row later, so filename and path searches work during
+    // discovery without waiting for document extraction.
+    transaction.execute(
+        "INSERT INTO document_fts (document_id, file_name, title, body)
+         SELECT id, file_name, '', '' FROM documents
+         WHERE id = ?1
+           AND NOT EXISTS (
+             SELECT 1 FROM document_fts WHERE document_id = ?1
+           )",
+        [&document_id],
+    )?;
     Ok(())
+}
+
+fn reset_in_flight_candidates(database: &Database, job_id: &str) {
+    let _ = database.connection().execute(
+        "UPDATE index_job_files SET state = 'queued'
+         WHERE job_id = ?1 AND state = 'in_flight'",
+        [job_id],
+    );
 }
 
 fn send_pending_candidates(
@@ -2508,31 +2762,32 @@ fn send_pending_candidates(
     job_id: &str,
     sender: mpsc::Sender<PersistedCandidate>,
 ) -> Result<(), IndexingError> {
-    let mut last_relative_path = String::new();
-    let mut last_canonical_path = String::new();
     loop {
-        let batch = {
-            let connection = database.connection();
-            let mut statement = connection.prepare(
+        let (batch, discovery_complete) = {
+            let mut connection = database.connection();
+            let transaction = connection.transaction()?;
+            let (state, discovery_complete): (String, bool) = transaction.query_row(
+                "SELECT j.state, r.discovery_complete
+                 FROM index_jobs j
+                 JOIN index_job_recovery r ON r.job_id = j.id
+                 WHERE j.id = ?1",
+                [job_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )?;
+            if state != "parsing" {
+                transaction.commit()?;
+                return Ok(());
+            }
+            let mut statement = transaction.prepare(
                 "SELECT canonical_path, relative_path, size_bytes, modified_at, metadata_only
                  FROM index_job_files
-                 WHERE job_id = ?1
-                   AND state != 'completed'
-                   AND (
-                     relative_path > ?2
-                     OR (relative_path = ?2 AND canonical_path > ?3)
-                   )
+                 WHERE job_id = ?1 AND state = 'queued'
                  ORDER BY relative_path, canonical_path
-                 LIMIT ?4",
+                 LIMIT ?2",
             )?;
             let rows = statement
                 .query_map(
-                    params![
-                        job_id,
-                        last_relative_path,
-                        last_canonical_path,
-                        i64::try_from(PIPELINE_CAPACITY).unwrap_or(16)
-                    ],
+                    params![job_id, i64::try_from(PIPELINE_CAPACITY).unwrap_or(16)],
                     |row| {
                         Ok(PersistedCandidate {
                             job_id: job_id.to_owned(),
@@ -2545,13 +2800,26 @@ fn send_pending_candidates(
                     },
                 )?
                 .collect::<Result<Vec<_>, _>>()?;
-            rows
+            drop(statement);
+            for candidate in &rows {
+                transaction.execute(
+                    "UPDATE index_job_files SET state = 'in_flight'
+                     WHERE job_id = ?1 AND canonical_path = ?2 AND state = 'queued'",
+                    params![job_id, candidate.canonical_path.to_string_lossy()],
+                )?;
+            }
+            transaction.commit()?;
+            (rows, discovery_complete)
         };
-        let Some(last) = batch.last() else {
-            return Ok(());
-        };
-        last_relative_path.clone_from(&last.relative_path);
-        last_canonical_path = last.canonical_path.to_string_lossy().into_owned();
+        if batch.is_empty() {
+            if discovery_complete {
+                return Ok(());
+            }
+            // Discovery is still producing metadata rows. Keep the producer
+            // alive instead of exiting before later candidates arrive.
+            std::thread::sleep(Duration::from_millis(25));
+            continue;
+        }
         for candidate in batch {
             if sender.blocking_send(candidate).is_err() {
                 return Ok(());

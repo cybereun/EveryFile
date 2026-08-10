@@ -32,6 +32,7 @@ export function IndexStatus({ status, onPause, onResume, onCancel }: Props) {
   const total = Math.max(0, status.totalFiles);
   const completed = Math.min(Math.max(0, status.completedFiles), total || 1);
   const percentage = total > 0 ? Math.min(100, Math.round((completed / total) * 100)) : 0;
+  const discovering = status.state === "discovering";
   const errorCount = status.errorCount ?? status.errors.length;
 
   return (
@@ -50,7 +51,7 @@ export function IndexStatus({ status, onPause, onResume, onCancel }: Props) {
         {errorCount > 0 && (
           <span className="index-progress__errors">{t("실패")} {errorCount.toLocaleString()}{t("건")}</span>
         )}
-        <strong className="index-progress__percent">{percentage}%</strong>
+        <strong className="index-progress__percent">{discovering ? "…" : `${percentage}%`}</strong>
         {status.state === "paused" ? (
           <button type="button" onClick={() => onResume(status.jobId)}>{t("계속")}</button>
         ) : (
@@ -62,7 +63,7 @@ export function IndexStatus({ status, onPause, onResume, onCancel }: Props) {
         className="index-progress__bar"
         aria-label={t("색인 진행률")}
         max={total || 1}
-        value={completed}
+        value={discovering ? undefined : completed}
       />
     </div>
   );

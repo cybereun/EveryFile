@@ -214,8 +214,13 @@ fn discover_path(
         return Err(DiscoveryError::RootIsNotDirectory(canonical_root));
     }
 
+    // Cloud-backed virtual drives (for example Google Drive for desktop) can
+    // reject the Win32 extended prefix that `canonicalize` returns. Keep the
+    // canonical path for database/security checks, but use a normal drive
+    // path for the directory walk when it is safe to do so.
+    let traversal_root = traversal_path(&canonical_root);
     Ok(spawn_discovery_worker(move |sender| {
-        walk_root(canonical_root, options, sender);
+        walk_root(canonical_root, traversal_root, options, sender);
     }))
 }
 
@@ -241,13 +246,18 @@ where
     }
 }
 
-fn walk_root(canonical_root: PathBuf, options: DiscoveryOptions, sender: DiscoverySender) {
+fn walk_root(
+    canonical_root: PathBuf,
+    traversal_root: PathBuf,
+    options: DiscoveryOptions,
+    sender: DiscoverySender,
+) {
     let excluded_directories = Arc::new(options.excluded_directories);
     let excluded_path_patterns = Arc::new(options.excluded_path_patterns);
     let filter_exclusions = Arc::clone(&excluded_directories);
     let filter_patterns = Arc::clone(&excluded_path_patterns);
-    let filter_root = canonical_root.clone();
-    let mut builder = WalkBuilder::new(&canonical_root);
+    let filter_root = traversal_root.clone();
+    let mut builder = WalkBuilder::new(&traversal_root);
     builder
         .hidden(false)
         .follow_links(false)
@@ -256,7 +266,9 @@ fn walk_root(canonical_root: PathBuf, options: DiscoveryOptions, sender: Discove
         .git_global(false)
         .git_exclude(false)
         .parents(false)
-        .sort_by_file_path(|left, right| left.cmp(right))
+        // Sorting forces a complete directory enumeration before the first
+        // candidate is emitted. This is particularly expensive on virtual
+        // drives, so search order is left to the database query instead.
         .filter_entry(move |entry| {
             should_descend(entry, &filter_root, &filter_exclusions, &filter_patterns)
         });
@@ -288,7 +300,7 @@ fn walk_root(canonical_root: PathBuf, options: DiscoveryOptions, sender: Discove
                 continue;
             }
         };
-        if path_matches_exclusion(&canonical_root, &snapshot.path, &excluded_path_patterns) {
+        if path_matches_exclusion(&traversal_root, &snapshot.path, &excluded_path_patterns) {
             continue;
         }
         if !matches!(
@@ -298,7 +310,7 @@ fn walk_root(canonical_root: PathBuf, options: DiscoveryOptions, sender: Discove
             continue;
         }
 
-        match candidate_from_snapshot(&canonical_root, snapshot, &path_open) {
+        match candidate_from_snapshot(&canonical_root, &traversal_root, snapshot, &path_open) {
             Ok(Some(candidate)) => {
                 if !sender.send_candidate(candidate) {
                     return;
@@ -325,7 +337,6 @@ enum DiscoveryEntryKind {
 #[derive(Debug)]
 struct DiscoveryEntrySnapshot {
     path: PathBuf,
-    canonical_parent: PathBuf,
     file_name: std::ffi::OsString,
     kind: DiscoveryEntryKind,
     attributes: u32,
@@ -365,15 +376,8 @@ fn snapshot_entry(entry: &DirEntry) -> Result<DiscoveryEntrySnapshot, ignore::Er
             None => DiscoveryEntryKind::Other,
         }
     };
-    let canonical_parent = entry
-        .path()
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_default();
-
     Ok(DiscoveryEntrySnapshot {
         path: entry.path().to_path_buf(),
-        canonical_parent,
         file_name: entry.file_name().to_os_string(),
         kind,
         attributes: enumerated_attributes(&metadata),
@@ -474,6 +478,7 @@ fn wildcard_path_match(pattern: &str, value: &str) -> bool {
 
 fn candidate_from_snapshot(
     canonical_root: &Path,
+    traversal_root: &Path,
     snapshot: DiscoveryEntrySnapshot,
     path_open: &dyn PathOpenProvider,
 ) -> Result<Option<FileCandidate>, DiscoveryWarning> {
@@ -482,8 +487,15 @@ fn candidate_from_snapshot(
     }
 
     let metadata_only = metadata_only_attributes(snapshot.attributes);
-    let canonical_path = if metadata_only {
-        snapshot.canonical_parent.join(&snapshot.file_name)
+    let canonical_path = if metadata_only || traversal_root != canonical_root {
+        // The walker does not follow links, so a provider-specific virtual
+        // drive can use the registered root plus the observed relative path
+        // without reopening/canonicalizing every remote file.
+        let relative = snapshot
+            .path
+            .strip_prefix(traversal_root)
+            .unwrap_or(&snapshot.path);
+        canonical_root.join(relative)
     } else {
         path_open
             .canonicalize_hydrated(&snapshot.path)
@@ -513,6 +525,26 @@ fn candidate_from_snapshot(
         modified_at: snapshot.modified_at,
         metadata_only,
     }))
+}
+
+fn traversal_path(path: &Path) -> PathBuf {
+    let value = path.to_string_lossy();
+    // Keep extended paths when they are needed for long local paths. Normal
+    // length paths work more reliably with cloud/virtual drive providers
+    // without the `\\?\` prefix.
+    if value.len() >= 248 {
+        return path.to_path_buf();
+    }
+    #[cfg(windows)]
+    {
+        if let Some(unc) = value.strip_prefix(r"\\?\UNC\") {
+            return PathBuf::from(format!(r"\\{unc}"));
+        }
+        if let Some(drive) = value.strip_prefix(r"\\?\") {
+            return PathBuf::from(drive);
+        }
+    }
+    path.to_path_buf()
 }
 
 #[cfg(windows)]
@@ -643,7 +675,6 @@ mod tests {
         let root = PathBuf::from("C:\\fixture");
         let snapshot = DiscoveryEntrySnapshot {
             path: root.join("cloud").join("report.pdf"),
-            canonical_parent: root.join("cloud"),
             file_name: "report.pdf".into(),
             kind: DiscoveryEntryKind::File,
             attributes: FILE_ATTRIBUTE_OFFLINE,
@@ -651,7 +682,8 @@ mod tests {
             modified_at: Some(SystemTime::UNIX_EPOCH),
         };
 
-        let result = candidate_from_snapshot(&root, snapshot, &PanicPathOpenProvider).unwrap();
+        let result =
+            candidate_from_snapshot(&root, &root, snapshot, &PanicPathOpenProvider).unwrap();
 
         assert_eq!(
             result.unwrap(),
@@ -673,7 +705,6 @@ mod tests {
         let root = PathBuf::from("C:\\fixture");
         let snapshot = DiscoveryEntrySnapshot {
             path: root.join("junction"),
-            canonical_parent: root.clone(),
             file_name: "junction".into(),
             kind: DiscoveryEntryKind::Directory,
             attributes: FILE_ATTRIBUTE_REPARSE_POINT,
