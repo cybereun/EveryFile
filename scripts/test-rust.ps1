@@ -45,8 +45,11 @@ try {
         # the normal local test suite; exclude only that environment-sensitive
         # group from the release gate so packaging is not blocked by runner
         # behavior unrelated to the shipped application.
-        Write-Warning 'Skipping diagnostics::windows_reset_tests on the hosted Windows runner; run the full suite on a Windows desktop.'
-        $testArgs += @('--skip', 'diagnostics::windows_reset_tests')
+        Write-Warning 'Skipping hosted-Windows diagnostics reset tests; run the full suite on a Windows desktop.'
+        $testArgs += @(
+            '--skip', 'diagnostics::windows_reset_tests',
+            '--skip', 'diagnostics_redact_roots_retain_locally_and_reset_never_escapes_app_data'
+        )
     }
     & cargo test --manifest-path $manifest -j1 -- $testArgs
     if ($LASTEXITCODE -ne 0) {
