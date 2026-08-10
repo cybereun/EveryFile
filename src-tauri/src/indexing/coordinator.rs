@@ -2666,21 +2666,6 @@ fn upsert_discovered_metadata_transaction(
         .map(|value| value.to_string_lossy().to_ascii_lowercase())
         .unwrap_or_default();
     let modified_at = modified_at_string(candidate.modified_at);
-    let previous: Option<(String, i64, String, String)> = transaction
-        .query_row(
-            "SELECT id, size_bytes, modified_at, parse_state
-             FROM documents WHERE canonical_path = ?1",
-            [&canonical_path],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-        )
-        .optional()?;
-    let unchanged_parsed = previous
-        .as_ref()
-        .is_some_and(|(_, size, timestamp, state)| {
-            *size == i64::try_from(candidate.size_bytes).unwrap_or(i64::MAX)
-                && timestamp == &modified_at
-                && matches!(state.as_str(), "parsed" | "metadata_only")
-        });
     transaction.execute(
         "INSERT INTO documents
          (id, folder_id, canonical_path, file_name, extension, size_bytes,
@@ -2724,19 +2709,12 @@ fn upsert_discovered_metadata_transaction(
         [&canonical_path],
         |row| row.get(0),
     )?;
-    if !unchanged_parsed {
-        transaction.execute(
-            "DELETE FROM document_content WHERE document_id = ?1",
-            [&document_id],
-        )?;
-        transaction.execute(
-            "DELETE FROM document_fts WHERE document_id = ?1",
-            [&document_id],
-        )?;
-    }
-    // Insert a filename-only FTS row now. The parser replaces it with the
-    // full title/body row later, so filename and path searches work during
-    // discovery without waiting for document extraction.
+    // Keep the last committed body/FTS row while a changed file is pending.
+    // This makes background indexing non-destructive: a transient parse
+    // failure or an in-flight rename must not make an already searchable
+    // document disappear. The parser replaces the row atomically after a
+    // successful extraction. New files still receive a filename-only row so
+    // filename/path searches work immediately during discovery.
     transaction.execute(
         "INSERT INTO document_fts (document_id, file_name, title, body)
          SELECT id, file_name, '', '' FROM documents
