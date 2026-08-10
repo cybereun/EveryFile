@@ -351,6 +351,7 @@ describe("secure document preview", () => {
       />,
     );
     const canvas = await screen.findByLabelText("PDF 1페이지");
+    await waitFor(() => expect(observers.length).toBeGreaterThan(0));
 
     observers[0](
       [{ contentRect: { width: 400 } } as ResizeObserverEntry],
