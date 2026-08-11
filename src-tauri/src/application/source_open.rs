@@ -243,7 +243,7 @@ pub fn read_indexed_layout_cancellable(
     }
     let valid_magic = match extension.as_str() {
         "pdf" => bytes.starts_with(b"%PDF-"),
-        "hwp" => bytes.starts_with(&[0xD0, 0xCF, 0x11, 0xE0]),
+        "hwp" => is_hwp5_magic(&bytes) || is_hwp3_magic(&bytes),
         "hwpx" => bytes.starts_with(b"PK"),
         _ => false,
     };
@@ -251,6 +251,14 @@ pub fn read_indexed_layout_cancellable(
         return Err(SourceOpenError::NotLayoutPreview);
     }
     Ok(bytes)
+}
+
+fn is_hwp5_magic(bytes: &[u8]) -> bool {
+    bytes.starts_with(&[0xD0, 0xCF, 0x11, 0xE0])
+}
+
+fn is_hwp3_magic(bytes: &[u8]) -> bool {
+    bytes.starts_with(b"HWP Document File V3.00")
 }
 
 pub fn read_indexed_image_cancellable(

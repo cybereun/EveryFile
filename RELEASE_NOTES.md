@@ -1,4 +1,13 @@
-# EveryFile v1.0.3
+# EveryFile v1.0.4
+
+## HWP/HWPX preview reliability
+
+- Load the bundled HWP renderer WASM as bytes so packaged Windows builds do not
+  depend on WebAssembly MIME headers or a fragile custom-protocol URL.
+- Accept legacy HWP 3.x files for layout-preview loading and show their parsed
+  text when the original renderer cannot represent the file.
+- Keep HWP/HWPX preview usable with a clear text fallback for password-protected,
+  damaged, or renderer-incompatible documents instead of a blank error pane.
 
 ## Two-track indexing
 

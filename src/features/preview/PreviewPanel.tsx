@@ -433,6 +433,7 @@ export function PreviewPanel({
         ) : ["hwp", "hwpx"].includes(preview.extension.toLocaleLowerCase()) ? (
           <HwpLayoutView
             documentId={preview.documentId}
+            fallbackText={plainText}
             findRequest={findRequest}
             getBytesApi={hwpBytesApi}
             initialQuery={searchQuery}

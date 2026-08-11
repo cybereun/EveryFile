@@ -25,8 +25,9 @@ fn resolves_only_an_existing_indexed_file_under_its_registered_root() {
 #[test]
 fn layout_read_accepts_hwp_hwpx_and_pdf_but_rejects_other_extensions() {
     let fixture = Fixture::new();
-    let cases: [(&str, &[u8]); 3] = [
+    let cases: [(&str, &[u8]); 4] = [
         ("form.hwp", &[0xD0, 0xCF, 0x11, 0xE0, 0x00]),
+        ("legacy.hwp", b"HWP Document File V3.00 fixture"),
         ("form.hwpx", b"PK\x03\x04fixture"),
         ("form.pdf", b"%PDF-1.7\nfixture"),
     ];

@@ -23,7 +23,18 @@ function ensureRhwp() {
       }
       return context.measureText(text).width;
     };
-    rhwpReady = initRhwp({ module_or_path: wasmUrl });
+    // Tauri's custom protocol does not always provide a WebAssembly MIME type.
+    // Passing the downloaded bytes avoids instantiateStreaming failures in the
+    // packaged app and also makes the asset URL independent of the current page.
+    const wasmLocation = new URL(wasmUrl, import.meta.url);
+    rhwpReady = fetch(wasmLocation)
+      .then((response) => {
+        if (!response.ok) {
+          throw new Error(`HWP_RENDER_WASM_UNAVAILABLE (${response.status})`);
+        }
+        return response.arrayBuffer();
+      })
+      .then((bytes) => initRhwp({ module_or_path: bytes }));
   }
   return rhwpReady;
 }
@@ -35,6 +46,16 @@ export interface HwpDocumentLike {
 }
 
 export type HwpLoader = (bytes: Uint8Array) => Promise<HwpDocumentLike>;
+
+function normalizeBytes(value: unknown): Uint8Array {
+  if (value instanceof Uint8Array) return value;
+  if (value instanceof ArrayBuffer) return new Uint8Array(value);
+  if (ArrayBuffer.isView(value)) {
+    return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+  }
+  if (Array.isArray(value)) return Uint8Array.from(value);
+  throw new Error("HWP_LAYOUT_BYTES_INVALID");
+}
 
 async function loadHwp(bytes: Uint8Array): Promise<HwpDocumentLike> {
   await ensureRhwp();
@@ -113,6 +134,8 @@ interface HwpLayoutViewProps {
   documentId: string;
   initialQuery?: string;
   findRequest?: number;
+  /** Parsed text used when the original renderer cannot handle a legacy/corrupt file. */
+  fallbackText?: string;
   getBytesApi?: typeof getLayoutBytes;
   cancelReadApi?: typeof cancelPdfRead;
   loader?: HwpLoader;
@@ -122,6 +145,7 @@ export function HwpLayoutView({
   documentId,
   initialQuery = "",
   findRequest = 0,
+  fallbackText = "",
   getBytesApi = getLayoutBytes,
   cancelReadApi = cancelPdfRead,
   loader = loadHwp,
@@ -138,6 +162,7 @@ export function HwpLayoutView({
   const [activeMatch, setActiveMatch] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [textFallback, setTextFallback] = useState<string | null>(null);
 
   useEffect(() => {
     if (findRequest > 0) setFindOpen(true);
@@ -153,12 +178,18 @@ export function HwpLayoutView({
     const requestId = nextRequestId();
     let active = true;
     let documentHandle: HwpDocumentLike | null = null;
+    let bytesLoaded = false;
     setLoading(true);
     setError(null);
+    setTextFallback(null);
     setHwp(null);
     setPageNumber(1);
     void getBytesApi(documentId, requestId)
-      .then((bytes) => loader(new Uint8Array(bytes)))
+      .then((bytes) => {
+        const normalized = normalizeBytes(bytes);
+        bytesLoaded = true;
+        return loader(normalized);
+      })
       .then((loaded) => {
         if (!active) return;
         documentHandle = loaded;
@@ -166,6 +197,14 @@ export function HwpLayoutView({
       })
       .catch((caught) => {
         if (!active) return;
+        // Kordoc has already produced the searchable text. Keep the preview
+        // useful for HWP 3.x, password-protected files, and HWPX variants that
+        // the WASM layout renderer does not understand instead of leaving an
+        // apparently broken blank pane.
+        if (bytesLoaded && fallbackText.trim()) {
+          setTextFallback(fallbackText);
+          return;
+        }
         const message = safeMessage(caught, t);
         if (message) setError(message);
       })
@@ -175,7 +214,7 @@ export function HwpLayoutView({
       void cancelReadApi(requestId).catch(() => undefined);
       documentHandle?.free();
     };
-  }, [cancelReadApi, documentId, getBytesApi, loader, t]);
+  }, [cancelReadApi, documentId, fallbackText, getBytesApi, loader, t]);
 
   const rendered = useMemo(() => {
     if (!hwp) return { svg: "", matches: 0 };
@@ -218,6 +257,16 @@ export function HwpLayoutView({
   const renderError = "error" in rendered ? rendered.error : null;
   if (error || renderError) {
     return <div className="preview-message preview-message--error" role="alert">{error ?? renderError}</div>;
+  }
+  if (textFallback) {
+    return (
+      <section className="hwp-layout-view hwp-layout-view--fallback" aria-label={t("문서 텍스트 미리보기")}>
+        <div className="preview-message preview-message--warning" role="status">
+          {t("이 문서는 원본 레이아웃을 지원하지 않아 문서 텍스트로 표시합니다.")}
+        </div>
+        <pre className="hwp-text-fallback">{textFallback}</pre>
+      </section>
+    );
   }
   if (!hwp) return null;
   const pageCount = Math.max(1, hwp.pageCount());

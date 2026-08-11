@@ -1958,6 +1958,31 @@ select:focus-visible,
   background: #dedad3;
 }
 
+.hwp-layout-view--fallback {
+  align-items: stretch;
+  background: var(--color-surface);
+}
+
+.hwp-text-fallback {
+  min-height: 0;
+  margin: 0;
+  flex: 1 1 auto;
+  overflow: auto;
+  padding: 1.25rem 1.5rem;
+  background: var(--color-surface);
+  color: var(--color-text);
+  font: inherit;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.preview-message--warning {
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-accent-soft);
+  color: var(--color-text-muted);
+}
+
 .hwp-page-wrap {
   min-height: 0;
   flex: 1 1 auto;
