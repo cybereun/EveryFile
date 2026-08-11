@@ -1637,6 +1637,12 @@ impl IndexCoordinator {
                 },
             )
             .optional()?;
+        // Discovery creates a filename-only `pending` row before the parser
+        // starts. It has no committed document state to restore if the parser
+        // is cancelled, so compensate it as a newly created document.
+        let discovery_stub = previous
+            .as_ref()
+            .is_some_and(|(_, metadata)| metadata.parse_state == "pending");
         let mut claimed = None;
         for claim in 0..MAX_PARSE_ATTEMPT_TOKEN_CLAIMS {
             let attempt_token = self.attempt_tokens.generate();
@@ -1678,7 +1684,7 @@ impl IndexCoordinator {
         Ok(DocumentParsingCheckpoint {
             document_id,
             attempt_token,
-            previous: previous.map(|(_, metadata)| metadata),
+            previous: previous.and_then(|(_, metadata)| (!discovery_stub).then_some(metadata)),
         })
     }
 
