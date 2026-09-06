@@ -27,6 +27,7 @@ dist-ssr
 /.cache/
 /tests/fixtures/folder-search/ocr-generated/
 /artifacts/
+/release/
 /test-results/
 
 # Editor directories and files

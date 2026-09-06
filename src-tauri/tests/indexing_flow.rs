@@ -2456,8 +2456,9 @@ async fn start_returns_before_incremental_discovery_finishes_and_stays_bounded()
     .await
     .unwrap();
     let discovering = coordinator.status(&job).await.unwrap();
-    assert_eq!(discovering.state, JobState::Discovering);
-    assert_eq!(discovering.total_files, 1);
+    assert_eq!(discovering.state, JobState::Parsing);
+    assert_eq!(discovering.total_files, 3);
+    assert_eq!(discovering.completed_files, 0);
     assert!(probe.max_buffered.load(Ordering::Acquire) <= 16);
 
     probe.release();
