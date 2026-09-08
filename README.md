@@ -50,8 +50,8 @@ EveryFile은 사용자가 직접 선택한 폴더 안의 파일을 빠르게 찾
 ### 설치 및 실행
 
 1. [최신 릴리즈](https://github.com/cybereun/EveryFile/releases)에서 설치 파일 또는 포터블 ZIP을 받습니다.
-2. 일반 설치는 `EveryFile-Setup-v1.0.4.exe`를 실행합니다.
-3. 무설치 사용은 `EveryFile-Portable-v1.0.4.zip`을 쓰기 가능한 폴더에 압축 해제한 뒤
+2. 일반 설치는 `EveryFile-Setup-v1.1.0.exe`를 실행합니다.
+3. 무설치 사용은 `EveryFile-Portable-v1.1.0.zip`을 쓰기 가능한 폴더에 압축 해제한 뒤
    `EveryFile.exe`를 실행합니다.
 4. 앱에서 오른쪽 위 폴더 추가 버튼 또는 왼쪽 패널의 **폴더 추가**를 눌러 색인할 폴더를 선택합니다.
 5. 하단 상태바가 색인 완료를 표시하면 키워드 또는 파일명으로 검색합니다.
@@ -74,6 +74,7 @@ EveryFile은 사용자가 직접 선택한 폴더 안의 파일을 빠르게 찾
 git clone https://github.com/cybereun/EveryFile.git
 cd EveryFile
 git submodule update --init --recursive
+& .\scripts\use-l-drive.ps1
 npm ci
 npm test -- --run
 npm run build
@@ -84,6 +85,7 @@ Windows 릴리즈 빌드에는 서명 키와 sidecar 빌드가 필요합니다.
 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` 환경 변수 또는 GitHub Actions Secret으로만 사용하세요.
 
 ```powershell
+& .\scripts\use-l-drive.ps1
 powershell -ExecutionPolicy Bypass -File scripts\release-windows.ps1
 npm run generate:update-manifest
 ```
@@ -131,8 +133,8 @@ cloud-only placeholder files.
 ### Install and run
 
 Download the [latest release](https://github.com/cybereun/EveryFile/releases).
-Run `EveryFile-Setup-v1.0.4.exe` for a per-user installation, or extract
-`EveryFile-Portable-v1.0.4.zip` and launch `EveryFile.exe` without installation.
+Run `EveryFile-Setup-v1.1.0.exe` for a per-user installation, or extract
+`EveryFile-Portable-v1.1.0.zip` and launch `EveryFile.exe` without installation.
 Both distributions use the Windows GUI subsystem and do not open a terminal.
 The installer may be unsigned by Authenticode; verify `SHA256SUMS.txt` before running.
 
@@ -151,7 +153,9 @@ npm test -- --run
 npm run build
 ```
 
-Run `scripts\release-windows.ps1` for the complete Windows release gate, then
+Run `scripts\use-l-drive.ps1` before installation or release commands so npm,
+Rust, Python, OCR model, temporary, and local app-data caches stay on L:. Then
+run `scripts\release-windows.ps1` for the complete Windows release gate, then
 `npm run generate:update-manifest` to create the signed Tauri `latest.json`
 manifest. Keep the private signing key out of Git and use GitHub Actions Secrets
 for published releases.

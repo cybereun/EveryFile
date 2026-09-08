@@ -50,9 +50,9 @@ describe("App accessibility", () => {
   });
 
   it("uses compliant dark text and control boundaries without changing tokens", () => {
-    expect(tokensCss).toContain("--color-text: #46372d;");
-    expect(tokensCss).toContain("--color-text-muted: #806f60;");
-    expect(tokensCss).toContain("--color-border: #d9c4a4;");
+    expect(tokensCss).toContain("--color-text: #352e29;");
+    expect(tokensCss).toContain("--color-text-muted: #817365;");
+    expect(tokensCss).toContain("--color-border: #e5dcd0;");
     expect(appCss).toMatch(
       /\.folder-empty\s*\{[^}]*color:\s*var\(--color-text\)/s,
     );

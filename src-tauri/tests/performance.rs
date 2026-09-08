@@ -93,6 +93,7 @@ impl PerformanceLibrary {
             mode,
             folder_ids: Vec::new(),
             extensions: Vec::new(),
+            within_query: String::new(),
             extensionless: false,
             modified_after: None,
             modified_before: None,
@@ -155,4 +156,20 @@ fn at_least_ninety_five_percent_of_hundred_thousand_document_searches_finish_und
 
     // Keep the encrypted database alive for the full measurement.
     assert!(Arc::strong_count(&library.database) >= 2);
+}
+
+#[test]
+fn refinement_over_hundred_thousand_documents_finishes_within_two_seconds() {
+    let library = PerformanceLibrary::with_documents(100_000);
+    let mut request = library.request("refine-100k", "performance", SearchMode::Keyword);
+    request.within_query = "searchable-marker".into();
+    let started = Instant::now();
+    let response = library.search.search(&request).expect("refined search");
+
+    assert_eq!(response.total, 100);
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "100,000-document refined search took {:?}",
+        started.elapsed()
+    );
 }

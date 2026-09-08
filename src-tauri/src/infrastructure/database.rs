@@ -2,6 +2,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use parking_lot::{MappedMutexGuard, Mutex, MutexGuard};
+use rusqlite::functions::FunctionFlags;
 use rusqlite::{Connection, InterruptHandle};
 use thiserror::Error;
 use zeroize::Zeroizing;
@@ -48,6 +49,18 @@ impl Database {
             .map_err(DatabaseError::Configure)?;
         connection
             .busy_timeout(Duration::from_secs(5))
+            .map_err(DatabaseError::Configure)?;
+        connection
+            .create_scalar_function(
+                "everyfile_unicode_lower",
+                1,
+                FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
+                |context| {
+                    context
+                        .get::<Option<String>>(0)
+                        .map(|value| value.map(|text| text.to_lowercase()))
+                },
+            )
             .map_err(DatabaseError::Configure)?;
 
         let interrupt = std::sync::Arc::new(connection.get_interrupt_handle());

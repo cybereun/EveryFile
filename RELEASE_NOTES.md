@@ -1,3 +1,12 @@
+# EveryFile v1.1.0
+
+## Refreshed search workspace
+
+- Reworked the main workspace around faster file discovery, clearer search controls, and a responsive layout for narrow windows.
+- Added refreshed light/dark visual tokens, accessible keyboard-operable panel controls, and improved filter overflow behavior.
+- Added richer update progress feedback so download, signature verification, installation, and restart are distinct states.
+- Prevented duplicate update installation attempts while preserving settings and the local index.
+
 # EveryFile v1.0.4
 
 ## HWP/HWPX preview reliability

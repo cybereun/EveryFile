@@ -672,6 +672,95 @@ fn superseded_search_cannot_return_or_write_history_ahead_of_the_new_request() {
     assert_eq!(history, ["newterm"]);
 }
 
+#[test]
+fn refinement_searches_full_body_before_count_and_paging_and_preserves_scope() {
+    let fixture = Fixture::new();
+    for (id, folder, body) in [
+        ("a", "folder-1", "alpha ordinary".to_owned()),
+        (
+            "b",
+            "folder-1",
+            format!("alpha {} hidden_100%", "ordinary ".repeat(100)),
+        ),
+        ("c", "folder-1", "alpha hidden_100%".to_owned()),
+        ("d", "folder-2", "alpha hidden_100%".to_owned()),
+        ("e", "folder-1", "alpha hiddenX1000".to_owned()),
+    ] {
+        fixture.insert_document(
+            id,
+            folder,
+            &format!(r"C:\fixture\{id}.txt"),
+            &format!("{id}.txt"),
+            "txt",
+            "2026-01-01T00:00:00Z",
+            1,
+            "",
+            &body,
+        );
+    }
+    let mut query = request("alpha", SearchMode::Keyword);
+    query.sort = "name".into();
+    query.folder_ids = vec!["folder-1".into()];
+    query.limit = 1;
+    assert_eq!(
+        fixture.repository.search(&query).unwrap().hits[0].document_id,
+        "a"
+    );
+    query.within_query = "hidden_100%".into();
+    let first = fixture.repository.search(&query).unwrap();
+    assert_eq!(first.total, 2);
+    assert_eq!(first.hits[0].document_id, "b");
+    assert!(first.has_more);
+    query.offset = 1;
+    let second = fixture.repository.search(&query).unwrap();
+    assert_eq!(second.total, 2);
+    assert_eq!(second.hits[0].document_id, "c");
+    assert!(!second.has_more);
+    query.within_query = " ".into();
+    query.offset = 0;
+    assert_eq!(fixture.repository.search(&query).unwrap().total, 4);
+}
+
+#[test]
+fn refinement_matches_filename_path_and_title_and_rejects_excessive_input() {
+    let fixture = Fixture::new();
+    fixture.insert_document(
+        "a",
+        "folder-1",
+        r"C:\fixture\보고서.txt",
+        "보고서.txt",
+        "txt",
+        "2026-01-01T00:00:00Z",
+        1,
+        "제목 검색",
+        "alpha",
+    );
+    let mut query = request("", SearchMode::Filename);
+    for value in ["보고서", "FIXTURE", "제목 검색", "alpha"] {
+        query.within_query = value.into();
+        assert_eq!(
+            fixture.repository.search(&query).unwrap().total,
+            1,
+            "{value}"
+        );
+    }
+    fixture.insert_document(
+        "unicode",
+        "folder-1",
+        r"C:\fixture\École.txt",
+        "École.txt",
+        "txt",
+        "2026-01-01T00:00:00Z",
+        1,
+        "",
+        "",
+    );
+    query.within_query = "éCOLE".into();
+    assert_eq!(fixture.repository.search(&query).unwrap().total, 1);
+    query.within_query = "x".repeat(513);
+    assert!(fixture.repository.search(&query).is_err());
+}
+
 fn request(query: &str, mode: SearchMode) -> SearchRequest {
     SearchRequest {
         request_id: "search-test".into(),
@@ -679,6 +768,7 @@ fn request(query: &str, mode: SearchMode) -> SearchRequest {
         mode,
         folder_ids: Vec::new(),
         extensions: Vec::new(),
+        within_query: String::new(),
         extensionless: false,
         modified_after: None,
         modified_before: None,

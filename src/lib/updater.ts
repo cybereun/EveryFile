@@ -1,7 +1,7 @@
 import { isTauri } from "@tauri-apps/api/core";
 
 export interface UpdateProgress {
-  phase: "starting" | "downloading" | "finished";
+  phase: "starting" | "downloading" | "verifying" | "installing" | "restarting";
   downloadedBytes: number;
   contentLength?: number;
   percent?: number;
@@ -33,13 +33,16 @@ export async function checkForUpdate(): Promise<AvailableUpdate | null> {
     notes: update.body?.trim() || "새 버전의 안정성과 기능이 개선되었습니다.",
     install: async (onProgress) => {
       let downloadedBytes = 0;
-      await update.downloadAndInstall((event) => {
+      let contentLength: number | undefined;
+      await update.download((event) => {
         if (event.event === "Started") {
+          downloadedBytes = 0;
+          contentLength = event.data.contentLength;
           onProgress?.({
             phase: "starting",
             downloadedBytes: 0,
             contentLength: event.data.contentLength,
-            percent: 0,
+            percent: contentLength ? 0 : undefined,
           });
           return;
         }
@@ -48,26 +51,28 @@ export async function checkForUpdate(): Promise<AvailableUpdate | null> {
           onProgress?.({
             phase: "downloading",
             downloadedBytes,
-            percent: undefined,
+            contentLength,
+            percent: contentLength
+              ? Math.min(100, Math.round((downloadedBytes / contentLength) * 100))
+              : undefined,
           });
           return;
         }
         onProgress?.({
-          phase: "finished",
+          phase: "verifying",
           downloadedBytes,
-          percent: 100,
+          contentLength,
         });
       });
-
-      // The passive Windows installer normally restarts the process itself.
-      // Relaunch is still useful for platforms/install modes that return here.
-      try {
-        const { relaunch } = await import("@tauri-apps/plugin-process");
-        await relaunch();
-      } catch {
-        // If the installer already closed the process, this code is unreachable.
-        // A failed relaunch must not turn a successful installation into an error.
-      }
+      // download() resolves only after signature verification. Do not quit the
+      // running app or report installation complete on a download-finished event.
+      onProgress?.({ phase: "installing", downloadedBytes, contentLength });
+      await update.install();
+      // Windows exits inside install(); the passive NSIS /R path restarts it
+      // after successful installation. Other platforms return here.
+      onProgress?.({ phase: "restarting", downloadedBytes, contentLength });
+      const { relaunch } = await import("@tauri-apps/plugin-process");
+      await relaunch();
     },
   };
 }

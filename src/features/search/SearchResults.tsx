@@ -162,7 +162,6 @@ function ResultRow({
   onOpenLocation,
   onCopyPath,
   onContextMenu,
-  compareSelected,
   clickBehavior,
   dateDisplay,
   locale,
@@ -175,7 +174,6 @@ function ResultRow({
   onOpenLocation: () => void;
   onCopyPath: () => void;
   onContextMenu: (event: React.MouseEvent<HTMLDivElement>) => void;
-  compareSelected: boolean;
   clickBehavior: "preview" | "open";
   dateDisplay: "relative" | "absolute";
   locale: "ko" | "en";
@@ -185,7 +183,7 @@ function ResultRow({
   return (
     <div
       aria-selected={selected}
-      className={`search-result-row${selected ? " is-selected" : ""}${compareSelected ? " is-compare-target" : ""}`}
+      className={`search-result-row${selected ? " is-selected" : ""}`}
       id={`search-result-${hit.documentId}`}
       onClick={() => {
         onSelect();
@@ -199,7 +197,6 @@ function ResultRow({
         <strong>{hit.fileName}</strong>
         <span className="extension-badge">{hit.extension.toUpperCase()}</span>
         {hit.matchKind === "both" && <span className="match-count-badge">2{t("개")} 매칭</span>}
-        {compareSelected && <span className="compare-target-badge">{t("비교 대상으로 선택")}</span>}
         <span className="result-actions">
           <button
             aria-label={`${hit.fileName} ${t("경로 복사")}`}
@@ -279,7 +276,6 @@ export function SearchResults({
     x: number;
     y: number;
   } | null>(null);
-  const [compareTargetId, setCompareTargetId] = useState<string | null>(null);
   const contextMenuRef = useRef<HTMLDivElement>(null);
 
   const selectDocument = useCallback(
@@ -481,7 +477,6 @@ export function SearchResults({
                 clickBehavior={clickBehavior}
                 dateDisplay={dateDisplay}
                 hit={hit}
-                compareSelected={compareTargetId === hit.documentId}
                 onOpen={() => {
                   selectDocument(hit.documentId);
                   void openDocument(hit.documentId);
@@ -521,17 +516,6 @@ export function SearchResults({
             </button>
             <button aria-label={t("경로 복사")} onClick={() => runContextAction(() => void copyPath(contextHit))} role="menuitem" type="button">
               <span aria-hidden="true"><CopyPathIcon /></span><span>{t("경로 복사")}</span><kbd>Ctrl+C</kbd>
-            </button>
-            <div className="search-result-context-menu__separator" role="separator" />
-            <button aria-label={t("유사 문서 찾기")} disabled role="menuitem" type="button">
-              <span aria-hidden="true">⌕</span><span>{t("유사 문서 찾기")}</span><small>{t("시맨틱 OFF")}</small>
-            </button>
-            <button aria-label={t("비교 대상으로 선택")} onClick={() => runContextAction(() => {
-              setCompareTargetId(contextHit.documentId);
-              setActionNotice(t("비교 대상으로 선택했습니다."));
-              window.setTimeout(() => setActionNotice(null), 2200);
-            })} role="menuitem" type="button">
-              <span aria-hidden="true">⌘</span><span>{t("비교 대상으로 선택")}</span><span />
             </button>
           </div>
         );

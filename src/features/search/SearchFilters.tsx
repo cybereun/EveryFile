@@ -380,6 +380,8 @@ export function SearchFilters({
             <span className="sr-only">{t("결과 내 검색")}</span>
             <input
               aria-label={t("결과 내 검색")}
+              title={t("전체 검색 결과의 파일명·경로·본문에서 입력한 문구를 찾습니다.")}
+              maxLength={512}
               onChange={(event) => onWithinResultsChange(event.target.value)}
               placeholder={t("결과 내 검색…")}
               type="text"

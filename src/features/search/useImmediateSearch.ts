@@ -24,6 +24,7 @@ export interface UseImmediateSearchOptions extends ImmediateSearchApi {
   debounceMs?: number;
   pageSize?: number;
   initialFilters?: SearchFilters;
+  withinQuery?: string;
 }
 
 function nextRequestId(sequence: number) {
@@ -36,6 +37,7 @@ export function useImmediateSearch({
   debounceMs = 120,
   pageSize = 100,
   initialFilters = DEFAULT_SEARCH_FILTERS,
+  withinQuery = "",
 }: UseImmediateSearchOptions) {
   const [query, setRawQuery] = useState("");
   const [queryRevision, setQueryRevision] = useState(0);
@@ -107,6 +109,7 @@ export function useImmediateSearch({
     (requestId: string, offset: number): SearchRequest => ({
       requestId,
       query: buildBackendQuery(query),
+      withinQuery: withinQuery.trim(),
       mode: filters.mode,
       folderIds: filters.folderIds,
       extensions: filters.extensions,
@@ -120,7 +123,7 @@ export function useImmediateSearch({
       limit: pageSize,
       offset,
     }),
-    [filters, pageSize, query],
+    [filters, pageSize, query, withinQuery],
   );
 
   const execute = useCallback(
@@ -164,22 +167,25 @@ export function useImmediateSearch({
 
   useEffect(() => {
     const generation = ++latestGeneration.current;
-    if (!hasSearchCriteria(query, filters)) {
-      const previousRequestId = activeRequestId.current;
-      activeRequestId.current = null;
-      if (previousRequestId) void cancel(previousRequestId).catch(() => undefined);
-      setHits([]);
-      setTotal(0);
-      setHasMore(false);
+    const previousRequestId = activeRequestId.current;
+    activeRequestId.current = null;
+    if (previousRequestId) void cancel(previousRequestId).catch(() => undefined);
+    setHits([]);
+    setTotal(0);
+    setHasMore(false);
+    setElapsedMs(0);
+    setError(null);
+    if (!hasSearchCriteria(query, filters) && !withinQuery.trim()) {
       setLoading(false);
       return;
     }
 
+    setLoading(true);
     const timer = window.setTimeout(() => {
       void execute(generation, 0, false);
     }, debounceMs);
     return () => window.clearTimeout(timer);
-  }, [cancel, debounceMs, execute, filters, query, queryRevision]);
+  }, [cancel, debounceMs, execute, filters, query, queryRevision, withinQuery]);
 
   useEffect(
     () => () => {

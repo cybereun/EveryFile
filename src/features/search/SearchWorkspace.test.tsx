@@ -200,34 +200,49 @@ describe("SearchWorkspace", () => {
     await waitFor(() => expect(open).toHaveBeenCalledWith("filename-hit"));
   });
 
-  it("filters returned rows with search-within-results", async () => {
-    const search = vi.fn(async (request: SearchRequest) => searchResponse(request));
-    const cancel = vi.fn().mockResolvedValue(false);
-    render(
-      <SearchWorkspace
-        folders={folders}
-        searchApi={search}
-        cancelApi={cancel}
-        openApi={vi.fn().mockResolvedValue(undefined)}
-        debounceMs={0}
-      />,
-    );
-
+  it("refines all results on the backend, resets paging, and clears refinement on Home", async () => {
+    const search = vi.fn(async (request: SearchRequest) => {
+      const result = searchResponse(request);
+      if (request.withinQuery) {
+        result.hits = [{
+          ...result.hits[1],
+          documentId: "unloaded",
+          fileName: "숨겨진 문서.pdf",
+          snippet: "본문의 다른 부분",
+        }];
+        result.total = 1;
+      } else {
+        result.total = 250;
+        result.hasMore = true;
+      }
+      return result;
+    });
+    const props = {
+      folders,
+      searchApi: search,
+      cancelApi: vi.fn().mockResolvedValue(false),
+      debounceMs: 0,
+    };
+    const { rerender } = render(<SearchWorkspace {...props} />);
     fireEvent.change(screen.getByRole("searchbox", { name: "검색어" }), {
       target: { value: "중간고사" },
     });
     await screen.findByText("학습 전략.pdf");
-    const searchCalls = search.mock.calls.length;
-    const cancelCalls = cancel.mock.calls.length;
     fireEvent.change(screen.getByRole("textbox", { name: "결과 내 검색" }), {
       target: { value: "학습" },
     });
-
+    await screen.findByText("숨겨진 문서.pdf");
+    expect(search).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        query: "중간고사",
+        withinQuery: "학습",
+        offset: 0,
+      }),
+    );
     expect(screen.queryByText("중간고사 계획.hwp")).not.toBeInTheDocument();
-    expect(screen.getByText("학습 전략.pdf")).toBeVisible();
-    await new Promise((resolve) => window.setTimeout(resolve, 150));
-    expect(search).toHaveBeenCalledTimes(searchCalls);
-    expect(cancel).toHaveBeenCalledTimes(cancelCalls);
+    rerender(<SearchWorkspace {...props} homeRequest={1} />);
+    expect(screen.getByRole("textbox", { name: "결과 내 검색" })).toHaveValue("");
+    expect(screen.getByRole("searchbox", { name: "검색어" })).toHaveValue("");
   });
 
   it("renders popovers in a portal outside the overflow scroller", () => {

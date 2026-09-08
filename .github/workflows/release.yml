@@ -46,6 +46,15 @@ jobs:
           "C:\\Strawberry\\perl\\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - run: npm ci
+      - name: Verify release tag matches application version
+        if: github.ref_type == 'tag'
+        shell: pwsh
+        run: |
+          $package = Get-Content package.json -Raw | ConvertFrom-Json
+          $expectedTag = "v$($package.version)"
+          if ($env:GITHUB_REF_NAME -ne $expectedTag) {
+            throw "Release tag $env:GITHUB_REF_NAME does not match application version $expectedTag."
+          }
       - name: Build signed installer and portable package
         run: npm run release:windows
       - name: Generate Tauri update manifest

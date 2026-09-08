@@ -32,6 +32,7 @@ import {
   listSearchHistory,
 } from "../lib/ipc";
 import "../styles/app.css";
+import "../styles/refresh.css";
 import { Header } from "./Header";
 import {
   createTranslator,
@@ -53,7 +54,7 @@ const RIGHT_PANE_MAX = 720;
 const CENTER_PANE_MIN = 520;
 const PREVIEW_BREAKPOINT = 1100;
 const COMPACT_HEADER_BREAKPOINT = 560;
-const APP_VERSION = "v1.0.3";
+const APP_VERSION = "v1.1.0";
 const UPDATE_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
 function displayPath(path: string) {

@@ -1,7 +1,6 @@
 import {
   forwardRef,
   useEffect,
-  useMemo,
   useState,
   type Ref,
 } from "react";
@@ -74,8 +73,8 @@ export const SearchWorkspace = forwardRef<HTMLInputElement, SearchWorkspaceProps
       cancel: cancelApi,
       debounceMs,
       pageSize,
+      withinQuery: withinResults,
     });
-    const within = withinResults.trim().toLocaleLowerCase();
     useEffect(() => {
       if (!statisticsFilter) return;
       search.patchFilters(statisticsFilter);
@@ -87,7 +86,10 @@ export const SearchWorkspace = forwardRef<HTMLInputElement, SearchWorkspaceProps
     }, [historyQuery, historyRequest, search.setQuery]);
 
     useEffect(() => {
-      if (homeRequest > 0) search.reset();
+      if (homeRequest > 0) {
+        setWithinResults("");
+        search.reset();
+      }
     }, [homeRequest, search.reset]);
 
     useEffect(() => {
@@ -99,15 +101,6 @@ export const SearchWorkspace = forwardRef<HTMLInputElement, SearchWorkspaceProps
       }, 250);
       return () => window.clearTimeout(refresh);
     }, [onHistoryChanged, search.hits.length, search.loading, search.query]);
-    const visibleHits = useMemo(() => {
-      if (!within) return search.hits;
-      return search.hits.filter((hit) =>
-        [hit.fileName, hit.path, hit.snippet ?? ""]
-          .join(" ")
-          .toLocaleLowerCase()
-          .includes(within),
-      );
-    }, [search.hits, within]);
 
     return (
       <section className="detailed-search" role="search" aria-label="파일 검색 / File search">
@@ -133,13 +126,13 @@ export const SearchWorkspace = forwardRef<HTMLInputElement, SearchWorkspaceProps
           elapsedMs={search.elapsedMs}
           error={search.error}
           hasMore={search.hasMore}
-          hits={visibleHits}
+          hits={search.hits}
           loading={search.loading}
           onLoadMore={() => void search.loadMore()}
           onOpen={openApi}
           onOpenLocation={openLocationApi}
           onSelect={(documentId) => onSelectDocument(documentId, search.query)}
-          total={within ? visibleHits.length : search.total}
+          total={search.total}
           onAddFolder={onAddFolder}
         />
       </section>

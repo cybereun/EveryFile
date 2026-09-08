@@ -5,6 +5,7 @@ export type SearchMatchKind = "filename" | "content" | "both" | "metadata";
 export interface SearchRequest {
   requestId: string;
   query: string;
+  withinQuery?: string;
   mode: SearchMode;
   folderIds: string[];
   extensions: string[];

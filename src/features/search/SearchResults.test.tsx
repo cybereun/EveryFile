@@ -132,8 +132,8 @@ describe("SearchResults", () => {
     fireEvent.click(screen.getByRole("menuitem", { name: /경로 복사/ }));
     await waitFor(() => expect(clipboard).toHaveBeenCalledWith("C:\\Documents\\action.pdf"));
     fireEvent.contextMenu(screen.getByRole("option"), { clientX: 80, clientY: 80 });
-    fireEvent.click(screen.getByRole("menuitem", { name: "비교 대상으로 선택" }));
-    expect(screen.getByRole("option")).toHaveClass("is-compare-target");
+    expect(screen.queryByRole("menuitem", { name: "비교 대상으로 선택" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "유사 문서 찾기" })).not.toBeInTheDocument();
     expect(open).not.toHaveBeenCalled();
   });
 });
