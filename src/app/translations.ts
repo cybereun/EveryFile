@@ -11,6 +11,7 @@ export const defaultLocale: Locale = "ko";
  * its stable test selectors while the English dictionary is introduced.
  */
 const english: Record<string, string> = {
+  "전체 검색 결과의 파일명·경로·본문에서 입력한 문구를 찾습니다.": "Find this text in filenames, paths and indexed content across all search results.",
   "파일을 찾는 가장 빠른 방법": "The fastest way to find files.",
   "주요 메뉴 / Main menu": "Main menu",
   "홈 / Home": "Home",
@@ -146,10 +147,6 @@ const english: Record<string, string> = {
   "경로 복사": "Copy path",
   "경로를 클립보드에 복사했습니다.": "Path copied to clipboard.",
   "경로를 복사하지 못했습니다.": "Could not copy the path.",
-  "유사 문서 찾기": "Find similar documents",
-  "비교 대상으로 선택": "Select for comparison",
-  "비교 대상으로 선택했습니다.": "Selected for comparison.",
-  "시맨틱 OFF": "Semantic OFF",
   "결과 더 보기": "Show more results",
   "CSV 내보내기에 실패했습니다.": "CSV export failed.",
   "Excel 내보내기에 실패했습니다.": "Excel export failed.",

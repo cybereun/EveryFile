@@ -37,6 +37,54 @@ function response(
 }
 
 describe("useImmediateSearch", () => {
+  it("resets paging and cancels stale work when refinement changes", async () => {
+    vi.useFakeTimers();
+    const pending: Array<{
+      request: SearchRequest;
+      resolve: (value: SearchResponse) => void;
+    }> = [];
+    const search = vi.fn(
+      (request: SearchRequest) =>
+        new Promise<SearchResponse>((resolve) => pending.push({ request, resolve })),
+    );
+    const cancel = vi.fn().mockResolvedValue(true);
+    const { result, rerender } = renderHook(
+      ({ withinQuery }) => useImmediateSearch({ search, cancel, withinQuery }),
+      { initialProps: { withinQuery: "" } },
+    );
+    act(() => result.current.setQuery("alpha"));
+    await act(async () => vi.advanceTimersByTimeAsync(120));
+    await act(async () =>
+      pending[0].resolve(
+        response(pending[0].request.requestId, "first", {
+          total: 200,
+          hasMore: true,
+        }),
+      ),
+    );
+    act(() => {
+      void result.current.loadMore();
+    });
+    expect(pending[1].request.offset).toBe(1);
+    rerender({ withinQuery: "hidden" });
+    expect(result.current.hits).toEqual([]);
+    expect(result.current.hasMore).toBe(false);
+    expect(cancel).toHaveBeenCalledWith(pending[1].request.requestId);
+    await act(async () => vi.advanceTimersByTimeAsync(120));
+    expect(pending[2].request).toMatchObject({
+      offset: 0,
+      withinQuery: "hidden",
+      query: "alpha",
+    });
+    await act(async () =>
+      pending[2].resolve(response(pending[2].request.requestId, "refined")),
+    );
+    await act(async () =>
+      pending[1].resolve(response(pending[1].request.requestId, "stale")),
+    );
+    expect(result.current.hits.map((hit) => hit.fileName)).toEqual(["refined"]);
+  });
+
   afterEach(() => {
     vi.useRealTimers();
   });

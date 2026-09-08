@@ -71,6 +71,6 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: EveryFile-Windows-v1.0.1
+          name: EveryFile-Windows
           path: artifacts/release/*
           if-no-files-found: error

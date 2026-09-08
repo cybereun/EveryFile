@@ -31,6 +31,8 @@ pub enum SearchMatchKind {
 pub struct SearchRequest {
     pub request_id: String,
     pub query: String,
+    #[serde(default)]
+    pub within_query: String,
     pub mode: SearchMode,
     pub folder_ids: Vec<String>,
     pub extensions: Vec<String>,

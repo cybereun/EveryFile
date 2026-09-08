@@ -329,6 +329,24 @@ impl SearchSql {
             "before",
         )?;
 
+        let within = request.within_query.trim();
+        if !within.is_empty() {
+            values.push(format!("%{}%", escape_like(within)).into());
+            let parameter = values.len();
+            // The uncorrelated subquery scans indexed text once, not once per
+            // candidate document. Apply the same predicate to count and hits.
+            conditions.push(format!(
+                "(d.file_name LIKE ?{parameter} ESCAPE '\\'
+                  OR d.canonical_path LIKE ?{parameter} ESCAPE '\\'
+                  OR d.id IN (
+                    SELECT document_id FROM document_fts
+                    WHERE title LIKE ?{parameter} ESCAPE '\\'
+                       OR body LIKE ?{parameter} ESCAPE '\\'
+                  ))"
+            ));
+            applied_filters.push("withinQuery".into());
+        }
+
         let from = if fts {
             "FROM document_fts JOIN documents d ON d.id = document_fts.document_id"
         } else {
@@ -381,6 +399,11 @@ impl SearchSql {
 }
 
 fn validate_request(request: &SearchRequest, parsed: &ParsedQuery) -> Result<(), SearchError> {
+    if request.within_query.chars().count() > 512 || request.within_query.contains('\0') {
+        return Err(SearchError::invalid_request(
+            "result refinement must be at most 512 characters without NUL",
+        ));
+    }
     sort_clause(&request.sort, matches!(request.mode, SearchMode::Keyword))?;
     if parsed.match_any && request.term_mode != TermMode::Any {
         return Err(SearchError::invalid_request(
@@ -526,6 +549,7 @@ fn random_id() -> String {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct HistoryFilters<'a> {
+    within_query: &'a str,
     folder_ids: &'a [String],
     extensions: &'a [String],
     parsed_extensions: &'a [String],
@@ -540,6 +564,7 @@ struct HistoryFilters<'a> {
 impl<'a> HistoryFilters<'a> {
     fn from(request: &'a SearchRequest, parsed: &'a ParsedQuery) -> Self {
         Self {
+            within_query: request.within_query.trim(),
             folder_ids: &request.folder_ids,
             extensions: &request.extensions,
             parsed_extensions: &parsed.extensions,

@@ -9,6 +9,7 @@ fn search_request_serializes_with_camel_case_keys() {
         mode: SearchMode::Keyword,
         folder_ids: vec!["folder-1".into()],
         extensions: vec!["hwp".into(), "pdf".into()],
+        within_query: String::new(),
         extensionless: true,
         modified_after: None,
         modified_before: None,
@@ -28,6 +29,13 @@ fn search_request_serializes_with_camel_case_keys() {
     assert_eq!(value["extensionless"], true);
     assert_eq!(value["includeFilename"], true);
     assert_eq!(value["termMode"], "all");
+    assert_eq!(value["withinQuery"], "");
+    let mut legacy = value;
+    legacy.as_object_mut().unwrap().remove("withinQuery");
+    assert!(serde_json::from_value::<SearchRequest>(legacy)
+        .unwrap()
+        .within_query
+        .is_empty());
 }
 
 #[test]

@@ -17,10 +17,10 @@
 .search-filter-row { width: 100%; min-width: 0; flex-wrap: wrap; gap: .45rem; }
 .search-filter-row > * { min-width: 0; max-width: 100%; }
 .search-filter-row select { max-width: min(12rem, 100%); }
-.search-filter-row button, .search-filter-row select { font-size: .76rem; min-height: 1.95rem; border-radius: 6px; }
+.search-filter-row button, .search-filter-row select { font-size: .8125rem; min-height: 1.95rem; border-radius: 6px; }
 .within-results { flex: 1 1 10rem; }
 .within-results input { width: 100%; min-width: 0; }
-.filter-check { font-size: .76rem; }
+.filter-check { font-size: .8125rem; }
 .results-summary { min-height: 2.7rem; padding: .65rem 1.2rem; background: var(--color-canvas); }
 .search-results-list { padding: .85rem .75rem; }
 .result-group-heading { top: -.85rem; padding: .55rem .7rem; font-size: .73rem; font-weight: 500; background: var(--color-surface); border-bottom: 1px solid var(--color-border); }
@@ -30,11 +30,11 @@
 .result-heading strong { font-size: .9rem; font-weight: 600; }
 .result-snippet { line-height: 1.8; }
 .result-meta { gap: .6rem; }
-.extension-badge { font-size: .63rem; font-weight: 500; }
+.extension-badge { font-size: .75rem; font-weight: 500; }
 .preview-title { padding: 1rem 1.1rem .75rem; background: var(--color-surface); }
 .preview-title strong { font-size: .95rem; }
 .preview-toolbar { gap: .4rem; padding: .6rem 1.1rem .85rem; background: var(--color-surface); flex-wrap: wrap; }
-.preview-toolbar button { font-size: .74rem; border-radius: 6px; min-height: 2rem; }
+.preview-toolbar button { font-size: .8125rem; border-radius: 6px; min-height: 2rem; }
 .preview-more-menu { min-width: 11.5rem; max-width: calc(100vw - 2rem); padding: .4rem; box-shadow: 0 10px 30px #48372118; }
 .preview-more-menu button { padding: .65rem .75rem; text-align: left; }
 .preview-tabs { gap: 1.2rem; padding-inline: 1.1rem; background: var(--color-surface); }
@@ -58,3 +58,7 @@
   .search-filter-scroller, .preview-toolbar { padding-inline: .75rem; }
   .header-actions { gap: .25rem; }
 }
+
+/* Keep secondary information readable at the default 16px root size. */
+.result-meta { font-size: .8125rem; line-height: 1.5; flex-wrap: wrap; }
+.result-path { min-width: 0; }

@@ -133,8 +133,8 @@ cloud-only placeholder files.
 ### Install and run
 
 Download the [latest release](https://github.com/cybereun/EveryFile/releases).
-Run `EveryFile-Setup-v1.0.4.exe` for a per-user installation, or extract
-`EveryFile-Portable-v1.0.4.zip` and launch `EveryFile.exe` without installation.
+Run `EveryFile-Setup-v1.1.0.exe` for a per-user installation, or extract
+`EveryFile-Portable-v1.1.0.zip` and launch `EveryFile.exe` without installation.
 Both distributions use the Windows GUI subsystem and do not open a terminal.
 The installer may be unsigned by Authenticode; verify `SHA256SUMS.txt` before running.
 
