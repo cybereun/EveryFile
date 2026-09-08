@@ -336,12 +336,12 @@ impl SearchSql {
             // The uncorrelated subquery scans indexed text once, not once per
             // candidate document. Apply the same predicate to count and hits.
             conditions.push(format!(
-                "(d.file_name LIKE ?{parameter} ESCAPE '\\'
-                  OR d.canonical_path LIKE ?{parameter} ESCAPE '\\'
+                "(everyfile_unicode_lower(d.file_name) LIKE everyfile_unicode_lower(?{parameter}) ESCAPE '\\'
+                  OR everyfile_unicode_lower(d.canonical_path) LIKE everyfile_unicode_lower(?{parameter}) ESCAPE '\\'
                   OR d.id IN (
                     SELECT document_id FROM document_fts
-                    WHERE title LIKE ?{parameter} ESCAPE '\\'
-                       OR body LIKE ?{parameter} ESCAPE '\\'
+                    WHERE everyfile_unicode_lower(title) LIKE everyfile_unicode_lower(?{parameter}) ESCAPE '\\'
+                       OR everyfile_unicode_lower(body) LIKE everyfile_unicode_lower(?{parameter}) ESCAPE '\\'
                   ))"
             ));
             applied_filters.push("withinQuery".into());

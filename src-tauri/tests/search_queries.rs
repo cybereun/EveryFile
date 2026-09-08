@@ -744,6 +744,19 @@ fn refinement_matches_filename_path_and_title_and_rejects_excessive_input() {
             "{value}"
         );
     }
+    fixture.insert_document(
+        "unicode",
+        "folder-1",
+        r"C:\fixture\École.txt",
+        "École.txt",
+        "txt",
+        "2026-01-01T00:00:00Z",
+        1,
+        "",
+        "",
+    );
+    query.within_query = "éCOLE".into();
+    assert_eq!(fixture.repository.search(&query).unwrap().total, 1);
     query.within_query = "x".repeat(513);
     assert!(fixture.repository.search(&query).is_err());
 }
