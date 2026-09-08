@@ -64,7 +64,7 @@
 - [x] Run 21 Rust search tests, 2 contract tests and 3 performance tests.
 - [x] Run the added 100,000-document refinement performance test.
 - [x] Run the final production build, Clippy, formatting and diff checks.
-- [ ] Commit, push `codex/search-ux-quality` and open the pull request.
+- [x] Commit, push `codex/search-ux-quality` and open pull request #3 against `main`.
 
 ## Follow-up after measurement
 
