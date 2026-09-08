@@ -1,3 +1,10 @@
+# EveryFile v1.1.1
+
+## Search refinement and release gate fixes
+
+- Preserve case-insensitive result refinement for Unicode filenames, paths, titles, and bodies.
+- Keep the Windows release acceptance spec in Vitest discovery so signed release builds execute it.
+
 # EveryFile v1.1.0
 
 ## Refreshed search workspace

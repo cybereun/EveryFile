@@ -1,6 +1,6 @@
 [package]
 name = "EveryFile"
-version = "1.1.0"
+version = "1.1.1"
 description = "EveryFile desktop application"
 authors = ["Lebi_Cybereun <cybereunny@gmail.com>"]
 edition = "2021"
