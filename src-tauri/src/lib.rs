@@ -55,6 +55,9 @@ pub fn run_with_reset_completion(reset_completion: Option<diagnostics::ResetComp
                 window.set_size(tauri::LogicalSize::new(1440.0, 900.0))?;
                 window.set_position(tauri::LogicalPosition::new(-10_000.0, -10_000.0))?;
             }
+            #[cfg(feature = "e2e")]
+            let app_data_dir = e2e::data_dir_from_args().map_err(std::io::Error::other)?;
+            #[cfg(not(feature = "e2e"))]
             let app_data_dir = app.path().app_local_data_dir()?;
             #[cfg(feature = "e2e")]
             e2e::reset_state_if_requested(&app_data_dir).map_err(std::io::Error::other)?;

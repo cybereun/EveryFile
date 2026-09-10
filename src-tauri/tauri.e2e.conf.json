@@ -2,6 +2,7 @@
   "build": {
     "beforeBuildCommand": "npm run build -- --mode e2e"
   },
+  "identifier": "com.cybereun.everyfile.e2e",
   "app": {
     "withGlobalTauri": true,
     "security": {

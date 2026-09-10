@@ -60,7 +60,7 @@ describe("App", () => {
     expect(statusSummary).not.toBeNull();
     expect(statusSummary).toHaveTextContent("42");
     expect(statusSummary).toHaveTextContent("1");
-    expect(statusSummary).toHaveTextContent("v1.1.2");
+    expect(statusSummary).toHaveTextContent("v1.1.3");
   });
 
   it("removes an indexed folder only through its three-dot menu and confirmation", () => {

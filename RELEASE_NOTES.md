@@ -1,3 +1,15 @@
+# EveryFile v1.1.3
+
+## 테스트 데이터 격리 / Test data isolation
+
+- 한국어: 자동 E2E 검증이 전용 임시 데이터 폴더만 사용하도록 격리했습니다. 이제 테스트 실행이 실제 앱의 색인·설정을 초기화하거나 테스트 폴더를 등록할 수 없습니다.
+- English: Automated E2E verification now uses a dedicated temporary data folder. Test runs can no longer reset the real app's index or settings, or register test folders there.
+
+## 색인 복구 안내 / Index recovery
+
+- 한국어: 기존 원본 폴더를 다시 추가하면 문서 자체를 변경하지 않고 색인을 다시 만듭니다.
+- English: Re-adding an original source folder rebuilds its index without changing any documents.
+
 # EveryFile v1.1.2
 
 ## Cohesive Ask and settings experience
