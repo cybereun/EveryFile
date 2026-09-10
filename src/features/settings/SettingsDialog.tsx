@@ -19,7 +19,7 @@ import { SearchSettings } from "./SearchSettings";
 import { SystemSettings } from "./SystemSettings";
 import { useI18n } from "../../app/translations";
 
-type SettingsTab = "general" | "search" | "ai" | "system" | "diagnostics";
+export type SettingsTab = "general" | "search" | "ai" | "system" | "diagnostics";
 
 const tabs: { id: SettingsTab; label: string }[] = [
   { id: "general", label: "일반" },
@@ -41,6 +41,7 @@ export interface SettingsDialogProps {
   loadDiagnosticsLogFolder?: () => Promise<string>;
   onCheckForUpdates?: () => Promise<AvailableUpdate | null>;
   onSaved?: (settings: AppSettings) => void;
+  initialTab?: SettingsTab;
 }
 
 export function SettingsDialog({
@@ -55,9 +56,10 @@ export function SettingsDialog({
   loadDiagnosticsLogFolder = getDiagnosticsLogFolder,
   onCheckForUpdates,
   onSaved,
+  initialTab = "general",
 }: SettingsDialogProps) {
   const { t } = useI18n();
-  const [activeTab, setActiveTab] = useState<SettingsTab>("general");
+  const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab);
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [errors, setErrors] = useState<ParseErrorRecord[]>([]);
   const [message, setMessage] = useState("");
@@ -72,12 +74,13 @@ export function SettingsDialog({
 
   useEffect(() => {
     if (!open) return;
+    setActiveTab(initialTab);
     setMessage("");
     setUpdateStatus("");
     void loadSettings().then(setSettings).catch(() => setMessage(t("설정을 불러오지 못했습니다.")));
     void loadParseErrors().then(setErrors).catch(() => setErrors([]));
     void loadDiagnosticsLogFolder().then(setLogFolder).catch(() => setLogFolder(undefined));
-  }, [loadDiagnosticsLogFolder, loadParseErrors, loadSettings, open, t]);
+  }, [initialTab, loadDiagnosticsLogFolder, loadParseErrors, loadSettings, open, t]);
 
   useEffect(() => {
     if (!open || !settings || (settings.aiProvider ?? "ollama") === "ollama") {

@@ -56,6 +56,21 @@ describe("SettingsDialog", () => {
     expect(screen.getByLabelText("LLM Provider")).toBeVisible();
   });
 
+  it("opens directly on AI settings when Ask EveryFile needs configuration", async () => {
+    render(
+      <SettingsDialog
+        initialTab="ai"
+        open
+        onClose={() => undefined}
+        loadSettings={async () => settings}
+      />,
+    );
+
+    const aiTab = await screen.findByRole("tab", { name: "AI" });
+    expect(aiTab).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("checkbox", { name: "AI 기능 활성화" })).toBeVisible();
+  });
+
   it("saves retention changes and restores focus after Escape", async () => {
     const save = vi.fn(async (value: AppSettings) => value);
     const trigger = document.createElement("button");

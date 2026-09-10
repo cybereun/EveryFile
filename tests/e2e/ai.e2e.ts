@@ -90,5 +90,15 @@ describe("EveryFile explicit AI selection", () => {
     await $("button=AI 요약").click();
     await $("button=실행").click();
     await expect(await $(".ai-answer")).toHaveText("로컬 요약 완료");
+
+    await $("button[aria-label='AI 패널 닫기']").click();
+    const askTab = await $("button[aria-label='Ask EveryFile']");
+    await askTab.click();
+    await expect(askTab).toHaveAttribute("aria-selected", "true");
+    const question = await $("textarea[aria-label='문서에 대한 질문']");
+    await expect(question).toBeDisplayed();
+    await question.setValue("핵심 내용을 알려줘");
+    await $("button=실행").click();
+    await expect(await $(".ask-everyfile-panel .ai-answer")).toHaveText("로컬 요약 완료");
   });
 });

@@ -701,10 +701,7 @@ select:focus-visible,
 }
 
 .settings-toggle-row input[type="checkbox"] {
-  width: 2.8rem;
-  height: 1.5rem;
-  flex: 0 0 auto;
-  accent-color: var(--color-accent);
+  margin-top: 0.1rem;
 }
 
 .settings-help {
@@ -784,6 +781,92 @@ select:focus-visible,
   flex: 1 1 auto;
   flex-direction: column;
   overflow: hidden;
+}
+
+.detailed-search > [role="tabpanel"] {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+}
+
+.ask-everyfile-panel {
+  min-height: 0;
+  padding: clamp(1rem, 3vw, 1.8rem);
+  overflow: auto;
+  background: var(--color-canvas);
+}
+
+.ask-everyfile-empty,
+.ask-everyfile-question {
+  width: min(100%, 42rem);
+  margin: auto;
+  padding: clamp(1.1rem, 3vw, 1.65rem);
+  border: 1px solid #dfcfbd;
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  box-shadow: 0 8px 24px rgb(79 58 42 / 7%);
+}
+
+.ask-everyfile-empty {
+  display: grid;
+  min-height: min(20rem, 48vh);
+  place-content: center;
+  justify-items: center;
+  gap: 0.7rem;
+  text-align: center;
+}
+
+.ask-everyfile-empty__mark {
+  display: grid;
+  width: 2.35rem;
+  height: 2.35rem;
+  place-items: center;
+  border: 1px solid #d9b795;
+  border-radius: 50%;
+  background: var(--color-surface-muted);
+  color: var(--color-accent);
+  font-size: 1.1rem;
+}
+
+.ask-everyfile-empty h2,
+.ask-everyfile-question h2 {
+  margin: 0;
+  color: var(--color-text);
+  font-size: 1.05rem;
+}
+
+.ask-everyfile-empty p,
+.ask-everyfile-question header p {
+  margin: 0;
+  color: var(--color-text-muted);
+  line-height: 1.6;
+}
+
+.ask-everyfile-empty button {
+  min-height: 2.25rem;
+  padding: 0.38rem 0.8rem;
+  border: 1px solid var(--color-border);
+  border-radius: 7px;
+  background: var(--color-surface);
+  color: var(--color-text);
+  font: inherit;
+}
+
+.ask-everyfile-question {
+  display: grid;
+  gap: 1rem;
+}
+
+.ask-everyfile-question header {
+  display: grid;
+  gap: 0.3rem;
+}
+
+.ask-everyfile-question .document-ai-panel {
+  padding: 0;
+  border: 0;
+  background: transparent;
 }
 
 .search-input-block {
@@ -1261,16 +1344,6 @@ select:focus-visible,
 .search-mode-tabs button svg {
   width: 0.9rem;
   height: 0.9rem;
-}
-
-.search-mode-tabs__ask {
-  border-color: transparent !important;
-  background: var(--color-surface-muted) !important;
-  color: var(--color-text) !important;
-}
-
-.search-mode-tabs__ask.is-disabled {
-  opacity: 0.62;
 }
 
 .search-scope-toggle {
@@ -2455,7 +2528,7 @@ select:focus-visible,
 }
 
 .settings-grid select,
-.settings-grid input,
+.settings-grid input:not([type="checkbox"]):not([type="range"]),
 .settings-grid textarea {
   min-height: 2.45rem;
   padding: 0.45rem 0.65rem;
@@ -2464,6 +2537,25 @@ select:focus-visible,
   background: var(--color-surface);
   color: inherit;
   font: inherit;
+}
+
+.settings-grid input[type="checkbox"] {
+  box-sizing: border-box;
+  width: 1.1rem;
+  min-width: 1.1rem;
+  height: 1.1rem;
+  min-height: 1.1rem;
+  margin: 0;
+  padding: 0;
+  flex: 0 0 auto;
+  accent-color: var(--color-accent);
+}
+
+.settings-grid input[type="range"] {
+  width: 100%;
+  min-height: 1.25rem;
+  padding: 0;
+  accent-color: var(--color-accent);
 }
 
 .settings-grid textarea {
@@ -2484,9 +2576,10 @@ select:focus-visible,
 .danger-zone,
 .settings-disabled-row {
   padding: 0.85rem;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-sm);
-  background: var(--color-surface-muted);
+  border: 1px solid #dfcfbd;
+  border-radius: 9px;
+  background: #fffaf4;
+  box-shadow: 0 2px 7px rgb(79 58 42 / 4%);
 }
 
 .settings-card h3,
@@ -2510,10 +2603,15 @@ select:focus-visible,
 
 .settings-check {
   justify-content: flex-start;
+  padding: 0.8rem 0.9rem;
+  border: 1px solid #dfcfbd;
+  border-radius: 9px;
+  background: #fffaf4;
+  box-shadow: 0 2px 7px rgb(79 58 42 / 4%);
 }
 
 .settings-check input {
-  min-height: 1rem;
+  margin-top: 0.1rem;
 }
 
 .settings-disabled-row {
@@ -2633,6 +2731,35 @@ select:focus-visible,
 .settings-dialog {
   height: min(88vh, 760px);
   min-height: 0;
+  border-color: #d9c7b4;
+}
+
+.settings-dialog .dialog-header,
+.settings-dialog .dialog-tabs,
+.settings-dialog .dialog-footer {
+  background: var(--color-surface);
+}
+
+.settings-dialog .dialog-tabs {
+  gap: 1rem;
+  padding-top: 0.8rem;
+}
+
+.settings-dialog .dialog-tabs button {
+  padding: 0.25rem 0.1rem 0.6rem;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  color: var(--color-text-muted);
+}
+
+.settings-dialog .dialog-tabs button[aria-selected="true"] {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+
+.settings-dialog .dialog-body {
+  background: var(--color-canvas);
 }
 
 .settings-dialog .dialog-tabs {

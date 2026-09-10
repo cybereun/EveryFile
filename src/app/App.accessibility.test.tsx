@@ -60,4 +60,14 @@ describe("App accessibility", () => {
       /\.search-field\s*\{[^}]*border:\s*1px solid var\(--color-text-muted\)/s,
     );
   });
+
+  it("keeps Ask EveryFile visually consistent and settings checkboxes compact", () => {
+    expect(appCss).not.toMatch(/\.search-mode-tabs__ask\s*\{[^}]*background:/s);
+    expect(appCss).toMatch(
+      /\.settings-grid input\[type="checkbox"\]\s*\{[^}]*width:\s*1\.1rem;[^}]*height:\s*1\.1rem;/s,
+    );
+    expect(appCss).toMatch(
+      /\.settings-dialog \.dialog-tabs button\[aria-selected="true"\]\s*\{[^}]*border-color:\s*var\(--color-accent\);/s,
+    );
+  });
 });

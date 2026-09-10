@@ -318,4 +318,62 @@ describe("SearchWorkspace", () => {
       "수행평가 ext:pdf",
     );
   });
+
+  it("uses Ask EveryFile as a real workspace tab and runs a question for the selected file", async () => {
+    const runAi = vi.fn().mockResolvedValue("선택한 문서의 답변입니다.");
+    render(
+      <SearchWorkspace
+        aiEnabled
+        aiProvider="ollama"
+        cancelApi={vi.fn().mockResolvedValue(false)}
+        folders={folders}
+        openApi={vi.fn().mockResolvedValue(undefined)}
+        runAiApi={runAi}
+        searchApi={vi.fn(async (request: SearchRequest) => searchResponse(request))}
+        selectedDocumentId="selected-document"
+      />,
+    );
+
+    const searchTab = screen.getByRole("tab", { name: "검색" });
+    const askTab = screen.getByRole("tab", { name: "Ask EveryFile" });
+    expect(searchTab).toHaveAttribute("aria-selected", "true");
+
+    fireEvent.click(askTab);
+
+    expect(askTab).toHaveAttribute("aria-selected", "true");
+    expect(searchTab).toHaveAttribute("aria-selected", "false");
+    const question = screen.getByRole("textbox", { name: "문서에 대한 질문" });
+    fireEvent.change(question, { target: { value: "핵심 내용을 알려줘" } });
+    fireEvent.click(screen.getByRole("button", { name: "실행" }));
+
+    await screen.findByText("선택한 문서의 답변입니다.");
+    expect(runAi).toHaveBeenCalledWith(
+      expect.any(String),
+      "selected-document",
+      "핵심 내용을 알려줘",
+      true,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "AI 패널 닫기" }));
+    expect(searchTab).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("searchbox", { name: "검색어" })).toBeVisible();
+  });
+
+  it("guides people to the AI settings instead of making the Ask tab inert", () => {
+    const openAiSettings = vi.fn();
+    render(
+      <SearchWorkspace
+        cancelApi={vi.fn().mockResolvedValue(false)}
+        folders={folders}
+        onOpenAiSettings={openAiSettings}
+        openApi={vi.fn().mockResolvedValue(undefined)}
+        searchApi={vi.fn(async (request: SearchRequest) => searchResponse(request))}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("tab", { name: "Ask EveryFile" }));
+    expect(screen.getByText("AI 기능을 켜면 선택한 파일에 대해 질문할 수 있습니다.")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "AI 설정 열기" }));
+    expect(openAiSettings).toHaveBeenCalledOnce();
+  });
 });

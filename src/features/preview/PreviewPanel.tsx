@@ -181,7 +181,6 @@ interface PreviewPanelProps {
   runAiApi?: typeof runDocumentAi;
   cancelAiApi?: typeof cancelDocumentAi;
   searchQuery?: string;
-  askRequest?: number;
   onBookmarkChanged?: () => void;
 }
 
@@ -204,7 +203,6 @@ export function PreviewPanel({
   runAiApi = runDocumentAi,
   cancelAiApi = cancelDocumentAi,
   searchQuery = "",
-  askRequest = 0,
   onBookmarkChanged,
 }: PreviewPanelProps) {
   const { t } = useI18n();
@@ -250,12 +248,6 @@ export function PreviewPanel({
       active = false;
     };
   }, [documentId, getPreviewApi, t]);
-
-  useEffect(() => {
-    if (askRequest <= 0 || !aiEnabled) return;
-    setError(null);
-    setAiMode("question");
-  }, [aiEnabled, askRequest, preview]);
 
   const run = async (ownerDocumentId: string, action: () => Promise<unknown>) => {
     if (selectedDocumentId.current === ownerDocumentId) setError(null);

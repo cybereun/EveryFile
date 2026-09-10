@@ -14,7 +14,7 @@ import {
 import { IndexStatusController } from "../features/folders/IndexStatus";
 import { PreviewPanel } from "../features/preview/PreviewPanel";
 import { SearchWorkspace } from "../features/search/SearchWorkspace";
-import { SettingsDialog } from "../features/settings/SettingsDialog";
+import { SettingsDialog, type SettingsTab } from "../features/settings/SettingsDialog";
 import { StatisticsDialog } from "../features/statistics/StatisticsDialog";
 import { UpdateDialog } from "../features/update/UpdateDialog";
 import type {
@@ -54,7 +54,7 @@ const RIGHT_PANE_MAX = 720;
 const CENTER_PANE_MIN = 520;
 const PREVIEW_BREAKPOINT = 1100;
 const COMPACT_HEADER_BREAKPOINT = 560;
-const APP_VERSION = "v1.1.0";
+const APP_VERSION = "v1.1.1";
 const UPDATE_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
 function displayPath(path: string) {
@@ -599,10 +599,11 @@ export function App({
   const [historyRequest, setHistoryRequest] = useState(0);
   const [historyRefreshToken, setHistoryRefreshToken] = useState(0);
   const [bookmarkRefreshToken, setBookmarkRefreshToken] = useState(0);
-  const [aiAskRequest, setAiAskRequest] = useState(0);
   const [interactionNotice, setInteractionNotice] =
     useState<CommandStatusMessage | null>(null);
   const [homeRequest, setHomeRequest] = useState(0);
+  const [focusSearchRequest, setFocusSearchRequest] = useState(0);
+  const [settingsInitialTab, setSettingsInitialTab] = useState<SettingsTab>("general");
   const [appSettings, setAppSettings] = useState<AppSettings | null>(null);
   const [availableUpdate, setAvailableUpdate] = useState<AvailableUpdate | null>(null);
   const handleHistoryChanged = useCallback(() => {
@@ -736,6 +737,7 @@ export function App({
         !textEntry
       ) {
         event.preventDefault();
+        setFocusSearchRequest((request) => request + 1);
         searchInput.current?.focus();
       }
     };
@@ -763,10 +765,12 @@ export function App({
           setInteractionNotice(null);
           setStatisticsFilter(null);
           setHomeRequest((request) => request + 1);
+          setFocusSearchRequest((request) => request + 1);
           searchInput.current?.focus();
         }}
         onSettings={() => {
           onSettings?.();
+          setSettingsInitialTab("general");
           setSettingsOpen(true);
         }}
         onStatistics={() => {
@@ -824,21 +828,12 @@ export function App({
             homeRequest={homeRequest}
             statisticsFilter={statisticsFilter}
             aiEnabled={appSettings?.aiEnabled ?? false}
-            onAskEveryfile={() => {
-              if (!appSettings?.aiEnabled) {
-                setInteractionNotice({
-                  kind: "info",
-                  text: t("설정에서 AI 기능을 먼저 활성화하세요."),
-                });
-              } else if (!workspaceSelectedDocumentId) {
-                setInteractionNotice({
-                  kind: "info",
-                  text: t("Ask Everyfile을 사용하려면 먼저 검색 결과에서 문서를 선택하세요."),
-                });
-              } else {
-                setInteractionNotice(null);
-                setAiAskRequest((request) => request + 1);
-              }
+            aiProvider={appSettings?.aiProvider ?? "ollama"}
+            selectedDocumentId={workspaceSelectedDocumentId}
+            focusSearchRequest={focusSearchRequest}
+            onOpenAiSettings={() => {
+              setSettingsInitialTab("ai");
+              setSettingsOpen(true);
             }}
             onHistoryChanged={handleHistoryChanged}
             pageSize={appSettings?.resultPageSize}
@@ -869,13 +864,13 @@ export function App({
             searchQuery={previewSearchQuery}
             aiEnabled={appSettings?.aiEnabled ?? false}
             aiProvider={appSettings?.aiProvider ?? "ollama"}
-            askRequest={aiAskRequest}
             onBookmarkChanged={() => setBookmarkRefreshToken((token) => token + 1)}
           />
         </ResizablePane>
       </main>
       <SettingsDialog
         folders={folders}
+        initialTab={settingsInitialTab}
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}
         onCheckForUpdates={runUpdateCheck}
