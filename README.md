@@ -50,8 +50,8 @@ EveryFile은 사용자가 직접 선택한 폴더 안의 파일을 빠르게 찾
 ### 설치 및 실행
 
 1. [최신 릴리즈](https://github.com/cybereun/EveryFile/releases)에서 설치 파일 또는 포터블 ZIP을 받습니다.
-2. 일반 설치는 `EveryFile-Setup-v1.1.1.exe`를 실행합니다.
-3. 무설치 사용은 `EveryFile-Portable-v1.1.1.zip`을 쓰기 가능한 폴더에 압축 해제한 뒤
+2. 일반 설치는 `EveryFile-Setup-v1.1.2.exe`를 실행합니다.
+3. 무설치 사용은 `EveryFile-Portable-v1.1.2.zip`을 쓰기 가능한 폴더에 압축 해제한 뒤
    `EveryFile.exe`를 실행합니다.
 4. 앱에서 오른쪽 위 폴더 추가 버튼 또는 왼쪽 패널의 **폴더 추가**를 눌러 색인할 폴더를 선택합니다.
 5. 하단 상태바가 색인 완료를 표시하면 키워드 또는 파일명으로 검색합니다.
@@ -133,8 +133,8 @@ cloud-only placeholder files.
 ### Install and run
 
 Download the [latest release](https://github.com/cybereun/EveryFile/releases).
-Run `EveryFile-Setup-v1.1.1.exe` for a per-user installation, or extract
-`EveryFile-Portable-v1.1.1.zip` and launch `EveryFile.exe` without installation.
+Run `EveryFile-Setup-v1.1.2.exe` for a per-user installation, or extract
+`EveryFile-Portable-v1.1.2.zip` and launch `EveryFile.exe` without installation.
 Both distributions use the Windows GUI subsystem and do not open a terminal.
 The installer may be unsigned by Authenticode; verify `SHA256SUMS.txt` before running.
 

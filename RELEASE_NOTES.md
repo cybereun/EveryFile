@@ -1,3 +1,11 @@
+# EveryFile v1.1.2
+
+## Cohesive Ask and settings experience
+
+- Made Ask EveryFile a first-class workspace tab with the same visual language as search, clear setup guidance, and in-place questions about the selected file.
+- Refined the settings dialog with the app's warm surface colors and compact, accessible checkboxes.
+- Corrected the visible app version to match the packaged release.
+
 # EveryFile v1.1.1
 
 ## Search refinement and release gate fixes
